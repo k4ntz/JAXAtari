@@ -46,9 +46,6 @@ def build_default_asset_manifest() -> tuple:
     )
 
 
-# ==========================================
-# CONFIGURATION & CONSTANTS
-# ==========================================
 # all the magic numbers, hitboxes, and custom mod flags go here
 class KungFuMasterConstants(struct.PyTreeNode):
     # World geometry
@@ -206,9 +203,6 @@ PROJ_SHRAPNEL = 4
 PROJ_BOOMERANG = 5
 
 
-# ==========================================
-# STATE & OBSERVATION DEFINITIONS
-# ==========================================
 # keeping all state flat in a PyTreeNode for jax compilation
 class KungFuMasterState(struct.PyTreeNode):
     player_x: chex.Array
@@ -275,9 +269,6 @@ class KungFuMasterInfo(struct.PyTreeNode):
     loop: chex.Array
 
 
-# ==========================================
-# MAIN ENVIRONMENT LOGIC
-# ==========================================
 class JaxKungFuMaster(
     JaxEnvironment[KungFuMasterState, KungFuMasterObservation, KungFuMasterInfo, KungFuMasterConstants]
 ):
@@ -291,12 +282,13 @@ class JaxKungFuMaster(
         dtype=jnp.int32,
     )
 
-    def __init__(self, consts: KungFuMasterConstants = None):
+    def __init__(self, consts: KungFuMasterConstants = None, config=None):
         consts = consts or KungFuMasterConstants()
         super().__init__(consts)
-        self.renderer = KungFuMasterRenderer(self.consts)
+        self.config = config
+        self.renderer = KungFuMasterRenderer(self.consts, config=config)
 
-    # --- Difficulty scaling helpers ---
+    # Difficulty scaling helpers
     def _get_speed_multiplier(self) -> float:
         scale_map = (0.75, 1.0, 1.5)
         base = scale_map[self.consts.DIFFICULTY]
@@ -327,7 +319,6 @@ class JaxKungFuMaster(
         return -base_dir if self.consts.MOD_REVERSED_FLOORS else base_dir
 
     def _decode_action(self, action):
-        # convert raw int actions to directional boolean flags
         is_right = (
             (action == Action.RIGHT) | (action == Action.UPRIGHT) |
             (action == Action.RIGHTFIRE) | (action == Action.DOWNRIGHT)
@@ -358,7 +349,7 @@ class JaxKungFuMaster(
 
         return horizontal_move, is_jumping, is_punching, is_kicking, is_crouching
 
-    # --- Player Physics & Input ---
+    # Player Physics & Input
     def _update_player_position(self, state, action):
         cfg = self.consts
         horiz_dir, jump_cmd, punch_cmd, kick_cmd, crouch_cmd = self._decode_action(action)
@@ -366,12 +357,10 @@ class JaxKungFuMaster(
         ground_y = cfg.FLOOR_Y - cfg.PLAYER_HEIGHT
         is_grounded = state.player_y >= to_int(ground_y)
 
-        # block movement if grabbed by a gripper
         move_step = horiz_dir * to_int(cfg.PLAYER_SPEED) * to_int(~state.is_grabbed)
         next_x = jnp.clip(state.player_x + move_step, 0, cfg.SCREEN_WIDTH - cfg.PLAYER_WIDTH)
         next_dir = jnp.where(horiz_dir != 0, horiz_dir, state.player_dir)
 
-        # gravity and jump logic
         jump_allowed = jump_cmd & is_grounded & ~state.is_grabbed
         updated_vel_y = jnp.where(jump_allowed, to_int(cfg.JUMP_VEL), state.player_vel_y)
         updated_vel_y = jnp.where(~is_grounded, updated_vel_y + to_int(cfg.GRAVITY), updated_vel_y)
@@ -388,7 +377,6 @@ class JaxKungFuMaster(
         in_air = to_bool(~(next_y >= to_int(ground_y)))
         is_ducking = to_bool(crouch_cmd & ~in_air)
 
-        # shake mechanic to break free from grippers
         user_moved = horiz_dir != 0
         switched_dir = to_bool(horiz_dir != state.shake_last)
         shake_acc = jnp.where(user_moved & switched_dir, state.shake_count + to_int(1), state.shake_count)
@@ -410,7 +398,7 @@ class JaxKungFuMaster(
             shake_count=shake_acc,
         )
 
-    # --- Enemy AI & Movement ---
+    # Enemy AI & Movement
     def _update_all_enemies(self, state):
         cfg = self.consts
         speed_scale = self._get_speed_multiplier()
@@ -436,14 +424,12 @@ class JaxKungFuMaster(
             chase_dir = jnp.sign(player_x - pos_x).astype(jnp.int32)
             chase_dir = jnp.where(chase_dir == 0, facing, chase_dir)
 
-            # define stop conditions for ranged attackers
             stop_knife = (type_code == ENEMY_KNIFE) & (jnp.abs(player_x - pos_x) < 56)
             stop_dragon = (type_code == ENEMY_DRAGON) & (fsm_state == to_int(STATE_WALK)) & (jnp.abs(player_x - pos_x) < 72)
             stop_gripper = to_bool(cfg.MOD_NO_GRABS) & (type_code == ENEMY_GRIPPER) & (jnp.abs(player_x - pos_x) < 40)
             is_retreating = fsm_state == to_int(STATE_RETREAT)
             hold_position = stop_knife | stop_dragon | stop_gripper | is_retreating
 
-            # tomtom jumping logic
             tomtom_in_range = (type_code == ENEMY_TOMTOM) & (jnp.abs(player_x - pos_x) < 48) & (cooldown <= 0)
             tomtom_grounded = pos_y >= to_int(cfg.FLOOR_Y - cfg.PLAYER_HEIGHT - 2)
             should_jump = tomtom_in_range & tomtom_grounded & (fsm_state == to_int(STATE_WALK))
@@ -461,7 +447,6 @@ class JaxKungFuMaster(
             updated_vy = jnp.where(floor_landed & (type_code == ENEMY_TOMTOM), to_int(0), updated_vy)
             state_tomtom = jnp.where(floor_landed & (type_code == ENEMY_TOMTOM), to_int(STATE_WALK), state_tomtom)
 
-            # dragon retreat logic when hit
             dragon_timer = jnp.where((type_code == ENEMY_DRAGON) & is_retreating, timer - to_int(1), timer)
             end_retreat = (type_code == ENEMY_DRAGON) & is_retreating & (dragon_timer <= 0)
             state_dragon = jnp.where(end_retreat, to_int(STATE_WALK), state_tomtom)
@@ -494,7 +479,6 @@ class JaxKungFuMaster(
 
             return next_x, next_y, updated_vy, next_dir, next_active, final_state, final_timer, final_cd
 
-        # vmap over all enemies at once
         res_x, res_y, res_vy, res_dir, res_active, res_state, res_timer, res_cd = jax.vmap(step_enemy)(
             state.en_type, state.en_x, state.en_y, state.en_vel_y, state.en_dir,
             state.en_active, state.en_hp, state.en_cd, state.en_state, state.en_timer,
@@ -511,7 +495,7 @@ class JaxKungFuMaster(
             en_cd=res_cd,
         )
 
-    # --- Projectile & Spawning Logic ---
+    # Projectile & Spawning Logic
     def _spawn_projectile(self, state, ptype, px, py, vx, vy):
         first_free_idx = jnp.argmin(state.pr_active)
         slot_available = ~state.pr_active[first_free_idx]
@@ -530,7 +514,6 @@ class JaxKungFuMaster(
         subkeys_tensor = jnp.stack(worker_keys)
 
         def generate_attacks(type_id, ex, ey, facing, is_active, cd_val, countdown, rng):
-            # Knife thrower logic
             can_throw = is_active & (type_id == ENEMY_KNIFE) & (cd_val <= 0) & to_bool(not cfg.MOD_NO_KNIVES)
             throw_high = to_bool(jax.random.uniform(rng) > 0.5)
             knife_proj_type = jnp.where(throw_high, to_int(PROJ_KNIFE_HIGH), to_int(PROJ_KNIFE_LOW))
@@ -540,20 +523,17 @@ class JaxKungFuMaster(
             knife_px = jnp.where(can_throw, ex, to_int(-999))
             knife_tag = jnp.where(can_throw, knife_proj_type, to_int(PROJ_NONE))
 
-            # Dragon fire logic
             can_breathe = is_active & (type_id == ENEMY_DRAGON) & (cd_val <= 0)
             fire_px = jnp.where(can_breathe, ex, to_int(-999))
             fire_py = jnp.where(can_breathe, to_int(cfg.FLOOR_Y - 6), to_int(-999))
             fire_vx = jnp.where(can_breathe, facing * to_int(cfg.SPD_FIRE_PROJ), to_int(0))
             fire_tag = jnp.where(can_breathe, to_int(PROJ_FIRE), to_int(PROJ_NONE))
 
-            # Exploding ball logic
             ball_detonate = is_active & (type_id == ENEMY_BALL) & (countdown <= 0)
             shrap_vx = jnp.where(ball_detonate, facing * to_int(cfg.SPD_SHRAP_PROJ), to_int(0))
             shrap_px = jnp.where(ball_detonate, ex, to_int(-999))
             shrap_tag = jnp.where(ball_detonate, to_int(PROJ_SHRAPNEL), to_int(PROJ_NONE))
 
-            # Floor 2 Boss (Boomerang thrower)
             can_throw_boomerang = is_active & (type_id == ENEMY_BOSS) & (state.floor == 2) & (cd_val <= 0)
             boom_px = jnp.where(can_throw_boomerang, ex, to_int(-999))
             boom_py = jnp.where(can_throw_boomerang, ey + to_int(6), to_int(-999))
@@ -588,7 +568,6 @@ class JaxKungFuMaster(
 
         flattened_candidates = raw_candidates.reshape(-1, 5)
 
-        # fold over candidates to add them to the projectile pool safely
         def allocate_slot(carry, candidate):
             tags, xs, ys, vxs, vys, active_flags = carry
             px, py, vx, vy, ptype = candidate[0], candidate[1], candidate[2], candidate[3], candidate[4]
@@ -641,7 +620,6 @@ class JaxKungFuMaster(
 
     def _update_vase_transformations(self, state):
         cfg = self.consts
-        # turn dropped vases into snakes when they hit the floor
         is_vase = state.en_active & (state.en_type == ENEMY_VASE)
         reached_floor = state.en_y >= to_int(cfg.FLOOR_Y - cfg.PLAYER_HEIGHT)
         transform_mask = is_vase & reached_floor
@@ -650,7 +628,6 @@ class JaxKungFuMaster(
 
     def _select_enemy_archetype(self, current_floor, rand_val):
         cfg = self.consts
-        # probability mapping for different enemy spawns on each floor
         archetype = jnp.where(
             current_floor <= 1,
             jnp.where(rand_val < 0.55, to_int(ENEMY_GRIPPER), to_int(ENEMY_KNIFE)),
@@ -765,10 +742,9 @@ class JaxKungFuMaster(
             boss_spawned=to_bool(state.boss_spawned | trigger_boss),
         )
 
-    # --- Combat & Collisions ---
+    # Combat & Collisions
     def _resolve_attack_bounds(self, px, py, facing, punching, kicking, crouching, jumping):
         cfg = self.consts
-        # figure out which hitbox is active based on the player's pose
         punch_std_x, punch_std_y = px + facing * to_int(cfg.PUNCH_X_OFF), py + to_int(cfg.PUNCH_Y_OFF)
         kick_std_x, kick_std_y = px + facing * to_int(cfg.KICK_X_OFF), py + to_int(cfg.KICK_Y_OFF)
         kick_cr_x, kick_cr_y = px + facing * to_int(cfg.CROUCH_KICK_X_OFF), py + to_int(cfg.CROUCH_KICK_Y_OFF)
@@ -846,7 +822,6 @@ class JaxKungFuMaster(
             updated_hp = health - jnp.where(collided, to_int(1), to_int(0))
             is_defeated = to_bool(collided & (updated_hp <= 0))
 
-            # calculate score rewards
             base_points = jnp.where(
                 is_punch & is_airborne, to_int(cfg.SC_JUMP_KICK),
                 jnp.where(is_kick, to_int(cfg.SC_KICK), to_int(cfg.SC_PUNCH))
@@ -905,10 +880,10 @@ class JaxKungFuMaster(
         effective_y = jnp.where(is_ducking, player_y + to_int(cfg.CROUCH_H_OFFSET), player_y)
         effective_height = jnp.where(is_ducking, to_int(cfg.PLAYER_HEIGHT - cfg.CROUCH_H_OFFSET), to_int(cfg.PLAYER_HEIGHT))
 
-        def check_enemy_contact(is_active, enemy_type, ex, ey):
+        def check_enemy_contact(is_active, enemy_type, ex, ey, enemy_dir):
             extra_reach = jnp.where((enemy_type == ENEMY_BOSS) & (state.floor == 1), to_int(cfg.BOSS_STICK_RANGE), to_int(0))
             effective_enemy_w = to_int(cfg.ENEMY_WIDTH) + extra_reach
-            adjusted_ex = jnp.where(state.en_dir[0] < 0, ex - extra_reach, ex)
+            adjusted_ex = jnp.where(enemy_dir < 0, ex - extra_reach, ex)
 
             overlapping = is_active & check_aabb_overlap(
                 player_x, effective_y, to_int(cfg.PLAYER_WIDTH), effective_height,
@@ -927,7 +902,7 @@ class JaxKungFuMaster(
             return grab_applied, drain_dmg + direct_hit_dmg
 
         grabbed_flags, damage_amounts = jax.vmap(check_enemy_contact)(
-            state.en_active, state.en_type, state.en_x, state.en_y
+            state.en_active, state.en_type, state.en_x, state.en_y, state.en_dir
         )
 
         total_contact_damage = jnp.sum(damage_amounts)
@@ -962,7 +937,6 @@ class JaxKungFuMaster(
                 px, py, to_int(6), to_int(4),
                 player_x, effective_y, to_int(cfg.PLAYER_WIDTH), effective_height
             )
-            # handle crouching/jumping evasion mechanics
             evaded = jnp.where(
                 proj_type == PROJ_KNIFE_HIGH, is_ducking,
                 jnp.where(
@@ -997,7 +971,7 @@ class JaxKungFuMaster(
         total_damage = jnp.sum(projectile_damage)
         return state.replace(pr_active=to_bool(state.pr_active & ~impact_flags)), total_damage
 
-    # --- Floor Progression & Restarts ---
+    # Floor Progression & Restarts
     def _reset_entity_pools(self):
         cfg = self.consts
         zero_enemies = jnp.zeros(cfg.MAX_ENEMIES, dtype=jnp.int32)
@@ -1085,7 +1059,7 @@ class JaxKungFuMaster(
             **self._reset_entity_pools(),
         )
 
-    # --- JAX API (Reset / Step / Obs) ---
+    # JAX API (Reset / Step / Obs)
     @partial(jax.jit, static_argnums=(0,))
     def _get_observation(self, state):
         cfg = self.consts
@@ -1201,7 +1175,6 @@ class JaxKungFuMaster(
         native_action = jnp.take(self.ACTION_SET, action.astype(jnp.int32))
         previous_state = state
 
-        # step everything forward
         state = self._update_player_position(state, native_action)
         state = self._update_all_enemies(state)
         state = self._update_vase_transformations(state)
@@ -1213,7 +1186,6 @@ class JaxKungFuMaster(
         state = state.replace(enemies_left=cleared_quota)
         state = self._check_and_spawn_boss(state)
 
-        # resolve all hitboxes
         state, attack_reward = self._process_player_combat(state, native_action)
         state, melee_dmg = self._resolve_enemy_collisions(state)
         state, ranged_dmg = self._resolve_projectile_collisions(state)
@@ -1290,16 +1262,15 @@ class JaxKungFuMaster(
         })
 
     def image_space(self):
+        if hasattr(self, "renderer") and hasattr(self.renderer, "config") and self.renderer.config.downscale is not None:
+            h, w = self.renderer.config.downscale
+            channels = getattr(self.renderer.config, "channels", 3)
+            return spaces.Box(low=0, high=255, shape=(h, w, channels), dtype=jnp.uint8)
         return spaces.Box(low=0, high=255, shape=(210, 160, 3), dtype=jnp.uint8)
 
 
-# ==========================================
-# RENDERER
-# ==========================================
-
 # 5x7 digit bitmaps for drawing authentic scores
 DIGIT_BITMAPS = jnp.array([
-    # 0
     [[1,1,1,1,1],
      [1,0,0,0,1],
      [1,0,0,0,1],
@@ -1307,7 +1278,6 @@ DIGIT_BITMAPS = jnp.array([
      [1,0,0,0,1],
      [1,0,0,0,1],
      [1,1,1,1,1]],
-    # 1
     [[0,0,1,0,0],
      [0,1,1,0,0],
      [0,0,1,0,0],
@@ -1315,7 +1285,6 @@ DIGIT_BITMAPS = jnp.array([
      [0,0,1,0,0],
      [0,0,1,0,0],
      [0,1,1,1,0]],
-    # 2
     [[1,1,1,1,1],
      [0,0,0,0,1],
      [0,0,0,0,1],
@@ -1323,7 +1292,6 @@ DIGIT_BITMAPS = jnp.array([
      [1,0,0,0,0],
      [1,0,0,0,0],
      [1,1,1,1,1]],
-    # 3
     [[1,1,1,1,1],
      [0,0,0,0,1],
      [0,0,0,0,1],
@@ -1331,7 +1299,6 @@ DIGIT_BITMAPS = jnp.array([
      [0,0,0,0,1],
      [0,0,0,0,1],
      [1,1,1,1,1]],
-    # 4
     [[1,0,0,0,1],
      [1,0,0,0,1],
      [1,0,0,0,1],
@@ -1339,7 +1306,6 @@ DIGIT_BITMAPS = jnp.array([
      [0,0,0,0,1],
      [0,0,0,0,1],
      [0,0,0,0,1]],
-    # 5
     [[1,1,1,1,1],
      [1,0,0,0,0],
      [1,0,0,0,0],
@@ -1347,7 +1313,6 @@ DIGIT_BITMAPS = jnp.array([
      [0,0,0,0,1],
      [0,0,0,0,1],
      [1,1,1,1,1]],
-    # 6
     [[1,1,1,1,1],
      [1,0,0,0,0],
      [1,0,0,0,0],
@@ -1355,7 +1320,6 @@ DIGIT_BITMAPS = jnp.array([
      [1,0,0,0,1],
      [1,0,0,0,1],
      [1,1,1,1,1]],
-    # 7
     [[1,1,1,1,1],
      [0,0,0,0,1],
      [0,0,0,0,1],
@@ -1363,7 +1327,6 @@ DIGIT_BITMAPS = jnp.array([
      [0,0,1,0,0],
      [0,1,0,0,0],
      [0,1,0,0,0]],
-    # 8
     [[1,1,1,1,1],
      [1,0,0,0,1],
      [1,0,0,0,1],
@@ -1371,7 +1334,6 @@ DIGIT_BITMAPS = jnp.array([
      [1,0,0,0,1],
      [1,0,0,0,1],
      [1,1,1,1,1]],
-    # 9
     [[1,1,1,1,1],
      [1,0,0,0,1],
      [1,0,0,0,1],
@@ -1391,8 +1353,21 @@ class KungFuMasterRenderer(JAXGameRenderer):
         )
         self.jr = render_utils.JaxRenderingUtils(self.config)
 
-        # load pre-extracted sprites from local numpy arrays
-        asset_dir = "src/jaxatari/assets/kungfumaster"
+        # Initialize safe fallback attributes first so they exist even if assets are missing in CI
+        self.has_assets = False
+        self.spr_bg = jnp.zeros((210, 160, 3), dtype=jnp.uint8)
+        self.spr_player_stand = jnp.zeros((24, 16, 3), dtype=jnp.uint8)
+        self.spr_player_walk = jnp.zeros((24, 16, 3), dtype=jnp.uint8)
+        self.spr_player_punch = jnp.zeros((24, 20, 3), dtype=jnp.uint8)
+        self.spr_player_kick = jnp.zeros((24, 26, 3), dtype=jnp.uint8)
+        self.spr_gripper = jnp.zeros((22, 14, 3), dtype=jnp.uint8)
+        self.spr_knife = jnp.zeros((22, 14, 3), dtype=jnp.uint8)
+        self.spr_tomtom = jnp.zeros((22, 14, 3), dtype=jnp.uint8)
+        self.spr_dragon = jnp.zeros((22, 14, 3), dtype=jnp.uint8)
+        self.spr_boss = jnp.zeros((22, 14, 3), dtype=jnp.uint8)
+        self.spr_hud_digits = jnp.zeros((10, 7, 5, 3), dtype=jnp.uint8)
+
+        asset_dir = os.path.join(render_utils.get_base_sprite_dir(), "kungfumaster")
         try:
             self.spr_bg = jnp.array(np.load(os.path.join(asset_dir, "background.npy")), dtype=jnp.uint8)
             self.spr_player_stand = jnp.array(np.load(os.path.join(asset_dir, "player_stand.npy")), dtype=jnp.uint8)
@@ -1406,7 +1381,6 @@ class KungFuMasterRenderer(JAXGameRenderer):
             self.spr_dragon = jnp.array(np.load(os.path.join(asset_dir, "dragon.npy")), dtype=jnp.uint8)
             self.spr_boss = jnp.array(np.load(os.path.join(asset_dir, "boss.npy")), dtype=jnp.uint8)
             
-            # Load the timer HUD digits
             self.spr_hud_digits = jnp.array([np.load(os.path.join(asset_dir, f"hud_digit_{i}.npy")) for i in range(10)], dtype=jnp.uint8)
             
             self.has_assets = True
@@ -1414,10 +1388,9 @@ class KungFuMasterRenderer(JAXGameRenderer):
             self.has_assets = False
 
     @partial(jax.jit, static_argnums=(0,))
-    def render(self, state):
+    def _render_raw(self, state):
         cfg = self.consts
 
-        # custom fast rectangle fill for jax
         def fill_rectangle(surface, rect_x, rect_y, rect_w, rect_h, rgb_color):
             clamped_x = jnp.clip(rect_x, 0, cfg.SCREEN_WIDTH - 1).astype(jnp.int32)
             clamped_y = jnp.clip(rect_y, 0, cfg.SCREEN_HEIGHT - 1).astype(jnp.int32)
@@ -1429,7 +1402,6 @@ class KungFuMasterRenderer(JAXGameRenderer):
             fill_mask = row_mask[:, None] & col_mask[None, :]
             return jnp.where(fill_mask[..., None], rgb_color, surface)
 
-        # custom alpha blitting using dynamic slices
         def blit_patch(canvas, sprite, x, y, flip=False):
             sprite_to_draw = jnp.where(flip, jnp.fliplr(sprite), sprite)
             h, w, _ = sprite.shape
@@ -1441,71 +1413,60 @@ class KungFuMasterRenderer(JAXGameRenderer):
             blended = jnp.where(alpha, sprite_to_draw, patch)
             return jax.lax.dynamic_update_slice(canvas, blended, (y_c, x_c, 0))
 
-        # 1. Base Wall & Backdrop
+        # 1. Base Wall & Backdrop (Classic blue background wall)
         fallback_bg = jnp.full((cfg.SCREEN_HEIGHT, cfg.SCREEN_WIDTH, 3), 40, dtype=jnp.uint8)
-        fallback_bg = fallback_bg.at[cfg.CEILING_Y:cfg.FLOOR_Y, :, :].set(jnp.array([28, 48, 172], dtype=jnp.uint8))
+        fallback_bg = fallback_bg.at[cfg.CEILING_Y:cfg.FLOOR_Y, :, :].set(jnp.array([48, 72, 184], dtype=jnp.uint8))
         framebuffer = jnp.where(self.has_assets, self.spr_bg, fallback_bg)
 
-        # EXACT HUD GRAY: Sampled safely from the middle of the HUD
-        hud_bg_color = jnp.where(self.has_assets, self.spr_bg[20, 80], jnp.array([92, 92, 92], dtype=jnp.uint8))
+        fallback_hud_color = jnp.array([92, 92, 92], dtype=jnp.uint8)
+        hud_bg_color = jnp.where(
+            self.has_assets, 
+            self.spr_bg[20, 80] if hasattr(self, 'spr_bg') and self.spr_bg is not None else fallback_hud_color, 
+            fallback_hud_color
+        )
 
-        # Fix 3: Wall pattern detail
-        brown_bar = jnp.array([139, 69, 19], dtype=jnp.uint8)
-        red_dash = jnp.array([210, 30, 30], dtype=jnp.uint8)
-        yellow_dash = jnp.array([220, 200, 40], dtype=jnp.uint8)
+        # 2. Horizontal Wall Beams & Vertical Pillars (Matching reference beams)
+        yellow_beam = jnp.array([220, 200, 40], dtype=jnp.uint8)
+        red_beam = jnp.array([210, 30, 30], dtype=jnp.uint8)
+        brown_pillar = jnp.array([139, 69, 19], dtype=jnp.uint8)
 
-        def draw_striped_pillar(p_idx, canvas):
-            px = 12 + p_idx * 32
-            start_y = cfg.CEILING_Y + 7
-            c = fill_rectangle(canvas, px, start_y, 4, cfg.FLOOR_Y - start_y, brown_bar)
+        # Horizontal accent stripes across the blue wall
+        framebuffer = fill_rectangle(framebuffer, 0, cfg.CEILING_Y + 12, cfg.SCREEN_WIDTH, 3, yellow_beam)
+        framebuffer = fill_rectangle(framebuffer, 0, cfg.CEILING_Y + 15, cfg.SCREEN_WIDTH, 2, red_beam)
+        framebuffer = fill_rectangle(framebuffer, 0, cfg.FLOOR_Y - 18, cfg.SCREEN_WIDTH, 3, yellow_beam)
+        framebuffer = fill_rectangle(framebuffer, 0, cfg.FLOOR_Y - 15, cfg.SCREEN_WIDTH, 2, red_beam)
 
-            def draw_dashes(step_idx, c_inner):
-                base_y = start_y + step_idx * 8
-                c_inner = fill_rectangle(c_inner, px, base_y, 3, 2, red_dash)
-                c_inner = fill_rectangle(c_inner, px, base_y + 4, 3, 2, yellow_dash)
-                return c_inner
-
-            num_steps = (cfg.FLOOR_Y - start_y) // 8
-            return jax.lax.fori_loop(0, num_steps, draw_dashes, c)
-
-        framebuffer = jax.lax.fori_loop(0, 5, draw_striped_pillar, framebuffer)
-
-        # Fix 4: Floor border
-        floor_color = jnp.array([120, 68, 28], dtype=jnp.uint8)
-        red_floor_border = jnp.array([210, 30, 30], dtype=jnp.uint8)
-        dark_red_floor_border = jnp.array([110, 15, 15], dtype=jnp.uint8)
-
-        framebuffer = fill_rectangle(framebuffer, 0, cfg.FLOOR_Y - 2, cfg.SCREEN_WIDTH, 2, red_floor_border)
-        framebuffer = fill_rectangle(framebuffer, 0, cfg.FLOOR_Y, cfg.SCREEN_WIDTH, 14, floor_color)
-        framebuffer = fill_rectangle(framebuffer, 0, cfg.FLOOR_Y + 14, cfg.SCREEN_WIDTH, 2, dark_red_floor_border)
-
-        # Fix 5: Bottom ornamental symbols
-        ornament_color = jnp.array([200, 160, 40], dtype=jnp.uint8)
-        def draw_bracket(b_idx, canvas):
-            bx = 16 + b_idx * 32
-            by = 180
-            c = fill_rectangle(canvas, bx + 2, by, 3, 12, ornament_color)
-            c = fill_rectangle(c, bx, by, 8, 2, ornament_color)
-            c = fill_rectangle(c, bx, by + 10, 8, 2, ornament_color)
+        def draw_pillar(p_idx, canvas):
+            px = 32 + p_idx * 32
+            c = fill_rectangle(canvas, px, cfg.CEILING_Y + 17, 4, cfg.FLOOR_Y - cfg.CEILING_Y - 32, brown_pillar)
+            c = fill_rectangle(c, px - 2, cfg.CEILING_Y + 35, 8, 3, yellow_beam)
+            c = fill_rectangle(c, px - 2, cfg.FLOOR_Y - 45, 8, 3, yellow_beam)
             return c
 
-        framebuffer = jax.lax.fori_loop(0, 5, draw_bracket, framebuffer)
+        framebuffer = jax.lax.fori_loop(0, 4, draw_pillar, framebuffer)
 
-        # HUD CLEARING
-        # Clear baked timer
-        framebuffer = fill_rectangle(framebuffer, 28, 8, 52, 12, hud_bg_color)
-        # Clear baked green score
-        framebuffer = fill_rectangle(framebuffer, 45, 20, 50, 12, hud_bg_color)
-        # Clear baked '3' lives text
-        framebuffer = fill_rectangle(framebuffer, 85, 28, 25, 14, hud_bg_color)
-        # Clear baked energy bars
-        framebuffer = fill_rectangle(framebuffer, 48, 32, 85, 20, hud_bg_color)
-        # Clear the old tiny baked-in blue life squares above PLAYER
-        framebuffer = fill_rectangle(framebuffer, 24, 24, 30, 8, hud_bg_color)
+        # 3. Floor Border & Bottom Panel with Ornamental Brackets
+        floor_color = jnp.array([120, 68, 28], dtype=jnp.uint8)
+        red_panel = jnp.array([180, 20, 20], dtype=jnp.uint8)
+        yellow_bracket = jnp.array([220, 200, 40], dtype=jnp.uint8)
 
-        # HUD DRAWING
-        
-        # Timer
+        framebuffer = fill_rectangle(framebuffer, 0, cfg.FLOOR_Y - 2, cfg.SCREEN_WIDTH, 2, red_beam)
+        framebuffer = fill_rectangle(framebuffer, 0, cfg.FLOOR_Y, cfg.SCREEN_WIDTH, 14, floor_color)
+        framebuffer = fill_rectangle(framebuffer, 0, cfg.FLOOR_Y + 14, cfg.SCREEN_WIDTH, 20, red_panel)
+
+        # Draw the iconic Greek-key / U-shaped ornamental brackets on the lower red strip
+        def draw_ornament(b_idx, canvas):
+            bx = 24 + b_idx * 32
+            by = cfg.FLOOR_Y + 17
+            c = fill_rectangle(canvas, bx, by, 8, 2, yellow_bracket)
+            c = fill_rectangle(c, bx, by + 6, 8, 2, yellow_bracket)
+            c = fill_rectangle(c, bx, by + 2, 2, 4, yellow_bracket)
+            c = fill_rectangle(c, bx + 6, by + 2, 2, 4, yellow_bracket)
+            return c
+
+        framebuffer = jax.lax.fori_loop(0, 5, draw_ornament, framebuffer)
+
+        # Timer digits
         def draw_timer_digit(idx, buffer):
             divisor = jnp.array([1000, 100, 10, 1], dtype=jnp.int32)[idx]
             d_val = (jnp.clip(state.floor_timer, 0, 9999) // divisor) % 10
@@ -1513,7 +1474,7 @@ class KungFuMasterRenderer(JAXGameRenderer):
             return blit_patch(buffer, d_spr, 34 + idx * 8, 8)
         framebuffer = jax.lax.fori_loop(0, 4, draw_timer_digit, framebuffer)
 
-        # Score
+        # Score numbers
         digit_white = jnp.array([255, 255, 255], dtype=jnp.uint8)
         def draw_bitmap_score_digit(d_idx, canvas):
             divisor = jnp.array([100000, 10000, 1000, 100, 10, 1], dtype=jnp.int32)[d_idx]
@@ -1535,7 +1496,7 @@ class KungFuMasterRenderer(JAXGameRenderer):
 
         framebuffer = jax.lax.fori_loop(0, 6, draw_bitmap_score_digit, framebuffer)
 
-        # Life squares
+        # Lives icons
         life_blue = jnp.array([80, 120, 220], dtype=jnp.uint8)
         dark_border = jnp.array([20, 30, 60], dtype=jnp.uint8)
         def draw_life_square(l_idx, canvas):
@@ -1548,22 +1509,17 @@ class KungFuMasterRenderer(JAXGameRenderer):
 
         framebuffer = jax.lax.fori_loop(0, 3, draw_life_square, framebuffer)
 
-        # Energy bars
-        border_white = jnp.array([255, 255, 255], dtype=jnp.uint8)
+        # Dynamic Health Bars (PLAYER yellow bar & ENEMY red bar)
         bar_dark_red = jnp.array([120, 20, 20], dtype=jnp.uint8)
         player_yellow = jnp.array([223, 183, 85], dtype=jnp.uint8)
-        enemy_red = jnp.array([180, 50, 50], dtype=jnp.uint8)
+        enemy_red = jnp.array([210, 40, 40], dtype=jnp.uint8)
 
-        # PLAYER Bar
-        framebuffer = fill_rectangle(framebuffer, 49, 33, 82, 10, border_white)
         framebuffer = fill_rectangle(framebuffer, 50, 34, 80, 8, bar_dark_red)
         player_bar_w = jnp.clip(
             jnp.round(state.player_energy.astype(jnp.float32) / 100.0 * 80).astype(jnp.int32), 0, 80
         )
         framebuffer = fill_rectangle(framebuffer, 50, 34, player_bar_w, 8, player_yellow)
 
-        # ENEMY Bar
-        framebuffer = fill_rectangle(framebuffer, 49, 43, 82, 10, border_white)
         framebuffer = fill_rectangle(framebuffer, 50, 44, 80, 8, bar_dark_red)
         boss_max_hp = jnp.array(cfg.FLOOR_BOSS_HP, dtype=jnp.int32)[jnp.clip(state.floor - 1, 0, cfg.NUM_FLOORS - 1)]
         boss_curr_hp = jnp.where(state.boss_spawned, state.en_hp[0], 0)
@@ -1572,14 +1528,11 @@ class KungFuMasterRenderer(JAXGameRenderer):
         )
         framebuffer = fill_rectangle(framebuffer, 50, 44, enemy_bar_w, 8, enemy_red)
 
-        # ENTITY DRAWING
-        
-        # Player Animation & Sprites
+        # Player Sprites & Entities
         walk_frame = (state.step_count // 6) % 2 == 0
         base_spr = jnp.where(walk_frame, self.spr_player_walk, self.spr_player_stand)
         framebuffer = blit_patch(framebuffer, base_spr, state.player_x, state.player_y, flip=(state.player_dir < 0))
 
-        # Enemies
         def draw_single_enemy(idx, buffer):
             pos_x, pos_y = state.en_x[idx], state.en_y[idx]
             tag, is_active = state.en_type[idx], state.en_active[idx]
@@ -1605,13 +1558,35 @@ class KungFuMasterRenderer(JAXGameRenderer):
 
         framebuffer = jax.lax.fori_loop(0, cfg.MAX_ENEMIES, draw_single_enemy, framebuffer)
 
-        # Projectiles
         proj_rgb = jnp.array([255, 255, 255], dtype=jnp.uint8)
         def draw_single_proj(idx, buffer):
             rendered = fill_rectangle(buffer, state.pr_x[idx], state.pr_y[idx], 6, 4, proj_rgb)
             return jnp.where(state.pr_active[idx], rendered, buffer)
 
         framebuffer = jax.lax.fori_loop(0, cfg.MAX_PROJ, draw_single_proj, framebuffer)
+
+        return framebuffer
+
+    def render(self, state):
+        framebuffer = self._render_raw(state)
+
+        downscale = getattr(self.config, "downscale", None)
+        channels = getattr(self.config, "channels", 3)
+
+        if channels == 1:
+            weights = jnp.array([0.299, 0.587, 0.114], dtype=jnp.float32)
+            framebuffer = jnp.sum(
+                framebuffer.astype(jnp.float32) * weights, axis=-1, keepdims=True
+            )
+            framebuffer = jnp.clip(framebuffer, 0, 255).astype(jnp.uint8)
+
+        if downscale is not None:
+            h, w = downscale
+            framebuffer = jax.image.resize(
+                framebuffer.astype(jnp.float32),
+                (h, w, framebuffer.shape[-1]),
+                method="nearest",
+            ).astype(jnp.uint8)
 
         return framebuffer
 
@@ -1630,7 +1605,6 @@ if __name__ == "__main__":
     obs, game_state, r, is_done, info = env.step(game_state, jnp.int32(11))
     print(f"JIT Compilation completed in: {time.time() - start_time:.2f}s")
 
-    # quick random policy benchmark
     TOTAL_STEPS = 5000
     current_state = game_state
     accumulated_reward = 0.0
@@ -1650,7 +1624,6 @@ if __name__ == "__main__":
     screen_dump = env.render(game_state)
     print(f"Render output verified. Shape: {screen_dump.shape}")
 
-    # make sure vmap doesn't crash
     batch_keys = jax.random.split(master_key, 16)
     obs_batch, state_batch = jax.vmap(env.reset)(batch_keys)
     obs_batch, state_batch, r_batch, d_batch, _ = jax.vmap(env.step)(
@@ -1658,7 +1631,6 @@ if __name__ == "__main__":
     )
     print(f"Batch vmap check OK -> Batch rewards shape: {r_batch.shape}")
 
-    # test modifiers
     modifier_configs = [
         ("no_knives", {"MOD_NO_KNIVES": True}),
         ("double_speed", {"MOD_DOUBLE_SPEED": True}),
