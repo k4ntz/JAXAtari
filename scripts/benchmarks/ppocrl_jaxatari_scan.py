@@ -743,7 +743,8 @@ def single_run(key: jax.random.PRNGKey, network: Network | MLP_Network, actor: A
             eval_and_vid(iteration, global_step)
             print(f"Iteration: {iteration} | Eval Time: {time.time() - eval_start_time:.2f}")
 
-        if iteration == int(config["PRUNE_ITERATION_FRAC"] * config["NUM_ITERATIONS"]):
+        # PackNet pruning
+        if config["CL_METHOD"].lower() == "packnet" and iteration == int(config["PRUNE_ITERATION_FRAC"] * config["NUM_ITERATIONS"]):
             print("--- Executing PackNet Pruning ---")
             
             def prune_tree(params, task_ids, prune_fraction):
