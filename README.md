@@ -244,18 +244,19 @@ base env  →  [MultiRewardWrapper]  →  AtariWrapper  →  <obs wrapper>  → 
 ```
 
 
-| Wrapper                        | Description                                                                                                                            |
-| ------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------- |
-| `AtariWrapper`                 | Atari-specific pre-processing: sticky actions, episodic life, noop reset, frame-skip config. Must come before any observation wrapper. |
-| `ObjectCentricWrapper`         | Stacked object-centric features. Output shape: `(frame_stack, features)`.                                                              |
-| `PixelObsWrapper`              | Stacked pixel frames with max-pooling. Output shape: `(frame_stack, H, W, C)`.                                                         |
+| Wrapper                       | Description                                                                                                                            |
+|-------------------------------|----------------------------------------------------------------------------------------------------------------------------------------|
+| `AtariWrapper`                | Atari-specific pre-processing: sticky actions, episodic life, noop reset, frame-skip config. Must come before any observation wrapper. |
+| `ObjectCentricWrapper`        | Stacked object-centric features. Output shape: `(frame_stack, features)`.                                                              |
+| `PixelObsWrapper`             | Stacked pixel frames with max-pooling. Output shape: `(frame_stack, H, W, C)`.                                                         |
 | `PixelAndObjectCentricWrapper` | Both pixel and object-centric observations as a tuple.                                                                                 |
-| `PixelAndObjectObsWrapper`     | Same as above but returns structured (non-flattened) OC observations.                                                                  |
-| `FlattenObservationWrapper`    | Flattens any observation pytree to a single 1D array.                                                                                  |
-| `NormalizeObservationWrapper`  | Normalizes observations to `[0, 1]` (or `[-1, 1]` with `to_neg_one=True`). Compatible with any pytree structure.                       |
-| `LogWrapper`                   | Tracks episode returns and lengths.                                                                                                    |
-| `MultiRewardWrapper`           | Computes multiple reward functions at every step. Apply before `AtariWrapper`.                                                         |
-| `MultiRewardLogWrapper`        | Tracks multiple reward components separately. Use with `MultiRewardWrapper`.                                                           |
+| `PixelAndObjectObsWrapper`    | Same as above but returns structured (non-flattened) OC observations.                                                                  |
+| `FlattenObservationWrapper`   | Flattens any observation pytree to a single 1D array.                                                                                  |
+| `NormalizeObservationWrapper` | Normalizes observations to `[0, 1]` (or `[-1, 1]` with `to_neg_one=True`). Compatible with any pytree structure.                       |
+| `LogWrapper`                  | Tracks episode returns and lengths.                                                                                                    |
+| `MultiRewardWrapper`          | Computes multiple reward functions at every step. Apply before `AtariWrapper`.                                                         |
+| `MultiRewardLogWrapper`       | Tracks multiple reward components separately. Use with `MultiRewardWrapper`.                                                           |
+| `ContinuousActionWrapper`     | Converts a 3D continuous action (r, theta, fire) into discrete Atari actions. Requires full_action_space=True in AtariWrapper. Place this wrapper after all other wrappers (i.e., at the outermost layer)        |
 
 
 ---

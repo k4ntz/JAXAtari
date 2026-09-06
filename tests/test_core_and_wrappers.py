@@ -4,7 +4,7 @@ import jax.numpy as jnp
 import pytest
 import jaxatari
 from dataclasses import is_dataclass
-from jaxatari.environment import EnvInfo, EnvObs, EnvState
+from jaxatari.environment import EnvInfo, EnvObs, EnvState, JAXAtariAction as Action
 from jaxatari.wrappers import (
     NormalizeObservationWrapper,
     ObjectCentricWrapper,
@@ -14,7 +14,8 @@ from jaxatari.wrappers import (
     PixelAndObjectCentricWrapper,
     LogWrapper,
     MultiRewardLogWrapper, 
-    FlattenObservationWrapper
+    FlattenObservationWrapper,
+    ContinuousActionWrapper
 )
 import jaxatari.spaces as spaces
 import numpy as np
@@ -318,6 +319,120 @@ def test_native_downscaling_grayscale(fresh_raw_env, isolate_jit_cache):
     key = jax.random.PRNGKey(0)
     obs, _ = env.reset(key)
     assert obs.shape == expected_shape
+
+@pytest.mark.parametrize(
+    "r, theta, fire, tau, expected_discrete_action",
+    [
+        # Center / NOOP
+        (0.0, 0.0, 0.0, 0.5, 0),          # NOOP (index 0)
+        (0.4, 0.0, 0.0, 0.5, 0),          # r < tau → center → NOOP
+        # Fire only
+        (0.0, 0.0, 0.6, 0.5, 1),          # FIRE (index 1)
+        # Cardinal directions (no fire)
+        (0.6, 0.0, 0.0, 0.5, 3),          # RIGHT (index 3)
+        (0.6, np.pi, 0.0, 0.5, 4),        # LEFT (index 4)
+        (0.6, np.pi/2, 0.0, 0.5, 2),      # UP (index 2)
+        (0.6, -np.pi/2, 0.0, 0.5, 5),     # DOWN (index 5)
+        # Cardinal directions with fire
+        (0.6, 0.0, 0.6, 0.5, 11),         # RIGHTFIRE (index 11)
+        (0.6, np.pi, 0.6, 0.5, 12),       # LEFTFIRE (index 12)
+        (0.6, np.pi/2, 0.6, 0.5, 10),     # UPFIRE (index 10)
+        (0.6, -np.pi/2, 0.6, 0.5, 13),    # DOWNFIRE (index 13)
+        # Diagonals (no fire)
+        (0.8, np.pi/4, 0.0, 0.5, 6),      # UPRIGHT (index 6)
+        (0.8, 3*np.pi/4, 0.0, 0.5, 7),    # UPLEFT (index 7)
+        (0.8, -3*np.pi/4, 0.0, 0.5, 9),   # DOWNLEFT (index 9)
+        (0.8, -np.pi/4, 0.0, 0.5, 8),     # DOWNRIGHT (index 8)
+        # Diagonals with fire
+        (0.8, np.pi/4, 0.6, 0.5, 14),     # UPRIGHTFIRE (index 14)
+        (0.8, 3*np.pi/4, 0.6, 0.5, 15),   # UPLEFTFIRE (index 15)
+        (0.8, -3*np.pi/4, 0.6, 0.5, 17),  # DOWNLEFTFIRE (index 17)
+        (0.8, -np.pi/4, 0.6, 0.5, 16),    # DOWNRIGHTFIRE (index 16)
+        # Edge case: fire exactly at threshold
+        (0.6, 0.0, 0.5, 0.5, 3),          # fire == tau → treated as not fire
+        # Edge case: r exactly at threshold
+        (0.5, 0.0, 0.0, 0.5, 0),          # r == tau → center
+    ]
+)
+
+def test_continuous_action_wrapper_conversion(raw_env, r, theta, fire, tau, expected_discrete_action):
+    """Test that _convert maps continuous actions to correct discrete indices."""
+    env = ContinuousActionWrapper(AtariWrapper(raw_env, full_action_space=True), tau=tau)
+    action = jnp.array([r, theta, fire], dtype=jnp.float32)
+    discrete = env._convert(action)
+    assert discrete == expected_discrete_action
+
+@pytest.fixture
+def full_atari_env(raw_env):
+    """Return AtariWrapper with full_action_space=True."""
+    return AtariWrapper(raw_env, full_action_space=True)
+
+def test_action_space_shape(full_atari_env):
+    """Test that Continuous Wrapper returns correct action_space"""
+    env = ContinuousActionWrapper(full_atari_env)
+    space = env.action_space()
+    assert isinstance(space, spaces.Box)
+    assert space.shape == (3,)
+    low_expected = np.array([0.0, -np.pi, 0.0], dtype=np.float32)
+    high_expected = np.array([1.0, np.pi, 1.0], dtype=np.float32)
+    assert np.allclose(space.low, low_expected, atol=1e-6)
+    assert np.allclose(space.high, high_expected, atol=1e-6)
+
+def test_jit_compatibility(full_atari_env):
+    """Check if the `reset` and `step` functions can be JIT-compiled."""
+    env = ContinuousActionWrapper(full_atari_env)
+
+    @jax.jit
+    def reset_jit(key):
+        return env.reset(key)
+
+    @jax.jit
+    def step_jit(state, action):
+        return env.step(state, action)
+
+    key = jax.random.PRNGKey(0)
+    obs, state = reset_jit(key)
+    action = jnp.array([0.6, 0.0, 0.6], dtype=jnp.float32)
+    obs2, state2, reward, done, truncated, info = step_jit(state, action)
+
+    assert obs2 is not None
+    assert state2 is not None
+    assert isinstance(reward, (float, jnp.ndarray))
+    assert isinstance(done, (bool, jnp.ndarray))
+    assert isinstance(truncated, (bool, jnp.ndarray))
+    assert isinstance(info, dict)
+    assert jax.tree_util.tree_structure(obs) == jax.tree_util.tree_structure(obs2)
+
+def test_integration_with_pixel_obs(full_atari_env):
+    """Integrate ContinuousActionWrapper with PixelObsWrapper."""
+    key = jax.random.PRNGKey(0)
+    env = ContinuousActionWrapper(PixelObsWrapper(full_atari_env))
+
+    obs, state = env.reset(key)
+    assert obs.shape == env.observation_space().shape
+
+    action = jnp.array([0.6, 0.0, 0.0], dtype=jnp.float32)
+    obs, state, reward, done, _, _ = env.step(state, action)
+    assert obs.shape == env.observation_space().shape
+
+def test_integration_with_object_centric(full_atari_env):
+    """Integrate ContinuousActionWrapper with ObjectCentricWrapper."""
+    from jaxatari.wrappers import ObjectCentricWrapper
+
+    key = jax.random.PRNGKey(0)
+    env = ContinuousActionWrapper(ObjectCentricWrapper(full_atari_env))
+
+    obs, state = env.reset(key)
+    assert obs.shape == env.observation_space().shape
+
+    action = jnp.array([0.6, 0.0, 0.0], dtype=jnp.float32)  # RIGHT
+    obs, state, reward, done, _, _ = env.step(state, action)
+    assert obs.shape == env.observation_space().shape
+    # Take some steps to make sure
+    for _ in range(10):
+        action = jnp.array([0.8, np.pi/4, 0.0], dtype=jnp.float32)  # UPRIGHT
+        obs, state, reward, done, _, _ = env.step(state, action)
+        assert obs.shape == env.observation_space().shape
 
 if __name__ == "__main__":
     pytest.main([__file__])
