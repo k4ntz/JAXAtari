@@ -925,7 +925,9 @@ def continual_run(config: dict):
         observation_space_shape = (max_D,)    # (D,) for object-centric
     else:
         observation_space_shape = (config["FRAME_STACK"], *config["PIXEL_RESIZE_SHAPE"])    # (F, H, W) for pixel-based
-    dummy_obs = jnp.zeros((1, *observation_space_shape))  # (1, F, H, W) or (1, F, D)
+    
+    obs_dtype = jnp.uint8 if config["PIXEL_BASED"] else jnp.float32
+    dummy_obs = jnp.zeros((1, *observation_space_shape), dtype=obs_dtype)  # (1, F, H, W) or (1, F, D)
 
     # initialize the network, actor, and critic
     network = Network() if config["PIXEL_BASED"] else MLP_Network()
