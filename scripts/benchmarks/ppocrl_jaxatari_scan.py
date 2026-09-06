@@ -458,7 +458,7 @@ def single_run(key: jax.random.PRNGKey, network: Network | MLP_Network, actor: A
         current_task_key = f"{task_id}+{str(list(config["TRAIN_MODS"]))}"
 
         for idx, (eval_task, eval_task_train_mods, eval_task_eval_mods) in enumerate(seen_tasks):
-            eval_task_key = f"{eval_task}+{str(list(eval_task_train_mods))}"
+            eval_task_key = f"{eval_task}+tr:{str(list(eval_task_train_mods))}+ev:{str(list(eval_task_eval_mods))}"
             # We only want to log videos for the CURRENT task to save time/space
             capture_video = config["CAPTURE_VIDEO"] and (eval_task == task_id) and (eval_task_train_mods == list(config["TRAIN_MODS"]))
             if capture_video and config["VIDEO_AT_END"]:
@@ -479,7 +479,10 @@ def single_run(key: jax.random.PRNGKey, network: Network | MLP_Network, actor: A
                     full_action_space=config["IS_MULTI_GAME"],
                     eval=True
                 )()
+                # renderer unaffected by mods
                 eval_renderers_cache[eval_task_key] = jaxatari.make(eval_task).renderer
+
+                # eval_renderers_cache[eval_task_key] = jaxatari.make(eval_task, mods=eval_task_eval_mods).renderer
 
             cached_env = eval_envs_cache[eval_task_key]
             cached_renderer = eval_renderers_cache[eval_task_key]
@@ -552,39 +555,46 @@ def single_run(key: jax.random.PRNGKey, network: Network | MLP_Network, actor: A
             k = len(seen_tasks)
             wandb.log({"crl_metrics/Average_Performance": sum(current_performances.values()) / k}, step=current_global_step)
 
-            if k > 1:
-                bwt_sum, fm_sum, past_tasks_count = 0, 0, 0
-                for eval_task, eval_task_train_mods, _ in seen_tasks:
-                    eval_task_key = f"{eval_task}+{str(list(eval_task_train_mods))}"
-                    if eval_task_key != current_task_key:
-                        a_k_j = current_performances[eval_task_key]
-                        a_j_j = crl_state["a_j_j"][eval_task_key]
-                        max_a_j = crl_state["max_performances"][eval_task_key]
+            bwt_sum, fm_sum, past_tasks_count = 0, 0, 0
+            
+            # calculate BWT and FM
+            for eval_task, eval_task_train_mods, eval_task_eval_mods in seen_tasks:
+                eval_task_key = f"{eval_task}+tr:{str(list(eval_task_train_mods))}+ev:{str(list(eval_task_eval_mods))}"
+                is_current_task = (eval_task == task_id) and (eval_task_train_mods == list(config["TRAIN_MODS"]))
 
-                        print(f"Step: {current_global_step} | Task: {eval_task_key}")
-                        print(f"   Max: {max_a_j:.2f} | Current: {a_k_j:.2f} | Forgetting: {(max_a_j - a_k_j):.2f}")
-                        print(f"   Current: {a_k_j:.2f} | Baseline: {a_j_j:.2f} | Backward Transfer: {(a_k_j - a_j_j):.2f}")
-                        
-                        bwt_sum += (a_k_j - a_j_j)
-                        fm_sum += (max_a_j - a_k_j) 
-                        past_tasks_count += 1
-                
+                if not is_current_task and eval_task_key in crl_state["a_j_j"]:
+                    a_k_j = current_performances[eval_task_key]
+                    a_j_j = crl_state["a_j_j"][eval_task_key]
+                    max_a_j = crl_state["max_performances"][eval_task_key]
+
+                    print(f"Step: {current_global_step} | Task: {eval_task_key}")
+                    print(f"   Max: {max_a_j:.2f} | Current: {a_k_j:.2f} | Forgetting: {(max_a_j - a_k_j):.2f}")
+                    print(f"   Current: {a_k_j:.2f} | Baseline: {a_j_j:.2f} | Backward Transfer: {(a_k_j - a_j_j):.2f}")
+                    
+                    bwt_sum += (a_k_j - a_j_j)
+                    fm_sum += (max_a_j - a_k_j) 
+                    past_tasks_count += 1
+            
+            if past_tasks_count > 0:
                 wandb.log({
                     "crl_metrics/Backward_Transfer": bwt_sum / past_tasks_count,
                     "crl_metrics/Forgetting_Measure": fm_sum / past_tasks_count
                 }, step=current_global_step)
 
-            for eval_task, eval_task_train_mods, _ in seen_tasks:
-                eval_task_key = f"{eval_task}+{str(list(eval_task_train_mods))}"
+            # update max performances and lock in baselines
+            for eval_task, eval_task_train_mods, eval_task_eval_mods in seen_tasks:
+                eval_task_key = f"{eval_task}+tr:{str(list(eval_task_train_mods))}+ev:{str(list(eval_task_eval_mods))}"
                 current_perf = current_performances[eval_task_key]
+                is_current_task = (eval_task == task_id) and (eval_task_train_mods == list(config["TRAIN_MODS"]))
+                
                 # update max performance (FM)
                 if eval_task_key not in crl_state["max_performances"]:
                     crl_state["max_performances"][eval_task_key] = current_perf
                 else:
                     crl_state["max_performances"][eval_task_key] = max(crl_state["max_performances"][eval_task_key], current_perf)
                 
-                # lock in baseline (BWT)
-                if eval_task_key == current_task_key:
+                # lock in baseline (BWT) for all eval variations associated with the current training task
+                if is_current_task:
                     crl_state["a_j_j"][eval_task_key] = current_perf
 
     # TRY NOT TO MODIFY: start the game
@@ -1119,9 +1129,16 @@ def continual_run(config: dict):
 
     for i, task_id in enumerate(config["TASKS"]):
         train_mods = all_train_mods[i] if i < len(all_train_mods) else []
-        eval_mods = all_eval_mods[i] if i < len(all_eval_mods) else train_mods
-        if (task_id, train_mods, eval_mods) not in seen_tasks:
-            seen_tasks.append((task_id, train_mods, eval_mods))
+        
+        # handle the list of lists of lists for EVAL_MODS
+        if i < len(all_eval_mods):
+            eval_mods_list = all_eval_mods[i]
+        else:
+            eval_mods_list = [train_mods]
+
+        for eval_mods in eval_mods_list:
+            if (task_id, train_mods, eval_mods) not in seen_tasks:
+                seen_tasks.append((task_id, train_mods, eval_mods))
 
         # reset the optimizer state (step count & momentum) for new tasks
         if i > 0:
