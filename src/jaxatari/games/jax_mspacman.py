@@ -522,7 +522,7 @@ class JaxPacman(JaxEnvironment[PacmanState, PacmanObservation, PacmanInfo, MsPac
         # 5) Check win condition
         level_id, reward = jax.lax.cond(
             collected_pellets >= consts.PELLETS_TO_COLLECT[get_level_maze(state.level.id)],
-            lambda: (state.level.id + 1, reward + consts.LEVEL_COMPLETED_POINTS),
+            lambda: (state.level.id + 1, reward),
             lambda: (state.level.id, reward)
         )
         # 6) Update pellet state
