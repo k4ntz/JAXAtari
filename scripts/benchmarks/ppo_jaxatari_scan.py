@@ -202,8 +202,9 @@ def single_run(config: dict):
     config["MINIBATCH_SIZE"] = int(config["BATCH_SIZE"] // config["NUM_MINIBATCHES"])
     config["NUM_ITERATIONS"] = int(config["TOTAL_TIMESTEPS"] // config["BATCH_SIZE"])
 
-    run_name = f'{config["ENV_ID"]}_{config["EXP_NAME"]}_{"oc" if not config["PIXEL_BASED"] else "pixel"}_{config["SEED"]}'
+    run_name = f'{config["ENV_ID"]}_{config["EXP_NAME"]}_{"oc" if not config["PIXEL_BASED"] else "pixel"}_{config["NUM_ENVS"]}_{config["SEED"]}'
     if config["TRACK"]:
+
         wandb.init(
             project=config["PROJECT"],
             entity=config["ENTITY"],
