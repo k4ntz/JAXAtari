@@ -218,12 +218,12 @@ def init_cl_state(config, agent_state, dummy_obs):
             "value_targets": jnp.zeros((), dtype=jnp.float32) 
         }
         # TODO: What if tasks repeat? Should they overwrite their previous memory?
-        config["BUFFER_LENGTH"] = len(config["TASKS"]) * config["NUM_ENVS"] * config["NUM_STEPS"]
+        config["BUFFER_LENGTH"] = len(config["TASKS"]) * min(config["BATCH_SIZE"], config["SAMPLES_PER_TASK"])
         print(f"AGEM BUFFER LENGTH: {config["BUFFER_LENGTH"]}")
         buffer =  fbx.make_item_buffer(
             max_length=config["BUFFER_LENGTH"], 
-            min_length=config["MINIBATCH_SIZE"],
-            sample_batch_size=config["MINIBATCH_SIZE"],
+            min_length=config["AGEM_MINIBATCH_SIZE"],
+            sample_batch_size=config["AGEM_MINIBATCH_SIZE"],
             add_batches=True
         )
         buffer_state = buffer.init(fake_item)
@@ -327,7 +327,7 @@ def modify_gradients_fn(grads, cl_state, cl_static, agent_state, minibatch, conf
         
     return grads
 
-def on_task_end(task_idx, task_id, cl_state, cl_static, agent_state, fisher_storage, compute_fisher_fn, config):
+def on_task_end(task_idx, task_id, cl_state, cl_static, agent_state, fisher_storage, compute_fisher_fn, config, key):
     """Updates CL state at the end of a task."""
     cl_method = config["CL_METHOD"].lower()
     
@@ -350,6 +350,12 @@ def on_task_end(task_idx, task_id, cl_state, cl_static, agent_state, fisher_stor
         flat_obs = fisher_storage.obs.reshape((-1,) + fisher_storage.obs.shape[2:])
         flat_actions = fisher_storage.actions.reshape(-1)
         flat_returns = fisher_storage.returns.reshape(-1)
+
+        subsample_size = min(flat_obs.shape[0], config["SAMPLES_PER_TASK"])
+        indices = jax.random.choice(key, flat_obs.shape[0], (subsample_size,), replace=False)
+        flat_obs = flat_obs[indices]
+        flat_actions = flat_actions[indices]
+        flat_returns = flat_returns[indices]
 
         batch = {
             "observations": flat_obs,
@@ -1157,7 +1163,8 @@ def continual_run(config: dict):
             get_action_and_value, compute_gae, update_ppo, rtpt
         )
 
-        cl_state = on_task_end(i, task_id, cl_state, cl_static, agent_state, fisher_storage, compute_fisher, config)
+        key, task_end_key = jax.random.split(key)
+        cl_state = on_task_end(i, task_id, cl_state, cl_static, agent_state, fisher_storage, compute_fisher, config, task_end_key)
 
     wandb.finish()
 
