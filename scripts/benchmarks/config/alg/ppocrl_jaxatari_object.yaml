@@ -1,11 +1,11 @@
-EXP_NAME: ppoagem
+EXP_NAME: seaquest3
 TRACK: True
-CAPTURE_VIDEO: True
+CAPTURE_VIDEO: False
 VIDEO_AT_END: True  # True: capture videos only at the end of training on a task
 
 EVAL_DURING_TRAIN: True
-EVAL_EVERY: 200
-EVAL_EPISODES: 10
+EVAL_EVERY: 102
+EVAL_EPISODES: 100
 
 PIXEL_BASED: False
 NATIVE_DOWNSCALING: True
@@ -19,31 +19,39 @@ UPLOAD_MODEL: False
 HF_ENTITY: ""
 
 TASKS: [pong, pong, pong] # replaces ENV_ID
-TIMESTEPS_PER_TASK: 1000000  # replaces TOTAL_TIMESTEPS
+TIMESTEPS_PER_TASK: 10000000  # replaces TOTAL_TIMESTEPS
 
-TRAIN_MODS: # mods applied during training, for each environment
+# mods applied during training, for each environment
+TRAIN_MODS: 
+  - []
   - [lazy_enemy]
-  - [shift_enemy]
   - [shift_player]
-EVAL_MODS: # mods applied during evaluation, for each environment
-  - [lazy_enemy]
-  - [shift_enemy]
-  - [shift_player]
+# sets of mods applied during evaluation, for each environment
+EVAL_MODS: 
+  - [ [] ]
+  - [ [lazy_enemy] ]
+  - [ [shift_player] ]
 
-CL_METHOD: packnet  # ewc, agem, packnet
+CL_METHOD: agem  # ewc, agem, packnet
 
+# EWC
 EWC_DECAY: 0.9  # Decay for Online EWC
-EWC_LAMBDA: 0.0  # Weight for EWC penalty
+EWC_LAMBDA: 500000.0  # Weight for EWC penalty
 
-PRUNE_ITERATION_FRAC: 0.5  # Percentage of training at which the PackNet pruning is performed
+# AGEM
+SAMPLES_PER_TASK: 256  # Samples to store in the memory buffer per task
+AGEM_MINIBATCH_SIZE: 256
+
+# PackNet
+PRUNE_ITERATION_FRAC: 0.66  # Percentage of training at which the PackNet pruning is performed
 
 LEARNING_RATE: 0.00025
-NUM_ENVS: 8
-NUM_STEPS: 128
+NUM_ENVS: 512
+NUM_STEPS: 64
 ANNEAL_LR: True
 GAMMA: 0.99
 GAE_LAMBDA: 0.95
-NUM_MINIBATCHES: 4
+NUM_MINIBATCHES: 8
 UPDATE_EPOCHS: 4
 NORM_ADV: True
 CLIP_COEF: 0.1
