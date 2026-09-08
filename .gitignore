@@ -3,6 +3,7 @@ env
 
 .venv
 .vscode
+.vs
 .idea
 *.bc
 results/
