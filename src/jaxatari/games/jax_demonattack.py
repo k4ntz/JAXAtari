@@ -213,7 +213,7 @@ def _bomb_visible_repeat_window(state, consts, bomb_type):
 class DemonAttackConstants(AutoDerivedConstants):
     # Static Configuration
     WIDTH: int = struct.field(pytree_node=False, default=160)
-    HEIGHT: int = struct.field(pytree_node=False, default=192)
+    HEIGHT: int = struct.field(pytree_node=False, default=210)
     PLAYER_SPEED: int = struct.field(pytree_node=False, default=1)
     MAX_DEMONS: int = struct.field(pytree_node=False, default=3) # visible formation
     DEMON_SLOTS: int = struct.field(pytree_node=False, default=4) # keeps extra bottom split demon slot
@@ -412,9 +412,6 @@ class DemonAttackConstants(AutoDerivedConstants):
     DEMON_MAX_X: int = struct.field(pytree_node=False, default=None) # right boundary for demons, calculated in compute_derived
     DEMON_MIN_Y: int = struct.field(pytree_node=False, default=20)  # top boundary for demons
     DEMON_MAX_Y: int = struct.field(pytree_node=False, default=135) # bottom boundary for demons
-
-    # Colors
-    SCORE_COLOR: Tuple[int, int, int] = struct.field(pytree_node=False, default=(194, 169, 53))
 
     ASSET_CONFIG: tuple = struct.field(pytree_node=False, default_factory=_get_default_asset_config)
 
@@ -2656,7 +2653,7 @@ class JaxDemonAttack(JaxEnvironment[DemonAttackState, DemonAttackObservation, De
         return spaces.Box(
             low=0,
             high=255,
-            shape=(210, 160, 3),
+            shape=(self.consts.HEIGHT, self.consts.WIDTH, 3),
             dtype=jnp.uint8
         )
 
@@ -2686,7 +2683,7 @@ class DemonAttackRenderer(JAXGameRenderer):
 
         if config is None:
             self.config = render_utils.RendererConfig(
-                game_dimensions=(210, 160),
+                game_dimensions=(self.consts.HEIGHT, self.consts.WIDTH),
                 channels=3,
                 downscale=None
             )
@@ -2751,7 +2748,7 @@ class DemonAttackRenderer(JAXGameRenderer):
 
         # 2. Bake assets
         sprite_path = os.path.join(os.path.dirname(__file__), "sprites", "demonattack")
-        jax.debug.print(f"Using sprites from: {sprite_path}")
+        print(f"Using sprites from: {sprite_path}")
         (
             self.PALETTE,
             self.SHAPE_MASKS,
