@@ -2501,7 +2501,7 @@ class JaxDemonAttack(JaxEnvironment[DemonAttackState, DemonAttackObservation, De
             demon_split_primary_alive=jnp.where(killed, False, demon_split_primary_alive),
             demon_split_secondary_alive=jnp.where(killed, False, demon_split_secondary_alive),
             demon_status=demon_status,
-            demon_mode=jnp.where(killed, BEHAVIOR_NORMAL, state.demon_mode),  # <-- add this
+            demon_mode=jnp.where(killed, BEHAVIOR_NORMAL, state.demon_mode),
             demon_phase=jnp.where(killed, 0, state.demon_phase),
             demon_moving_right=jnp.where(killed, False, state.demon_moving_right),
             demon_moving_down=jnp.where(killed, True, state.demon_moving_down),
