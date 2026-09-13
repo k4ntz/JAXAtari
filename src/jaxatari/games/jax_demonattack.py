@@ -2,7 +2,6 @@ import os
 from functools import partial
 from typing import Tuple
 
-import numpy as np
 import chex
 import jax.lax
 import jax.numpy as jnp
@@ -838,10 +837,6 @@ class JaxDemonAttack(JaxEnvironment[DemonAttackState, DemonAttackObservation, De
     def _demon_slot_ids(self) -> chex.Array:
         """Return all state slots, including the detached-demon overflow slot."""
         return jnp.arange(self.consts.DEMON_SLOTS)
-
-    def _formation_slot_ids(self) -> chex.Array:
-        """Return only the three slots that participate in formation logic."""
-        return jnp.arange(self.consts.MAX_DEMONS)
 
     def _shift_bottom_vacancy_to_top(self, state: DemonAttackState) -> DemonAttackState:
         """Shift the formation down and detach its lone bottom split demon."""
@@ -2430,37 +2425,6 @@ class JaxDemonAttack(JaxEnvironment[DemonAttackState, DemonAttackObservation, De
         game_over = jnp.logical_or(
             state.game_over,
             jnp.logical_and(any_player_hit, jnp.logical_not(bunker_available)),
-        )
-        bomb_active = jnp.where(
-            any_player_hit,
-            jnp.zeros_like(state.bomb_active),
-            state.bomb_active,
-        )
-        # MAX_BOMBS is guaranteed past the end of any type's rate range.
-        bomb_burst_step = jnp.where(
-            any_player_hit,
-            self.consts.MAX_BOMBS,
-            state.bomb_burst_step,
-        )
-        bomb_burst_used_skip = jnp.where(
-            any_player_hit,
-            jnp.array(False, dtype=jnp.bool_),
-            state.bomb_burst_used_skip,
-        )
-        bomb_burst_row_gap_pending = jnp.where(
-            any_player_hit,
-            jnp.array(False, dtype=jnp.bool_),
-            state.bomb_burst_row_gap_pending,
-        )
-        bomb_burst_length = jnp.where(
-            any_player_hit,
-            0,
-            state.bomb_burst_length,
-        )
-        bomb_burst_timer = jnp.where(
-            any_player_hit,
-            0,
-            state.bomb_burst_timer,
         )
 
         # If player hit, start explosion
