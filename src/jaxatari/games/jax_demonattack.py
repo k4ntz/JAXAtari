@@ -285,7 +285,6 @@ class DemonAttackConstants(AutoDerivedConstants):
     SPLIT_DEMONS_START_WAVE: int = struct.field(pytree_node=False, default=4) # starting in this wave, demons split after a hit and refill bottom and respawn on top
     TRACKING_PROJECTILES_START_WAVE: int = struct.field(pytree_node=False, default=8) # starting in this wave, the demons begin using projectiles that follow the demon
 
-    DIVE_TRIGGER_MASK: int = struct.field(pytree_node=False, default=63)  # controls trigger frequency (trigger policy detail)
     DIVE_SEGMENT_DURATION: int = struct.field(pytree_node=False, default=50)  # frames per V segment
     DIVE_WAVE_UP_DURATION: int = struct.field(pytree_node=False, default=20) # how many frames of the segment are for the upward motion (the rest is downward)
     DIVE_WAVE_AMPLITUDE_PIXELS: int = struct.field(pytree_node=False, default=18)
