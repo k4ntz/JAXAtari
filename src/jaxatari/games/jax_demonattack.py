@@ -2480,6 +2480,22 @@ class JaxDemonAttack(JaxEnvironment[DemonAttackState, DemonAttackObservation, De
             jnp.logical_not(teleport_busy),
         )
 
+        # cancel burst when demon splits (don't add more rows but allow existing rows to fall)
+        source_split = split[state.bomb_source_idx]
+        cancel_burst = jnp.logical_or(any_player_hit, source_split)
+
+        bomb_active = jnp.where(
+            any_player_hit,  # only when the player is hit do we clear in-flight bombs
+            jnp.zeros_like(state.bomb_active),
+            state.bomb_active,
+        )
+        bomb_burst_step = jnp.where(cancel_burst, self.consts.MAX_BOMBS, state.bomb_burst_step)
+        bomb_burst_used_skip = jnp.where(cancel_burst, jnp.array(False, dtype=jnp.bool_), state.bomb_burst_used_skip)
+        bomb_burst_row_gap_pending = jnp.where(cancel_burst, jnp.array(False, dtype=jnp.bool_),
+                                               state.bomb_burst_row_gap_pending)
+        bomb_burst_length = jnp.where(cancel_burst, 0, state.bomb_burst_length)
+        bomb_burst_timer = jnp.where(cancel_burst, 0, state.bomb_burst_timer)
+
         state = state.replace(
             demons_alive=demon_status != DEMON_STATUS_FREE,
             demons_x=jnp.where(split, center_small_x, state.demons_x),
