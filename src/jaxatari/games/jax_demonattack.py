@@ -1827,9 +1827,7 @@ class JaxDemonAttack(JaxEnvironment[DemonAttackState, DemonAttackObservation, De
 
         slot_ids = jnp.arange(self.consts.MAX_BOMBS, dtype=jnp.int32)
 
-        # ============================================================
-        # WAVE/ACTION TIMING — burst-to-burst pacing only
-        # ============================================================
+        # burst-to-burst pacing
         action_limit = jnp.asarray(
             self.consts.ENEMY_SHOT_ACTION_TABLE,
             dtype=jnp.int32,
@@ -1839,9 +1837,7 @@ class JaxDemonAttack(JaxEnvironment[DemonAttackState, DemonAttackObservation, De
         any_bomb_active = jnp.any(state.bomb_active)
         bomb_type = state.bomb_type
 
-        # ============================================================
-        # VERTICAL MOTION
-        # ============================================================
+        # vertical motion
         bomb_speed = self._difficulty_value_for_pattern(
             self.consts.ENEMY_SHOT_SPEED_TABLE,
             state.wave_pattern,
@@ -1851,7 +1847,7 @@ class JaxDemonAttack(JaxEnvironment[DemonAttackState, DemonAttackObservation, De
         ]
         uses_continuous_fall = unit_length > 1
 
-        # --- Y-JITTER: waveform selected per wave, shared per-frame delta ---
+        # Y-JITTER: waveform selected per wave, shared per-frame delta
         jitter_y_tables = jnp.asarray(self.consts.BOMB_JITTER_Y_TABLES, dtype=jnp.int32)
         jitter_y_period = jitter_y_tables.shape[1]
         jitter_waveform_index = self._difficulty_value_for_pattern(
@@ -1864,7 +1860,6 @@ class JaxDemonAttack(JaxEnvironment[DemonAttackState, DemonAttackObservation, De
             bomb_speed,
             selected_jitter_y_table[jitter_y_phase],
         )
-        # --- end Y-JITTER ---
 
         source_bottom_y = (
             state.demons_y[state.bomb_source_idx]
@@ -1902,10 +1897,7 @@ class JaxDemonAttack(JaxEnvironment[DemonAttackState, DemonAttackObservation, De
                     - self.consts.BOMB_SIZE[1] // 2
             )
 
-        # ============================================================
-        # HORIZONTAL MOTION — X-JITTER
-        # ============================================================
-        # --- (a) TABLE JITTER (STANDARD, TIGHT) ---
+        # (a) TABLE JITTER (STANDARD, TIGHT)
         jitter_x_table = jnp.asarray(
             self.consts.BOMB_JITTER_X_TABLE,
             dtype=jnp.int32,
@@ -1924,9 +1916,8 @@ class JaxDemonAttack(JaxEnvironment[DemonAttackState, DemonAttackObservation, De
         )
         table_jitter = jitter_x_table[jitter_x_phase]
         table_jitter_x = self._bomb_jitter_for_type(bomb_type, table_jitter)
-        # --- end (a) ---
 
-        # --- (b) RANDOM-WALK JITTER (SNAKE) ---
+        # (b) RANDOM-WALK JITTER (SNAKE)
         uses_random_walk_jitter = jnp.asarray(
             self.consts.BOMB_TYPE_RANDOM_WALK_JITTER, dtype=jnp.bool_
         )[bomb_type]
@@ -1955,7 +1946,6 @@ class JaxDemonAttack(JaxEnvironment[DemonAttackState, DemonAttackObservation, De
             current_offset + step_to_apply,
             current_offset,
         )
-        # --- end (b) ---
 
         should_use_tracking_projectiles = state.wave_number >= self.consts.TRACKING_PROJECTILES_START_WAVE
 
@@ -1984,9 +1974,7 @@ class JaxDemonAttack(JaxEnvironment[DemonAttackState, DemonAttackObservation, De
         bomb_x = jnp.where(bomb_active, moved_x, state.bomb_x)
         bomb_y = jnp.where(bomb_active, moved_y, state.bomb_y)
 
-        # ============================================================
-        # BURST SCHEDULING
-        # ============================================================
+        # burst scheduling
         burst_in_progress = state.bomb_burst_length > 0
         scheduler_idle = jnp.logical_and(
             jnp.logical_not(burst_in_progress),
@@ -2070,7 +2058,7 @@ class JaxDemonAttack(JaxEnvironment[DemonAttackState, DemonAttackObservation, De
             slot_ids < active_burst_length, bomb_column_active
         )
 
-        # --- ROW SPAWN POSITION + REAL-TIME ROOM CHECK (jitter-fall only) ---
+        # ROW SPAWN POSITION + REAL-TIME ROOM CHECK (jitter-fall only)
         row_index = safe_burst_step
         is_first_row = row_index == 0
         prev_row_mask = jnp.logical_and(
@@ -2085,7 +2073,6 @@ class JaxDemonAttack(JaxEnvironment[DemonAttackState, DemonAttackObservation, De
             is_first_row,
             candidate_fired_y_jitter >= source_y + source_height,
         )
-        # --- end ROW SPAWN POSITION / ROOM CHECK ---
 
         decision_due = jnp.logical_and(
             burst_in_progress,
@@ -2098,7 +2085,7 @@ class JaxDemonAttack(JaxEnvironment[DemonAttackState, DemonAttackObservation, De
             ),
         )
 
-        # --- EMPTY-ROW SKIP MECHANISM ---
+        # EMPTY-ROW SKIP MECHANISM
         # At most one empty row per burst, never first/last.
         empty_row_probability = jnp.asarray(
             self.consts.BOMB_TYPE_EMPTY_ROW_PROBABILITY, dtype=jnp.float32
@@ -2112,15 +2099,13 @@ class JaxDemonAttack(JaxEnvironment[DemonAttackState, DemonAttackObservation, De
             ),
         )
         row_gap_pending = jnp.logical_or(row_gap_pending, skip_this_row)
-        # --- end EMPTY-ROW SKIP MECHANISM ---
 
-        # --- INTER-ROW TIMING — continuous-fall types only ---
+        # INTER-ROW TIMING — continuous-fall types only
         segment_advance_frames = jnp.maximum(
             -(-(unit_length * self.consts.BOMB_SIZE[0]) // jnp.maximum(bomb_speed, 1))
             - 1,
             0,
         )
-        # --- end INTER-ROW TIMING ---
 
         fire_rate_now = jnp.logical_and(decision_due, jnp.logical_not(skip_this_row))
         burst_used_skip = jnp.logical_or(burst_used_skip, skip_this_row)
@@ -2460,8 +2445,7 @@ class JaxDemonAttack(JaxEnvironment[DemonAttackState, DemonAttackObservation, De
             jnp.zeros_like(state.bomb_active),
             state.bomb_active,
         )
-        # MAX_BOMBS as sentinel — see note in _bomb_step's release_source
-        # handling; guaranteed past the end of any type's rate range.
+        # MAX_BOMBS is guaranteed past the end of any type's rate range.
         bomb_burst_step = jnp.where(
             any_player_hit,
             self.consts.MAX_BOMBS,
