@@ -2,7 +2,6 @@ import os
 from functools import partial
 from typing import Tuple
 
-import numpy as np
 import chex
 import jax.lax
 import jax.numpy as jnp
