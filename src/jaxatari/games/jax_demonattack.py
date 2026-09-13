@@ -1948,24 +1948,18 @@ class JaxDemonAttack(JaxEnvironment[DemonAttackState, DemonAttackObservation, De
         )
 
         should_use_tracking_projectiles = state.wave_number >= self.consts.TRACKING_PROJECTILES_START_WAVE
+        base_x = _calc_burst_base_x(state.bomb_source_idx, state)
+        tracked_x = base_x + self._bomb_x_offsets_for_type(state.bomb_type)
+        source_still_ready = ready_demons[state.bomb_source_idx]
 
-        def use_tracking_bombs(s):
-            _base_x = _calc_burst_base_x(s.bomb_source_idx, s)
-            bomb_type = s.bomb_type
-            tracked_x = _base_x + self._bomb_x_offsets_for_type(bomb_type)
-            source_still_ready = ready_demons[s.bomb_source_idx]
-            return jnp.where(source_still_ready, tracked_x, s.bomb_x)
+        # Random-walk types need a clean base (bomb_spawn_x) to keep them
+        # within the max offset from spawn
+        clean_base_x = jnp.where(uses_random_walk_jitter, state.bomb_spawn_x, state.bomb_x)
 
-        def use_normal_bombs(s):
-            # Random-walk types need a clean base (bomb_spawn_x) to keep them
-            # within the max offset from spawn
-            return jnp.where(uses_random_walk_jitter, s.bomb_spawn_x, s.bomb_x)
-
-        x_before_jitter = jax.lax.cond(
-            should_use_tracking_projectiles,
-            use_tracking_bombs,
-            use_normal_bombs,
-            operand=state,
+        x_before_jitter = jnp.where(
+            jnp.logical_and(should_use_tracking_projectiles, source_still_ready),
+            tracked_x,
+            clean_base_x,
         )
 
         jitter_x = jnp.where(uses_random_walk_jitter, bomb_jitter_offset, table_jitter_x)
