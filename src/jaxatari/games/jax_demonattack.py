@@ -2158,7 +2158,7 @@ class JaxDemonAttack(JaxEnvironment[DemonAttackState, DemonAttackObservation, De
                 # doubling its visible gap; jitter-fall skips need no timer.
                 jnp.logical_and(skip_this_row, uses_continuous_fall),
                 segment_advance_frames,
-                jnp.where(uses_continuous_fall, jnp.maximum(burst_timer - 1, 0), 0),
+                jnp.maximum(burst_timer - 1, 0),
             ),
         )
         source_lost = jnp.logical_and(active_burst_length > 0, jnp.logical_not(source_ready))
