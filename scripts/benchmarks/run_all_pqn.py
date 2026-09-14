@@ -22,13 +22,13 @@ ATARI_ENVS = [
 ]
 
 # Setting to control how often to rerun an exp (with different seeds)
-N_SEEDS = 1 
+N_SEEDS = 5 
 # Setting to control maximum concurrent processes per GPU
 WORKERS_PER_GPU = 1 # we already run three seeds per GPU/Env
 
 CONFIGS = [
-    "pqn_short_eval_run_object",
-    "pqn_short_eval_run_pixel",
+    "pqn_jaxatari_pixel_repr",
+    "pqn_jaxatari_object_repr",
 ]
 
 def worker(gpu_id: str, worker_id: int, task_queue: queue.Queue, extra_args: list):

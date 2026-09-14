@@ -1,4 +1,4 @@
-EXP_NAME: ppo
+EXP_NAME: ppo_montezumachange
 TRACK: True
 CAPTURE_VIDEO: True
 
@@ -6,8 +6,8 @@ EVAL_DURING_TRAIN: False
 EVAL_EVERY: 1000
 
 PIXEL_BASED: True
-NATIVE_DOWNSCALING: True
-SMOOTH_IMAGE: True #0.6 gaussian blur to mimic natural blurring from bilinear downscaling
+NATIVE_DOWNSCALING: False
+SMOOTH_IMAGE: False #0.7 gaussian blur to mimic natural blurring from bilinear downscaling
 
 SAVE_MODEL: True
 UPLOAD_MODEL: False
