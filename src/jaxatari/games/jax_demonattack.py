@@ -2,7 +2,6 @@ import os
 from functools import partial
 from typing import Tuple
 
-import numpy as np
 import chex
 import jax.lax
 import jax.numpy as jnp
@@ -213,7 +212,7 @@ def _bomb_visible_repeat_window(state, consts, bomb_type):
 class DemonAttackConstants(AutoDerivedConstants):
     # Static Configuration
     WIDTH: int = struct.field(pytree_node=False, default=160)
-    HEIGHT: int = struct.field(pytree_node=False, default=192)
+    HEIGHT: int = struct.field(pytree_node=False, default=210)
     PLAYER_SPEED: int = struct.field(pytree_node=False, default=1)
     MAX_DEMONS: int = struct.field(pytree_node=False, default=3) # visible formation
     DEMON_SLOTS: int = struct.field(pytree_node=False, default=4) # keeps extra bottom split demon slot
@@ -285,7 +284,6 @@ class DemonAttackConstants(AutoDerivedConstants):
     SPLIT_DEMONS_START_WAVE: int = struct.field(pytree_node=False, default=4) # starting in this wave, demons split after a hit and refill bottom and respawn on top
     TRACKING_PROJECTILES_START_WAVE: int = struct.field(pytree_node=False, default=8) # starting in this wave, the demons begin using projectiles that follow the demon
 
-    DIVE_TRIGGER_MASK: int = struct.field(pytree_node=False, default=63)  # controls trigger frequency (trigger policy detail)
     DIVE_SEGMENT_DURATION: int = struct.field(pytree_node=False, default=50)  # frames per V segment
     DIVE_WAVE_UP_DURATION: int = struct.field(pytree_node=False, default=20) # how many frames of the segment are for the upward motion (the rest is downward)
     DIVE_WAVE_AMPLITUDE_PIXELS: int = struct.field(pytree_node=False, default=18)
@@ -412,9 +410,6 @@ class DemonAttackConstants(AutoDerivedConstants):
     DEMON_MAX_X: int = struct.field(pytree_node=False, default=None) # right boundary for demons, calculated in compute_derived
     DEMON_MIN_Y: int = struct.field(pytree_node=False, default=20)  # top boundary for demons
     DEMON_MAX_Y: int = struct.field(pytree_node=False, default=135) # bottom boundary for demons
-
-    # Colors
-    SCORE_COLOR: Tuple[int, int, int] = struct.field(pytree_node=False, default=(194, 169, 53))
 
     ASSET_CONFIG: tuple = struct.field(pytree_node=False, default_factory=_get_default_asset_config)
 
@@ -841,10 +836,6 @@ class JaxDemonAttack(JaxEnvironment[DemonAttackState, DemonAttackObservation, De
     def _demon_slot_ids(self) -> chex.Array:
         """Return all state slots, including the detached-demon overflow slot."""
         return jnp.arange(self.consts.DEMON_SLOTS)
-
-    def _formation_slot_ids(self) -> chex.Array:
-        """Return only the three slots that participate in formation logic."""
-        return jnp.arange(self.consts.MAX_DEMONS)
 
     def _shift_bottom_vacancy_to_top(self, state: DemonAttackState) -> DemonAttackState:
         """Shift the formation down and detach its lone bottom split demon."""
@@ -2434,37 +2425,6 @@ class JaxDemonAttack(JaxEnvironment[DemonAttackState, DemonAttackObservation, De
             state.game_over,
             jnp.logical_and(any_player_hit, jnp.logical_not(bunker_available)),
         )
-        bomb_active = jnp.where(
-            any_player_hit,
-            jnp.zeros_like(state.bomb_active),
-            state.bomb_active,
-        )
-        # MAX_BOMBS is guaranteed past the end of any type's rate range.
-        bomb_burst_step = jnp.where(
-            any_player_hit,
-            self.consts.MAX_BOMBS,
-            state.bomb_burst_step,
-        )
-        bomb_burst_used_skip = jnp.where(
-            any_player_hit,
-            jnp.array(False, dtype=jnp.bool_),
-            state.bomb_burst_used_skip,
-        )
-        bomb_burst_row_gap_pending = jnp.where(
-            any_player_hit,
-            jnp.array(False, dtype=jnp.bool_),
-            state.bomb_burst_row_gap_pending,
-        )
-        bomb_burst_length = jnp.where(
-            any_player_hit,
-            0,
-            state.bomb_burst_length,
-        )
-        bomb_burst_timer = jnp.where(
-            any_player_hit,
-            0,
-            state.bomb_burst_timer,
-        )
 
         # If player hit, start explosion
         player_exploding = jnp.logical_or(state.player_exploding, any_player_hit)
@@ -2504,7 +2464,7 @@ class JaxDemonAttack(JaxEnvironment[DemonAttackState, DemonAttackObservation, De
             demon_split_primary_alive=jnp.where(killed, False, demon_split_primary_alive),
             demon_split_secondary_alive=jnp.where(killed, False, demon_split_secondary_alive),
             demon_status=demon_status,
-            demon_mode=jnp.where(killed, BEHAVIOR_NORMAL, state.demon_mode),  # <-- add this
+            demon_mode=jnp.where(killed, BEHAVIOR_NORMAL, state.demon_mode),
             demon_phase=jnp.where(killed, 0, state.demon_phase),
             demon_moving_right=jnp.where(killed, False, state.demon_moving_right),
             demon_moving_down=jnp.where(killed, True, state.demon_moving_down),
@@ -2656,7 +2616,7 @@ class JaxDemonAttack(JaxEnvironment[DemonAttackState, DemonAttackObservation, De
         return spaces.Box(
             low=0,
             high=255,
-            shape=(210, 160, 3),
+            shape=(self.consts.HEIGHT, self.consts.WIDTH, 3),
             dtype=jnp.uint8
         )
 
@@ -2686,7 +2646,7 @@ class DemonAttackRenderer(JAXGameRenderer):
 
         if config is None:
             self.config = render_utils.RendererConfig(
-                game_dimensions=(210, 160),
+                game_dimensions=(self.consts.HEIGHT, self.consts.WIDTH),
                 channels=3,
                 downscale=None
             )
@@ -2751,7 +2711,7 @@ class DemonAttackRenderer(JAXGameRenderer):
 
         # 2. Bake assets
         sprite_path = os.path.join(os.path.dirname(__file__), "sprites", "demonattack")
-        jax.debug.print(f"Using sprites from: {sprite_path}")
+        print(f"Using sprites from: {sprite_path}")
         (
             self.PALETTE,
             self.SHAPE_MASKS,
