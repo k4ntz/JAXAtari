@@ -143,6 +143,7 @@ class TetrisObservation:
     board: chex.Array
     active_piece: ObjectObservation
     next_piece: ObjectObservation
+    blocks: ObjectObservation
     score: chex.Array
     game_over: chex.Array
 
@@ -372,12 +373,13 @@ class JaxTetris(JaxEnvironment[TetrisState, TetrisObservation, TetrisInfo, Tetri
         w = int(c.BOARD_WIDTH)
         grid_size = (h, w)
         
-        single_obj = spaces.get_object_space(n=None, screen_size=grid_size)
+        single_obj = spaces.get_object_space(n=None, screen_size=(210, 160))
         
         return spaces.Dict({
             "board": spaces.Box(low=0, high=1, shape=(h, w), dtype=jnp.int32),
-            "active_piece": single_obj,
+            "active_piece": spaces.get_object_space(n=16, screen_size=(210, 160)),
             "next_piece": single_obj, # Represents type via visual_id
+            "blocks": spaces.get_object_space(n=h * w, screen_size=(210, 160)),
             "score": spaces.Box(low=0, high=999999, shape=(), dtype=jnp.int32),
             "game_over": spaces.Box(low=0, high=1, shape=(), dtype=jnp.int32),
         })
@@ -572,40 +574,70 @@ class JaxTetris(JaxEnvironment[TetrisState, TetrisObservation, TetrisInfo, Tetri
     @partial(jax.jit, static_argnums=(0,))
     def _get_observation(self, state: TetrisState) -> TetrisObservation:
         c = self.consts
-        w, h = int(c.BOARD_WIDTH), int(c.BOARD_HEIGHT)
+        # Cell pitch on screen. The 1 px gap mirrors the cell_padding=(1, 1) that
+        # TetrisRenderer.render passes to render_grid_inverse.
+        cw, ch, pad = int(c.CELL_WIDTH), int(c.CELL_HEIGHT), 1
         
         # --- Active Piece ---
         # Piece position is (row, col) = (y, x) in grid coords
         # Rotation 0..3 -> 0, 90, 180, 270
         rot_deg = (state.rot * 90.0).astype(jnp.float32)
         
+        # One box per cell of the 4x4 tetromino matrix, active where occupied.
+        # A single bounding box cannot tell an S piece from a Z or an L: their
+        # bounding boxes are identical, only the silhouette differs.
+        grid4 = self.piece_grid(state.piece_type, state.rot)
+        cell_rows, cell_cols = jnp.meshgrid(jnp.arange(4), jnp.arange(4), indexing="ij")
+        # Empty matrix rows/columns may legally stick out of the board (state.pos[1]
+        # reaches -1); occupied cells never do, so the clamp is a no-op where it counts.
+        piece_rows = jnp.clip(state.pos[0] + cell_rows.ravel(), 0, int(c.BOARD_HEIGHT) - 1)
+        piece_cols = jnp.clip(state.pos[1] + cell_cols.ravel(), 0, int(c.BOARD_WIDTH) - 1)
+
+        # Grid cell -> screen pixel, the same mapping render_grid_inverse uses.
         active_piece = ObjectObservation.create(
-            x=jnp.clip(state.pos[1], 0, w), # pos[1] is x/col
-            y=jnp.clip(state.pos[0], 0, h), # pos[0] is y/row
-            width=jnp.array(4, dtype=jnp.int32), # All pieces are 4x4 grids
-            height=jnp.array(4, dtype=jnp.int32),
-            active=jnp.array(1, dtype=jnp.int32),
-            visual_id=state.piece_type, # Type determines color/shape
-            orientation=jnp.array(rot_deg, dtype=jnp.float32)
+            x=(c.BOARD_X + c.BOARD_PADDING + piece_cols * (cw + pad)).astype(jnp.int32),
+            y=(c.BOARD_Y + piece_rows * (ch + pad)).astype(jnp.int32),
+            width=jnp.full((16,), cw, dtype=jnp.int32),
+            height=jnp.full((16,), ch, dtype=jnp.int32),
+            active=grid4.ravel().astype(jnp.int32),
+            visual_id=jnp.broadcast_to(state.piece_type, (16,)).astype(jnp.int32),
+            orientation=jnp.broadcast_to(rot_deg, (16,)).astype(jnp.float32)
         )
 
         # --- Next Piece ---
         # Not on board, so position 0,0 inactive or just metadata?
         # Standardize as an object with valid ID but perhaps off-board coordinates 
         # or just visually distinct. Let's keep it 'active' for metadata access.
+        # The renderer draws no next-piece preview, so there is no screen object here.
+        # Reported as inactive with a zero box; the type stays readable via visual_id.
         next_piece = ObjectObservation.create(
             x=jnp.array(0, dtype=jnp.int32),
             y=jnp.array(0, dtype=jnp.int32),
-            width=jnp.array(4, dtype=jnp.int32),
-            height=jnp.array(4, dtype=jnp.int32),
-            active=jnp.array(1, dtype=jnp.int32),
+            width=jnp.array(0, dtype=jnp.int32),
+            height=jnp.array(0, dtype=jnp.int32),
+            active=jnp.array(0, dtype=jnp.int32),
             visual_id=state.next_piece
+        )
+
+        # One box per board cell. The geometry is constant and folded away at trace
+        # time; only the occupancy flag changes per step.
+        bh, bw = int(c.BOARD_HEIGHT), int(c.BOARD_WIDTH)
+        cell_rows, cell_cols = jnp.meshgrid(jnp.arange(bh), jnp.arange(bw), indexing="ij")
+        blocks = ObjectObservation.create(
+            x=(c.BOARD_X + c.BOARD_PADDING + cell_cols.ravel() * (cw + pad)).astype(jnp.int32),
+            y=(c.BOARD_Y + cell_rows.ravel() * (ch + pad)).astype(jnp.int32),
+            width=jnp.full((bh * bw,), cw, dtype=jnp.int32),
+            height=jnp.full((bh * bw,), ch, dtype=jnp.int32),
+            active=(state.board.reshape(-1) != 0).astype(jnp.int32),
+            # The renderer colours a locked cell by its row index counted from the bottom.
+            visual_id=(bh - cell_rows.ravel()).astype(jnp.int32)
         )
 
         return TetrisObservation(
             board=state.board,
             active_piece=active_piece,
             next_piece=next_piece,
+            blocks=blocks,
             score=state.score,
             game_over=state.game_over.astype(jnp.int32)
         )
