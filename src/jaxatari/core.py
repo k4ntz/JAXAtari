@@ -59,7 +59,6 @@ GAME_MODULES = {
     "lasergates": "jaxatari.games.jax_lasergates",
     "namethisgame": "jaxatari.games.jax_namethisgame",
     "phoenix": "jaxatari.games.jax_phoenix",
-    "pitfall": "jaxatari.games.jax_pitfall",
     "pong": "jaxatari.games.jax_pong",
     "qbert": "jaxatari.games.jax_qbert",
     "riverraid": "jaxatari.games.jax_riverraid",
@@ -117,7 +116,6 @@ MOD_MODULES = {
     "alien": "jaxatari.games.mods.alien_mods.AlienEnvMod",
     "asteroids": "jaxatari.games.mods.asteroids_mods.AsteroidsEnvMod",
     "pacman": "jaxatari.games.mods.pacman_mods.PacmanEnvMod",
-    "pitfall": "jaxatari.games.mods.pitfall_mods.PitfallEnvMod",
 }
 
 

@@ -53,7 +53,7 @@ Total:  🥇: 1   |   🥈: 2   |   🥉: 0   |   ❌: 2
 | ms_pacman                    | 🥈       | 13 |
 | name_this_game               | 🥈       | 0 |
 | phoenix                      | 🥇       | 11 |
-| pitfall                      | 🥈       | 3 |
+| pitfall                      | ❌       | 0 |
 | pong                         | 🥇       | 10 |
 | private_eye                  | ❌       | 0 |
 | qbert                        | 🥈       | 16 |
