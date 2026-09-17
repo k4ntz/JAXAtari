@@ -1,12 +1,6 @@
 """
 Project: JAXAtari VideoPinball
-Description: Our team's JAX implementation of Video Pinball.
-
-Authors:
-    - Michael Olenberger <michael.olenberger@stud.tu-darmstadt.de>
-    - Maximilian Roth <maximilian.roth@stud.tu-darmstadt.de>
-    - Jonas Neumann <jonas.neumann@stud.tu-darmstadt.de>
-    - Yuddhish Chooah <yuddhish.chooah@stud.tu-darmstadt.de>
+Description: JAX implementation of Video Pinball for JAXAtari.
 
 """
 
@@ -18,7 +12,6 @@ import jax.lax
 import jax.numpy as jnp
 import jax.random as jrandom
 import chex
-import pygame
 import numpy as np
 
 from jaxatari.renderers import JAXGameRenderer
@@ -136,30 +129,9 @@ def _get_default_asset_config() -> tuple:
     
     return tuple(config_list)
 
-# Monkey-patch ASSET_CONFIG into VideoPinballConstants
+# Monkey-patch ASSET_CONFIG into Vide        displayed_lives = jnp.clip(state.lives_lost, max=3)PinballConstants
 # This is done here to avoid circular imports since VideoPinballConstants is in a separate file
 VideoPinballConstants.ASSET_CONFIG = _get_default_asset_config()
-
-def get_human_action() -> chex.Array:
-    """
-    Records any relevant button is being pressed and returns the corresponding action.
-
-    Returns:
-        action: int, action taken by the player (LEFT, RIGHT, FIRE, LEFTFIRE, RIGHTFIRE, NOOP).
-    """
-    keys = pygame.key.get_pressed()
-    if keys[pygame.K_LEFT]:
-        return jnp.array(Action.LEFT)
-    elif keys[pygame.K_RIGHT]:
-        return jnp.array(Action.RIGHT)
-    elif keys[pygame.K_SPACE]:
-        return jnp.array(Action.FIRE)
-    elif keys[pygame.K_UP]:
-        return jnp.array(Action.UP)
-    elif keys[pygame.K_DOWN]:
-        return jnp.array(Action.DOWN)
-    else:
-        return jnp.array(Action.NOOP)
 
 
 class JaxVideoPinball(
@@ -4136,7 +4108,7 @@ class VideoPinballRenderer(JAXGameRenderer):
     @partial(jax.jit, static_argnums=(0,))
     def _render_hud(self, state, raster):
         # Ball count (digit 0-3)
-        displayed_lives = jnp.clip(state.lives_lost, a_max=3)
+        displayed_lives = jnp.clip(state.lives_lost, max=3)
         ball_count_mask = self.SCORE_DIGITS[displayed_lives]
         raster = self.jr.render_at(raster, 36, 3, ball_count_mask)
         

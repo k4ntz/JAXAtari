@@ -24,7 +24,7 @@ def _warn_deprecated_obs_to_flat_array(env: JaxEnvironment) -> None:
 
 
 
-# Map of game names to their module paths
+# Map of game names to their module paths (commented out games are WIP and will be supported in the near future)
 GAME_MODULES = {
     "amidar": "jaxatari.games.jax_amidar",
     "airraid": "jaxatari.games.jax_airraid",
@@ -33,17 +33,23 @@ GAME_MODULES = {
     "asteroids": "jaxatari.games.jax_asteroids",
     "atlantis": "jaxatari.games.jax_atlantis",
     "bankheist": "jaxatari.games.jax_bankheist",
+    "beamrider": "jaxatari.games.jax_beamrider",
     "berzerk": "jaxatari.games.jax_berzerk",
     "blackjack": "jaxatari.games.jax_blackjack",
     "breakout": "jaxatari.games.jax_breakout",
+    "casinoblackjack": "jaxatari.games.jax_casino_blackjack",
+    "casinofivestudpoker": "jaxatari.games.jax_casino_five_stud_poker",
+    "casinopokersolitaire": "jaxatari.games.jax_casino_poker_solitaire",
     "centipede": "jaxatari.games.jax_centipede",
     "choppercommand": "jaxatari.games.jax_choppercommand",
+    "donkeykong": "jaxatari.games.jax_donkeykong",
     "enduro": "jaxatari.games.jax_enduro",
     "fishingderby": "jaxatari.games.jax_fishingderby",
     "flagcapture": "jaxatari.games.jax_flagcapture",
     "freeway": "jaxatari.games.jax_freeway",
     "frostbite": "jaxatari.games.jax_frostbite",
     "galaxian": "jaxatari.games.jax_galaxian",
+    "gravitar": "jaxatari.games.jax_gravitar",
     "hangman": "jaxatari.games.jax_hangman",
     "hauntedhouse": "jaxatari.games.jax_hauntedhouse",
     "humancannonball": "jaxatari.games.jax_humancannonball",
@@ -54,6 +60,7 @@ GAME_MODULES = {
     "namethisgame": "jaxatari.games.jax_namethisgame",
     "phoenix": "jaxatari.games.jax_phoenix",
     "pong": "jaxatari.games.jax_pong",
+    "qbert": "jaxatari.games.jax_qbert",
     "riverraid": "jaxatari.games.jax_riverraid",
     "seaquest": "jaxatari.games.jax_seaquest",
     "sirlancelot": "jaxatari.games.jax_sirlancelot",
@@ -61,7 +68,7 @@ GAME_MODULES = {
     "slotmachine": "jaxatari.games.jax_slotmachine",
     "spaceinvaders": "jaxatari.games.jax_spaceinvaders",
     "spacewar": "jaxatari.games.jax_spacewar",
-    # "surround": "jaxatari.games.jax_surround", currently not in a state that can be used
+    "surround": "jaxatari.games.jax_surround",
     "tennis": "jaxatari.games.jax_tennis",
     "tetris": "jaxatari.games.jax_tetris",
     "timepilot": "jaxatari.games.jax_timepilot",
@@ -72,7 +79,15 @@ GAME_MODULES = {
     "videocube": "jaxatari.games.jax_videocube",
     "videopinball": "jaxatari.games.jax_videopinball",
     "wordzapper": "jaxatari.games.jax_wordzapper",
+    "mspacman": "jaxatari.games.jax_mspacman",
+    "montezumarevenge": "jaxatari.games.jax_montezumarevenge",
+    "pacman": "jaxatari.games.jax_pacman",
     # Add new games here
+}
+
+# ALE / Gymnasium names that differ from the JAXAtari registry key.
+GAME_ALIASES = {
+    "trondead": "tron",
 }
 
 # Mod modules registry: for each game, provide the Controller class path
@@ -86,6 +101,21 @@ MOD_MODULES = {
     'tennis': "jaxatari.games.mods.tennis_mods.TennisEnvMod",
     "fishingderby": "jaxatari.games.mods.fishingderby_mods.FishingDerbyEnvMod",
     "atlantis": "jaxatari.games.mods.atlantis_mods.AtlantisEnvMod",
+    "bankheist": "jaxatari.games.mods.bankheist_mods.BankHeistEnvMod",
+    "montezumarevenge": "jaxatari.games.mods.montezuma_revenge_mods.MontezumaRevengeEnvMod",
+    "frostbite": "jaxatari.games.mods.frostbite_mods.FrostbiteEnvMod",
+    "gravitar": "jaxatari.games.mods.gravitar_mods.GravitarEnvMod",
+    "phoenix": "jaxatari.games.mods.phoenix_mods.PhoenixEnvMod",
+    "enduro": "jaxatari.games.mods.enduro_mods.EnduroEnvMod",
+    "qbert": "jaxatari.games.mods.qbert_mods.QbertEnvMod",
+    "mspacman": "jaxatari.games.mods.mspacman_mods.MsPacmanEnvMod",
+    "beamrider": "jaxatari.games.mods.beamrider_mods.BeamRiderEnvMod",
+    "venture": "jaxatari.games.mods.venture_mods.VentureEnvMod",
+    "spaceinvaders": "jaxatari.games.mods.spaceinvaders_mods.SpaceInvadersEnvMod",
+    "skiing": "jaxatari.games.mods.skiing_mods.SkiingEnvMod",
+    "alien": "jaxatari.games.mods.alien_mods.AlienEnvMod",
+    "asteroids": "jaxatari.games.mods.asteroids_mods.AsteroidsEnvMod",
+    "pacman": "jaxatari.games.mods.pacman_mods.PacmanEnvMod",
 }
 
 
@@ -125,7 +155,12 @@ def make(game_name: str,
     check_ownership()  # Ensure ownership confirmed
 
     if isinstance(game_name, str):
-        game_name = game_name.lower()
+        game_name_clean = game_name.lower().replace("_", "").replace("-", "")
+        game_name_clean = GAME_ALIASES.get(game_name_clean, game_name_clean)
+        for key in GAME_MODULES:
+            if key.lower().replace("_", "").replace("-", "") == game_name_clean:
+                game_name = key
+                break
 
     if mods_config is not None:
         warnings.warn(
@@ -151,12 +186,10 @@ def make(game_name: str,
         if env_class is None:
             raise ImportError(f"No JaxEnvironment subclass found in {GAME_MODULES[game_name]}")
 
-        # 2. Get default constants
-        base_consts = env_class().consts
-
-        # 3. Handle mods if requested
+        # 2. Mods need default consts for pre-scan; otherwise a single env_class() is enough.
         if mods:
             try:
+                base_consts = env_class().consts
                 env = apply_modifications(
                     game_name=game_name,
                     mods_config=mods,
@@ -175,8 +208,7 @@ def make(game_name: str,
                     UserWarning
                 )
 
-        # No mods: return default base env with default constants
-        env = env_class(consts=base_consts)
+        env = env_class()
         _warn_deprecated_obs_to_flat_array(env)
         return env
 

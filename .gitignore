@@ -9,4 +9,8 @@ results/
 .DS_Store
 docs/build/
 .python-version
+data/oc_parity_corpus/raw/
+data/oc_parity_corpus/reports/
+data/oc_parity_corpus/reports_oracle/
+data/oc_parity_corpus/final_report/
 

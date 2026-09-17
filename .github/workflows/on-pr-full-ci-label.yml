@@ -1,0 +1,57 @@
+name: PR Full CI (Label Trigger)
+
+on:
+  pull_request:
+    types: [labeled]
+  workflow_dispatch:
+    inputs:
+      pr_number:
+        description: "PR number to run full CI for (required for manual runs)"
+        required: true
+        type: string
+
+jobs:
+  prepare-matrix:
+    if: |
+      (github.event_name == 'pull_request' && github.event.label.name == 'full-ci') ||
+      (github.event_name == 'workflow_dispatch')
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.set-matrix.outputs.matrix }}
+      pr_head_sha: ${{ steps.resolve-pr.outputs.pr_head_sha }}
+    steps:
+      - name: Check out code
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Resolve PR head SHA
+        id: resolve-pr
+        run: |
+          if [[ "${{ github.event_name }}" == "pull_request" ]]; then
+            echo "pr_head_sha=${{ github.event.pull_request.head.sha }}" >> "$GITHUB_OUTPUT"
+          else
+            PR_NUMBER="${{ github.event.inputs.pr_number }}"
+            PR_HEAD_SHA=$(gh pr view "$PR_NUMBER" --json headRefOid -q .headRefOid)
+            echo "pr_head_sha=${PR_HEAD_SHA}" >> "$GITHUB_OUTPUT"
+          fi
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+
+      - name: Generate full game matrix
+        id: set-matrix
+        run: |
+          ALL_GAMES=$(ls src/jaxatari/games/jax_*.py | sed -e 's|src/jaxatari/games/jax_||' -e 's|\.py$||' | jq -R . | jq -cs .)
+          echo "matrix=$ALL_GAMES" >> "$GITHUB_OUTPUT"
+        shell: bash
+
+  trigger:
+    needs: prepare-matrix
+    if: needs.prepare-matrix.result == 'success'
+    uses: ./.github/workflows/reusable-run-tests.yml
+    with:
+      game_matrix: ${{ needs.prepare-matrix.outputs.matrix }}
+      pr_head_sha: ${{ needs.prepare-matrix.outputs.pr_head_sha }}
+      pr_overlay_scope: "full_repo"
+      pytest_args: "--slow"

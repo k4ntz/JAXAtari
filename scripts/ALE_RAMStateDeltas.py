@@ -215,6 +215,8 @@ class Renderer:
 
                 action = self._get_action()
                 observation, reward, terminated, truncated, info = self.env.step(action)
+                if reward > 0:
+                    print(f"Reward: {reward}")
                 # Get the new frame data *after* stepping
                 self.current_frame = self.env.render()
 
@@ -270,7 +272,6 @@ class Renderer:
 
     def _get_action(self):
         pressed_keys = tuple(sorted(list(self.current_keys_down)))
-        print(f"Pressed keys: {[pygame.key.name(k) for k in pressed_keys]}")
         action = self.keys2actions.get(pressed_keys, 0)
         if self.env.action_space.contains(action):
             return action

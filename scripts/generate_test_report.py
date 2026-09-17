@@ -31,8 +31,8 @@ def main():
         )
 
     # Framework Tests Info
-    test_outcomes_str = os.environ.get("TEST_OUTCOMES", "{}")
-    test_outcomes = json.loads(test_outcomes_str)
+    test_outcomes_str = os.environ.get("TEST_OUTCOMES") or "{}"
+    test_outcomes = json.loads(test_outcomes_str) or {}
     tests_success = all(outcome == "success" for outcome in test_outcomes.values())
     test_results = {
         game: outcome == "success" for game, outcome in test_outcomes.items()

@@ -1,76 +1,59 @@
 .. JAXAtari documentation master file
 
-Welcome to JAXAtari's Documentation!
+JAXAtari
 =====================================
 
-**JAXAtari** is a GPU-accelerated, object-centric Atari environment framework built with `JAX <https://github.com/google/jax>`_.  
-Inspired by OCAtari, it enables massively parallelized training for reinforcement learning research.
+JAXAtari is a GPU-accelerated, object-centric Atari environment framework built on `JAX <https://github.com/google/jax>`_, designed for fast and scalable reinforcement learning research. 
+It reimplements classic Atari 2600 games natively in JAX, enabling up to 16,000x faster training speeds through just-in-time (JIT) compilation and massive GPU parallelization,and separates the details of game simulation from agent design.
+Users can interact with environments through a flexible wrapper system supporting pixel, object-centric, and combined observations. JAXAtari extends the lineage of OCAtari and HackAtari by providing structured, object-level state representations alongside support for parameterized game modifications to test agent generalization. If you use JAXAtari in your research, we ask that you please cite the paper.
 
-Built and maintained by students from `TU Darmstadt <https://www.ml.informatik.tu-darmstadt.de/>`_.
+.. code-block:: python
 
-.. note::
-   If you're looking for a quick start, head to the usage section below or browse the API reference.
+   import jax
+   import jaxatari
+   from jaxatari.wrappers import AtariWrapper, ObjectCentricWrapper, LogWrapper
 
-----
+   # Create an environment
+   env = jaxatari.make("pong")
 
-Features
---------
+   # Apply wrappers for object-centric observations and logging
+   env = LogWrapper(ObjectCentricWrapper(AtariWrapper(env)))
 
-- Object-centric extraction of Atari game states.
-- JAX-based vectorized execution with GPU support.
-- Compatible API with ALE (Arcade Learning Environment).
-- Built-in benchmarking tools.
-- Modular wrappers and utilities.
+   # Initialize the environment
+   rng = jax.random.PRNGKey(42)
+   obs, state = env.reset(rng)
 
-----
+   for _ in range(1000):
+      rng, rng_act = jax.random.split(rng)
+
+      # This is where you would insert your policy
+      action = jax.random.randint(rng_act, (), 0, env.action_space().n)
+
+      # Step through the environment
+      # receiving the next observation, reward, done flag and info
+      obs, state, reward, done, info = env.step(state, action)
+
+      # If the episode has ended, reset to start a new one
+      if done:
+         obs, state = env.reset(rng)
 
 
-Getting Started
----------------
+.. toctree::
+   :maxdepth: 1
+   :caption: Introduction
+   :hidden:
 
-
-You can install and use JAXAtari as follows:
-
-.. code-block:: bash
-
-   python3 -m venv .venv
-   source .venv/bin/activate
-   pip install -e .
-
-To run a game manually:
-
-.. code-block:: bash
-
-   python -m jaxatari.games.jax_seaquest
-
-----
+   introduction/installation
+   introduction/usage
+   introduction/environment
+   introduction/Environments/index
 
 .. toctree::
    :maxdepth: 2
    :caption: API
    :hidden:
 
-   api/environment
    api/core
    api/wrappers
    api/spaces
    api/rendering
-   api/games/index
-
-.. toctree::
-   :maxdepth: 2
-   :caption: Scripts
-   :hidden:
-
-   scripts/RAMStateDeltas
-   scripts/FrameExtractor
-   scripts/spriteEditor
-
-.. toctree::
-   :maxdepth: 1
-   :caption: Tests & Benchmarks
-   :hidden:
-
-   tests/benchmarks
-
-

@@ -304,8 +304,13 @@ class JaxAsterix(JaxEnvironment[AsterixState, AsterixObservation, AsterixInfo, A
         return self._get_observation(state), state
 
     @partial(jax.jit, static_argnums=(0,))
-    def step(self, state: AsterixState, action: int) -> tuple[
+    def step(self, state: AsterixState, action: chex.Array) -> tuple[
         AsterixObservation, AsterixState, float, bool, AsterixInfo]:
+
+        # ``action`` is a Discrete(9) index into ACTION_SET / the move tables below.
+        # Do not ``take(ACTION_SET, action)`` before indexing: ACTION_SET stores Atari
+        # action ids (0,2,3,…), while dx/dy tables are ordered by the 0..8 index.
+        action = action.astype(jnp.int32)
         
         player_height = self.consts.player_height
         cooldown_frames = self.consts.cooldown_frames
@@ -317,6 +322,8 @@ class JaxAsterix(JaxEnvironment[AsterixState, AsterixObservation, AsterixInfo, A
         stage_diffs = jnp.abs(stage_borders - state.player_y)
         current_stage = jnp.argmin(stage_diffs)
 
+        # Index order matches ACTION_SET: NOOP, UP, RIGHT, LEFT, DOWN,
+        # UPRIGHT, UPLEFT, DOWNRIGHT, DOWNLEFT.
         dx_table = jnp.array([0, 0, 1, -1, 0, 1, -1, 1, -1], dtype=jnp.int32)
         dy_table = jnp.array([0, -1, 0, 0, 1, -1, -1, 1, 1], dtype=jnp.int32)
         dx = dx_table[action]
@@ -737,16 +744,6 @@ class JaxAsterix(JaxEnvironment[AsterixState, AsterixObservation, AsterixInfo, A
 
     def action_space(self) -> spaces.Discrete:
         """Returns the action space for Asterix.
-        Actions are:
-        0: NOOP
-        1: UP
-        2: RIGHT
-        3: LEFT
-        4: DOWN
-        5: UPRIGHT
-        6: UPLEFT
-        7: DOWNRIGHT
-        8: DOWNLEFT
         """
         return spaces.Discrete(len(self.ACTION_SET))
 

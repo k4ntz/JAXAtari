@@ -32,7 +32,7 @@ jobs:
       forbidden_changes: ${{ steps.check_files.outputs.forbidden_changes }}
     steps:
       - name: Check out code
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
           ref: ${{ github.event.pull_request.base.sha }}
           fetch-depth: 0
@@ -65,7 +65,7 @@ jobs:
       pr_head_sha: ${{ github.event.pull_request.head.sha }}
     steps:
       - name: Check out code
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
           ref: ${{ github.event.pull_request.base.sha }}
           fetch-depth: 0 # Needed for git diff
@@ -100,19 +100,19 @@ jobs:
     if: always() && (github.event.pull_request.head.repo.full_name != github.repository)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
         with:
           ref: ${{ github.event.pull_request.base.ref }}
           fetch-depth: 0
 
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           pattern: pytest-report-*
           merge-multiple: true
           path: reports
 
       - name: Set up Python
-        uses: actions/setup-python@v4
+        uses: actions/setup-python@v6
         with:
           python-version: "3.10"
 
@@ -134,7 +134,7 @@ jobs:
         shell: bash
 
       - name: Collapse previous CI comments
-        uses: actions/github-script@v7
+        uses: actions/github-script@v8
         with:
           script: |
             const {owner, repo} = context.repo;
@@ -166,7 +166,7 @@ jobs:
             }
 
       - name: Create new PR comment
-        uses: peter-evans/create-or-update-comment@v4
+        uses: peter-evans/create-or-update-comment@v5
         with:
           issue-number: ${{ github.event.pull_request.number }}
           body-path: ./ci-report.md

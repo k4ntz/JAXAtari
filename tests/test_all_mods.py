@@ -12,16 +12,40 @@ This test module:
 """
 
 import inspect
+import warnings
 import pytest
 import jax
 import jax.numpy as jnp
+from functools import partial
 from dataclasses import is_dataclass as dc_is_dataclass, fields
 from typing import Dict, List, Any
 
-from jaxatari.core import make, MOD_MODULES, GAME_MODULES
-from jaxatari.modification import JaxAtariInternalModPlugin, JaxAtariPostStepModPlugin, _load_from_string
+from jaxatari.core import make as _core_make, MOD_MODULES, GAME_MODULES
+from jaxatari.modification import (
+    JaxAtariInternalModPlugin,
+    JaxAtariPostStepModPlugin,
+    _load_from_string,
+    apply_native_downscaling,
+)
 from jaxatari.wrappers import AtariWrapper, PixelObsWrapper
-from conftest import parse_game_list
+from conftest import parse_game_list, skip_unless_game_selected, normalize_game_name
+
+
+def make(*args, **kwargs):
+    """Construct a game env after dropping JIT caches.
+
+    Env/wrapper `step`/`reset` are class-level jits with static `self`. Reusing a
+    compile from a prior instance retraces a huge renderer and can hang.
+    """
+    jax.clear_caches()
+    return _core_make(*args, **kwargs)
+
+
+@pytest.fixture(autouse=True)
+def _drop_jit_cache_between_mod_tests():
+    """Keep session-scoped raw_env compiles from colliding with make() instances."""
+    yield
+    jax.clear_caches()
 
 
 def get_base_env(env) -> Any:
@@ -33,6 +57,36 @@ def get_base_env(env) -> Any:
     while hasattr(env, "_env"):
         env = env._env
     return env
+
+
+def assert_mod_reward_contract(env, state, mod_key: str, stage: str) -> None:
+    """
+    Assert that _get_reward follows the mod-pipeline contract:
+    _get_reward(previous_state, state) -> scalar reward.
+
+    This catches interface mismatches early and reports a precise failure reason.
+    """
+    # Unwrap wrapper state containers (e.g., PixelState -> AtariState -> env_state).
+    core_state = state
+    while hasattr(core_state, "env_state") or hasattr(core_state, "atari_state"):
+        if hasattr(core_state, "env_state"):
+            core_state = core_state.env_state
+        elif hasattr(core_state, "atari_state"):
+            core_state = core_state.atari_state
+
+    try:
+        reward = env._get_reward(core_state, core_state)
+        _ = float(reward)
+    except Exception as e:
+        signature = inspect.signature(env._get_reward)
+        pytest.fail(
+            f"Reward contract mismatch during {stage} for mod '{mod_key}'. "
+            f"Expected _get_reward(previous_state, state) to accept full state objects and "
+            f"return a scalar reward. Current signature: {signature}. "
+            f"Likely scenario: this environment's reward function still expects score tensors "
+            f"(or another non-state input), which breaks the mod post-step pipeline. "
+            f"Original error: {e}"
+        )
 
 
 def get_all_mods_for_game(game_name: str) -> Dict[str, List[str]]:
@@ -174,7 +228,8 @@ def raw_env_available(raw_env):
     Use this for tests that call make(game_name, ...) so we only run for available games.
     """
     game_name = raw_env.__class__.__module__.split(".")[-1].replace("jax_", "")
-    if game_name not in GAME_MODULES:
+    registered = {normalize_game_name(name) for name in GAME_MODULES}
+    if normalize_game_name(game_name) not in registered:
         pytest.skip(f"Game '{game_name}' is not in core.GAME_MODULES")
     return raw_env
 
@@ -185,9 +240,11 @@ class TestModExecution:
     run 10 steps and assert no crash.
     """
 
-    def test_mod_runs_reset_and_10_steps(self, mod_game_name: str, mod_key: str, mod_type: str):
+    @pytest.mark.smoke
+    def test_mod_runs_reset_and_steps(self, mod_game_name: str, mod_key: str, mod_type: str):
         """
-        Create env with the given mod, run reset then 10 steps; assert no errors.
+        Create env with the given mod, run reset then a few steps, and check mod tracking.
+        Native-downscaling coverage for every mod lives behind --slow.
         """
         if mod_game_name not in MOD_MODULES:
             pytest.skip(f"Game '{mod_game_name}' does not have mods registered")
@@ -210,9 +267,9 @@ class TestModExecution:
 
         assert obs is not None, f"reset() returned None observation with mod '{mod_key}'"
         assert state is not None, f"reset() returned None state with mod '{mod_key}'"
+        assert_mod_reward_contract(env, state, mod_key, stage="mod execution test")
 
-        num_steps = 10
-        for i in range(num_steps):
+        for i in range(3):
             try:
                 action = env.action_space().sample(key)
                 key, subkey = jax.random.split(key)
@@ -231,23 +288,7 @@ class TestModExecution:
                 f"step() returned non-finite reward at step {i} with mod '{mod_key}': {reward}"
             )
 
-    def test_mod_tracking_variables_filled(self, mod_game_name: str, mod_key: str, mod_type: str):
-        """
-        After applying a mod, the base env must have _mod_history and _patched_renderer_methods
-        correctly set (structure exists; for internal mods that change something, at least one
-        category or patched method list is non-empty).
-        """
-        if mod_game_name not in MOD_MODULES:
-            pytest.skip(f"Game '{mod_game_name}' does not have mods registered")
-
-        allow_conflicts = mod_type == "modpack"
-        env = make(
-            game_name=mod_game_name,
-            mods=[mod_key],
-            allow_conflicts=allow_conflicts,
-        )
         base_env = get_base_env(env)
-
         assert hasattr(base_env, "_mod_history"), (
             f"Base env should have _mod_history when mods are applied (mod '{mod_key}')."
         )
@@ -266,8 +307,6 @@ class TestModExecution:
         patched = base_env._patched_renderer_methods
         assert isinstance(patched, list), "_patched_renderer_methods should be a list"
 
-        # If this mod is an internal mod that patches or overrides something, we expect
-        # at least one trace in _mod_history or _patched_renderer_methods.
         ControllerClass = _load_from_string(MOD_MODULES[mod_game_name])
         registry = ControllerClass.REGISTRY
         if mod_key not in registry or isinstance(registry[mod_key], list):
@@ -393,8 +432,53 @@ class TestModWithWrappers:
     and mod tracking should remain valid.
     """
 
+    @pytest.mark.smoke
+    @pytest.mark.serial
+    def test_representative_mod_native_downscaling(self, mod_game_name: str, isolate_jit_cache):
+        """
+        One native-downscaling check per game in smoke (first individual mod).
+        Per-mod coverage of this path is behind --slow.
+        """
+        if mod_game_name not in MOD_MODULES:
+            pytest.skip(f"Game '{mod_game_name}' does not have mods registered")
+
+        mods_info = get_all_mods_for_game(mod_game_name)
+        if not mods_info["individual"]:
+            pytest.skip(f"Game '{mod_game_name}' has no individual mods")
+
+        DOWNSCALE = (84, 84)
+        mod_key = mods_info["individual"][0]
+        env = make(game_name=mod_game_name, mods=[mod_key], allow_conflicts=False)
+        wrapped = PixelObsWrapper(
+            AtariWrapper(env, noop_max=0, first_fire=False),
+            do_pixel_resize=True,
+            pixel_resize_shape=DOWNSCALE,
+            grayscale=False,
+            use_native_downscaling=True,
+            frame_stack_size=1,
+        )
+
+        key = jax.random.PRNGKey(0)
+        obs, state = wrapped.reset(key)
+        assert obs is not None
+        assert state is not None
+        assert obs.shape[1:3] == DOWNSCALE, (
+            f"Spatial dims {obs.shape[1:3]} != expected {DOWNSCALE} "
+            f"for representative mod '{mod_key}' (game '{mod_game_name}')."
+        )
+        assert_mod_reward_contract(
+            wrapped, state, mod_key, stage="representative native-downscaling test"
+        )
+
+        action = wrapped.action_space().sample(key)
+        obs, state, reward, done, _, info = wrapped.step(state, action)
+        assert obs.shape[1:3] == DOWNSCALE
+        assert jnp.isfinite(float(reward))
+
+    @pytest.mark.slow
+    @pytest.mark.serial
     def test_pixel_native_downscaling_does_not_crash_modded_env(
-        self, mod_game_name: str, mod_key: str, mod_type: str
+        self, mod_game_name: str, mod_key: str, mod_type: str, isolate_jit_cache
     ):
         """
         Wrap a modded env with AtariWrapper + PixelObsWrapper(use_native_downscaling=True),
@@ -411,7 +495,7 @@ class TestModWithWrappers:
             allow_conflicts=allow_conflicts,
         )
         wrapped = PixelObsWrapper(
-            AtariWrapper(env),
+            AtariWrapper(env, noop_max=0, first_fire=False),
             do_pixel_resize=True,
             pixel_resize_shape=(84, 84),
             grayscale=False,
@@ -428,12 +512,13 @@ class TestModWithWrappers:
 
         assert obs is not None
         assert state is not None
+        assert_mod_reward_contract(wrapped, state, mod_key, stage="PixelWrapper+native_downscaling test")
 
         for i in range(5):
             action = wrapped.action_space().sample(key)
             key, _ = jax.random.split(key)
             try:
-                obs, state, reward, done, info = wrapped.step(state, action)
+                obs, state, reward, done, _, info = wrapped.step(state, action)
             except Exception as e:
                 pytest.fail(
                     f"step() with PixelWrapper+native_downscaling failed at step {i} "
@@ -455,6 +540,124 @@ class TestModWithWrappers:
                 assert hasattr(renderer, fn_name), (
                     f"Patched renderer method '{fn_name}' should exist on renderer (mod '{mod_key}')."
                 )
+
+    @pytest.mark.slow
+    @pytest.mark.serial
+    def test_obs_shape_correct_after_native_downscaling(
+        self, mod_game_name: str, mod_key: str, mod_type: str, isolate_jit_cache
+    ):
+        """
+        Verify that observations have the correct downscaled shape (84, 84, 3) when
+        using native downscaling with mods. This catches shape mismatches caused by
+        renderer-patching mods that may produce native-resolution output despite the
+        downscaled renderer config.
+        """
+        if mod_game_name not in MOD_MODULES:
+            pytest.skip(f"Game '{mod_game_name}' does not have mods registered")
+
+        DOWNSCALE = (84, 84)
+        FRAME_STACK = 1
+        allow_conflicts = mod_type == "modpack"
+        env = make(
+            game_name=mod_game_name,
+            mods=[mod_key],
+            allow_conflicts=allow_conflicts,
+        )
+        wrapped = PixelObsWrapper(
+            AtariWrapper(env, noop_max=0, first_fire=False),
+            do_pixel_resize=True,
+            pixel_resize_shape=DOWNSCALE,
+            grayscale=False,
+            use_native_downscaling=True,
+            frame_stack_size=FRAME_STACK,
+        )
+
+        key = jax.random.PRNGKey(0)
+        obs, state = wrapped.reset(key)
+        # Shape is (frame_stack, H, W, C); we check the spatial dimensions.
+        assert obs.shape[1:3] == DOWNSCALE, (
+            f"Spatial dims {obs.shape[1:3]} != expected {DOWNSCALE} "
+            f"for mod '{mod_key}' (game '{mod_game_name}'). "
+            f"obs.shape={obs.shape}. "
+            f"Likely cause: renderer-patching mod produces native-resolution output "
+            f"despite downscaled renderer config."
+        )
+
+        action = wrapped.action_space().sample(key)
+        obs, state, _, _, _, _ = wrapped.step(state, action)
+        assert obs.shape[1:3] == DOWNSCALE, (
+            f"Spatial dims {obs.shape[1:3]} != expected {DOWNSCALE} after step "
+            f"for mod '{mod_key}' (game '{mod_game_name}'). obs.shape={obs.shape}."
+        )
+
+    @pytest.mark.slow
+    @pytest.mark.serial
+    def test_obs_shape_stable_when_downscaling_applied_after_pretrace(
+        self, mod_game_name: str, mod_key: str, mod_type: str, isolate_jit_cache
+    ):
+        """
+        Regression test for JIT cache staleness with renderer-patching mods.
+
+        Simulates the scenario where an env is first used WITHOUT downscaling (which
+        triggers JIT compilation of render methods against the native-resolution renderer),
+        then wrapped with native downscaling. If patched render methods captured the
+        native-resolution renderer as a JIT constant, their output shape would be wrong
+        after the renderer swap performed by apply_native_downscaling.
+
+        This mirrors the training->evaluation flow in Pixel PQN where the evaluation
+        wrapper applies native downscaling to an already-traced environment.
+        """
+        if mod_game_name not in MOD_MODULES:
+            pytest.skip(f"Game '{mod_game_name}' does not have mods registered")
+
+        DOWNSCALE = (84, 84)
+        FRAME_STACK = 1
+        allow_conflicts = mod_type == "modpack"
+
+        # Step 1: Create modded env and wrap with AtariWrapper only (no downscaling).
+        env = make(
+            game_name=mod_game_name,
+            mods=[mod_key],
+            allow_conflicts=allow_conflicts,
+        )
+        atari_env = AtariWrapper(env, noop_max=0, first_fire=False)
+
+        # Step 2: Run reset + 2 steps to trigger JIT compilation at native resolution.
+        key = jax.random.PRNGKey(42)
+        _, atari_state = atari_env.reset(key)
+        action = atari_env.action_space().sample(key)
+        key, _ = jax.random.split(key)
+        atari_env.step(atari_state, action)
+
+        # Step 3: NOW wrap with native downscaling (swaps the renderer).
+        pixel_env = PixelObsWrapper(
+            atari_env,
+            do_pixel_resize=True,
+            pixel_resize_shape=DOWNSCALE,
+            grayscale=False,
+            use_native_downscaling=True,
+            frame_stack_size=FRAME_STACK,
+        )
+
+        # Step 4: Render after the swap and verify shape is correct.
+        key, _ = jax.random.split(key)
+        obs, pixel_state = pixel_env.reset(key)
+        # Shape is (frame_stack, H, W, C); we check the spatial dimensions.
+        assert obs.shape[1:3] == DOWNSCALE, (
+            f"Spatial dims {obs.shape[1:3]} != expected {DOWNSCALE} "
+            f"for mod '{mod_key}' (game '{mod_game_name}') AFTER pre-trace then downscale. "
+            f"obs.shape={obs.shape}. "
+            f"JIT cache for a renderer-patching method is stale: the compiled trace still "
+            f"references the native-resolution renderer from before apply_native_downscaling."
+        )
+
+        action = pixel_env.action_space().sample(key)
+        obs, _, _, _, _, _ = pixel_env.step(pixel_state, action)
+        assert obs.shape[1:3] == DOWNSCALE, (
+            f"Spatial dims {obs.shape[1:3]} != expected {DOWNSCALE} after step "
+            f"for mod '{mod_key}' (game '{mod_game_name}') AFTER pre-trace then downscale. "
+            f"obs.shape={obs.shape}."
+        )
 
 
 def test_no_duplicate_mod_keys():
@@ -480,6 +683,7 @@ def test_no_duplicate_mod_keys():
     assert len(all_mod_keys) > 0, "Should discover at least one mod across all games"
 
 
+@pytest.mark.integration
 def test_mod_vs_unmodded_comparison(mod_game_name): 
     """
     Compare modded environment with unmodded baseline.
@@ -591,35 +795,21 @@ class TestModifications:
                     pytest.fail(f"Should be able to override NamedTuple field: {e}")
 
     def test_mod_system_loads_without_error(self, raw_env_available):
-        """Test that mod system can be initialized without errors."""
-        game_name = raw_env_available.__class__.__module__.split(".")[-1].replace("jax_", "")
-
-        try:
-            env = make(game_name, mods=[])
-            assert env is not None
-            assert env.consts is not None
-        except (ImportError, ValueError) as e:
-            if "mod" not in str(e).lower() and "not recognized" not in str(e).lower():
-                raise
+        """Test that the game environment can be constructed without errors."""
+        assert raw_env_available is not None
+        assert raw_env_available.consts is not None
 
     def test_environment_works_after_mods(self, raw_env_available):
-        """Test that environment still functions correctly after mod system initialization."""
-        game_name = raw_env_available.__class__.__module__.split(".")[-1].replace("jax_", "")
-
-        try:
-            env = make(game_name, mods=[])
-            key = jax.random.PRNGKey(42)
-            obs, state = env.reset(key)
-            assert obs is not None
-            assert state is not None
-            action = env.action_space().sample(key)
-            obs, state, reward, done, info = env.step(state, action)
-            assert obs is not None
-            assert state is not None
-            assert jnp.isfinite(float(reward))
-        except (ImportError, ValueError) as e:
-            if "mod" not in str(e).lower() and "not recognized" not in str(e).lower():
-                raise
+        """Test that the unmodded environment still functions for reset/step."""
+        key = jax.random.PRNGKey(42)
+        obs, state = raw_env_available.reset(key)
+        assert obs is not None
+        assert state is not None
+        action = raw_env_available.action_space().sample(key)
+        obs, state, reward, done, info = raw_env_available.step(state, action)
+        assert obs is not None
+        assert state is not None
+        assert jnp.isfinite(float(reward))
 
 
 class TestModPluginTypes:
@@ -675,17 +865,10 @@ def test_specific_game_mods_load(raw_env_available):
     if game_name not in MOD_MODULES:
         pytest.skip(f"Game {game_name} not in list of games with mods")
 
-    try:
-        env = make(game_name, mods=[])
-        assert env is not None
-        key = jax.random.PRNGKey(42)
-        obs, state = env.reset(key)
-        assert obs is not None
-    except (ImportError, ValueError) as e:
-        if "not recognized" in str(e).lower() or "mod" in str(e).lower():
-            pytest.skip(f"Game {game_name} doesn't have mods or isn't available")
-        else:
-            raise
+    assert raw_env_available is not None
+    key = jax.random.PRNGKey(42)
+    obs, state = raw_env_available.reset(key)
+    assert obs is not None
 
 
 class TestDatatypeConsistency:
@@ -833,3 +1016,125 @@ class TestDatatypeConsistency:
         assert info_is_pytree, f"Info type: {type(info)}"
         assert type(obs1) == type(obs2), f"Observation type changed: {type(obs1)} vs {type(obs2)}"
         assert type(state1) == type(state2), f"State type changed: {type(state1)} vs {type(state2)}"
+
+
+# ---------------------------------------------------------------------------
+# Focused regression test for the renderer-swap JIT staleness fix
+# ---------------------------------------------------------------------------
+
+class _SyntheticRendererPatchMod(JaxAtariInternalModPlugin):
+    """
+    Minimal mod that patches a renderer hook using renderer state.
+
+    Accesses self._env.renderer.jr.config.height_scaling inside a
+    @jit(static_argnums=0) method. JAX bakes this as a compile-time constant
+    when the method is first traced. Without clear_cache() in
+    apply_native_downscaling, a pre-trace at native resolution would leave a
+    stale 1.0 scaling constant in the cache; subsequent calls after the
+    renderer swap would silently use it and produce native-resolution output.
+    """
+    @partial(jax.jit, static_argnums=(0,))
+    def _render_hook_post_ui(self, raster, state):
+        # Touching height_scaling forces JAX to capture the jr object as a
+        # closed-over constant at trace time — the exact staleness vector.
+        _ = self._env.renderer.jr.config.height_scaling
+        return raster
+
+
+@pytest.mark.smoke
+@pytest.mark.serial
+def test_renderer_patch_jit_staleness_fixed(request, isolate_jit_cache):
+    """
+    Regression: apply_native_downscaling must clear JIT caches for patched
+    renderer methods, otherwise a pre-trace at native resolution leaves a stale
+    compiled trace that ignores the new downscaled renderer.
+
+    Failure mode without the fix:
+      obs.shape == (1, 210, 160, 3)  (native resolution leaked through)
+    Expected with the fix:
+      obs.shape == (1, 84, 84, 3)
+    """
+    skip_unless_game_selected(request, "kangaroo")
+    DOWNSCALE = (84, 84)
+    key = jax.random.PRNGKey(0)
+
+    # 1. Base env (kangaroo has _render_hook_post_ui on its renderer).
+    env = make('kangaroo')
+
+    # 2. Inject the synthetic patch the same way JaxAtariModController does.
+    plugin = _SyntheticRendererPatchMod()
+    plugin._env = env
+    setattr(env.renderer, '_render_hook_post_ui', plugin._render_hook_post_ui)
+    env._patched_renderer_methods.append('_render_hook_post_ui')
+
+    # 3. Pre-trace at native resolution — warms the JIT cache on the plugin method.
+    atari = AtariWrapper(env, noop_max=0, first_fire=False)
+    _, state = atari.reset(key)
+    atari.step(state, 0)
+
+    # 4. Apply native downscaling. apply_native_downscaling must call clear_cache()
+    #    on the patched method so the next call retraces against the new renderer.
+    pixel = PixelObsWrapper(
+        atari,
+        do_pixel_resize=True,
+        pixel_resize_shape=DOWNSCALE,
+        grayscale=False,
+        use_native_downscaling=True,
+        frame_stack_size=1,
+    )
+
+    # 5. Render — would return (1, 210, 160, 3) if the JIT cache was not cleared.
+    obs, _ = pixel.reset(key)
+    assert obs.shape[1:3] == DOWNSCALE, (
+        f"Stale JIT cache after renderer swap: obs.shape={obs.shape}, "
+        f"expected spatial dims {DOWNSCALE}. "
+        f"apply_native_downscaling did not call clear_cache() on the patched method."
+    )
+
+
+@pytest.mark.smoke
+@pytest.mark.serial
+def test_native_downscaling_clears_registered_jit_targets(request, isolate_jit_cache):
+    skip_unless_game_selected(request, "kangaroo")
+
+    class _CacheProbe:
+        def __init__(self):
+            self.clear_cache_called = False
+
+        def clear_cache(self):
+            self.clear_cache_called = True
+
+    env = make("kangaroo")
+    probe = _CacheProbe()
+    env._jit_invalidation_targets.append(probe)
+
+    apply_native_downscaling(env, (84, 84), grayscale=False)
+    assert probe.clear_cache_called, (
+        "apply_native_downscaling should clear all callables in "
+        "env._jit_invalidation_targets."
+    )
+
+
+def test_jit_tripwire_warns_on_post_trace_mutation(request, isolate_jit_cache):
+    skip_unless_game_selected(request, "kangaroo")
+
+    class _TrackedJitTarget:
+        @partial(jax.jit, static_argnums=(0,))
+        def run(self, x):
+            return x + 1
+
+    env = make("kangaroo")
+    target = _TrackedJitTarget()
+    # Register a callable that has JIT cache introspection and can be pre-traced.
+    env._jit_invalidation_targets.append(type(target).__dict__["run"])
+
+    # Warm JIT cache, then trigger a runtime mutation point.
+    _ = target.run(1)
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        apply_native_downscaling(env, (84, 84), grayscale=False)
+
+    assert any("JIT tripwire" in str(w.message) for w in caught), (
+        "Expected JIT tripwire warning when mutating after a registered target "
+        "already has compiled cache."
+    )

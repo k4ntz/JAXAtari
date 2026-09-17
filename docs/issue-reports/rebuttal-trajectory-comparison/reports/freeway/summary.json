@@ -1,0 +1,793 @@
+{
+  "game": "freeway",
+  "oc_game": "Freeway",
+  "n": 150,
+  "tau_strict": 2.0,
+  "soft_tau": 12.0,
+  "persist": 5,
+  "t0_mode": "random",
+  "num_t0": 5,
+  "skip_frames": 0,
+  "oracle_lookahead": false,
+  "oracle_horizon": 150,
+  "aggregate": {
+    "num_runs": 5,
+    "n": 150,
+    "survival_at_n": 0.2,
+    "survival_soft_at_n": 0.2,
+    "survival_strict_at_n": 0.0,
+    "median_first_diverge": 108.0,
+    "mean_first_diverge": 113.0,
+    "median_first_diverge_soft": 108.0,
+    "mean_first_diverge_soft": 113.0,
+    "median_first_diverge_strict": 108.0,
+    "mean_first_diverge_strict": 95.0,
+    "mean_entity_l1_at_0": 0.0,
+    "mean_entity_l1_at_end": 18.163636363636364,
+    "mean_score_abs_at_0": 0.0,
+    "mean_score_abs_at_end": 0.0,
+    "mean_pixel_mae_at_0": 0.38655556440353395,
+    "mean_pixel_mae_at_end": 0.5738611221313477,
+    "mean_pixel_mae_excess_at_end": 0.1873055577278137,
+    "mean_pixel_mae_delta_at_end": 0.8116071343421936,
+    "mean_mae0": 0.38655556440353395,
+    "first_diverges": [
+      null,
+      91,
+      118,
+      98,
+      108
+    ],
+    "first_diverges_soft": [
+      null,
+      91,
+      118,
+      98,
+      108
+    ],
+    "first_diverges_strict": [
+      146,
+      5,
+      118,
+      98,
+      108
+    ]
+  },
+  "runs": [
+    {
+      "traj_path": "/home/paul/Documents/JAXAtari/data/oc_parity_corpus/raw/freeway_play01.npz",
+      "t0": 391,
+      "traj_seed": 0,
+      "first_diverge_soft": null,
+      "survived_soft": true,
+      "first_diverge_strict": 146,
+      "survived_strict": false,
+      "metrics_at_0": {
+        "entity_mean_l1": 0.0,
+        "entity_max_linf": 0.0,
+        "entity_presence": 1.0,
+        "score_mean_abs": 0.0,
+        "score_max_abs": 0.0,
+        "pixel_mae": 0.20071429014205933,
+        "pixel_equal_frac": 0.9977976190476191,
+        "pixel_mae_excess": 0.0,
+        "pixel_mae_delta": 0.0,
+        "pixel_mae_signed_delta": 0.0
+      },
+      "metrics_at_end": {
+        "entity_mean_l1": 87.36363636363636,
+        "entity_max_linf": 160.0,
+        "entity_presence": 1.0,
+        "score_mean_abs": 0.0,
+        "score_max_abs": 0.0,
+        "pixel_mae": 0.5379960536956787,
+        "pixel_equal_frac": 0.9936904761904762,
+        "pixel_mae_excess": 0.3372817635536194,
+        "pixel_mae_delta": 0.58990079164505,
+        "pixel_mae_signed_delta": 0.58990079164505
+      },
+      "per_entity_at_0": {
+        "car_0": {
+          "l1": 0.0,
+          "linf": 0.0,
+          "present_both": 1.0
+        },
+        "car_1": {
+          "l1": 0.0,
+          "linf": 0.0,
+          "present_both": 1.0
+        },
+        "car_2": {
+          "l1": 0.0,
+          "linf": 0.0,
+          "present_both": 1.0
+        },
+        "car_3": {
+          "l1": 0.0,
+          "linf": 0.0,
+          "present_both": 1.0
+        },
+        "car_4": {
+          "l1": 0.0,
+          "linf": 0.0,
+          "present_both": 1.0
+        },
+        "car_5": {
+          "l1": 0.0,
+          "linf": 0.0,
+          "present_both": 1.0
+        },
+        "car_6": {
+          "l1": 0.0,
+          "linf": 0.0,
+          "present_both": 1.0
+        },
+        "car_7": {
+          "l1": 0.0,
+          "linf": 0.0,
+          "present_both": 1.0
+        },
+        "car_8": {
+          "l1": 0.0,
+          "linf": 0.0,
+          "present_both": 1.0
+        },
+        "car_9": {
+          "l1": 0.0,
+          "linf": 0.0,
+          "present_both": 1.0
+        },
+        "chicken": {
+          "l1": 0.0,
+          "linf": 0.0,
+          "present_both": 1.0
+        }
+      },
+      "per_entity_at_end": {
+        "car_0": {
+          "l1": 0.0,
+          "linf": 0.0,
+          "present_both": 1.0
+        },
+        "car_1": {
+          "l1": 159.0,
+          "linf": 159.0,
+          "present_both": 1.0
+        },
+        "car_2": {
+          "l1": 0.0,
+          "linf": 0.0,
+          "present_both": 1.0
+        },
+        "car_3": {
+          "l1": 159.0,
+          "linf": 159.0,
+          "present_both": 1.0
+        },
+        "car_4": {
+          "l1": 160.0,
+          "linf": 160.0,
+          "present_both": 1.0
+        },
+        "car_5": {
+          "l1": 160.0,
+          "linf": 160.0,
+          "present_both": 1.0
+        },
+        "car_6": {
+          "l1": 160.0,
+          "linf": 160.0,
+          "present_both": 1.0
+        },
+        "car_7": {
+          "l1": 0.0,
+          "linf": 0.0,
+          "present_both": 1.0
+        },
+        "car_8": {
+          "l1": 160.0,
+          "linf": 160.0,
+          "present_both": 1.0
+        },
+        "car_9": {
+          "l1": 1.0,
+          "linf": 1.0,
+          "present_both": 1.0
+        },
+        "chicken": {
+          "l1": 2.0,
+          "linf": 2.0,
+          "present_both": 1.0
+        }
+      }
+    },
+    {
+      "traj_path": "/home/paul/Documents/JAXAtari/data/oc_parity_corpus/raw/freeway_play01.npz",
+      "t0": 446,
+      "traj_seed": 0,
+      "first_diverge_soft": 91,
+      "survived_soft": false,
+      "first_diverge_strict": 5,
+      "survived_strict": false,
+      "metrics_at_0": {
+        "entity_mean_l1": 0.0,
+        "entity_max_linf": 0.0,
+        "entity_presence": 1.0,
+        "score_mean_abs": 0.0,
+        "score_max_abs": 0.0,
+        "pixel_mae": 0.39297619462013245,
+        "pixel_equal_frac": 0.9951785714285715,
+        "pixel_mae_excess": 0.0,
+        "pixel_mae_delta": 0.0,
+        "pixel_mae_signed_delta": 0.0
+      },
+      "metrics_at_end": {
+        "entity_mean_l1": 2.727272727272727,
+        "entity_max_linf": 27.0,
+        "entity_presence": 1.0,
+        "score_mean_abs": 0.0,
+        "score_max_abs": 0.0,
+        "pixel_mae": 0.7587301731109619,
+        "pixel_equal_frac": 0.99125,
+        "pixel_mae_excess": 0.36575397849082947,
+        "pixel_mae_delta": 1.002896785736084,
+        "pixel_mae_signed_delta": 1.002896785736084
+      },
+      "per_entity_at_0": {
+        "car_0": {
+          "l1": 0.0,
+          "linf": 0.0,
+          "present_both": 1.0
+        },
+        "car_1": {
+          "l1": 0.0,
+          "linf": 0.0,
+          "present_both": 1.0
+        },
+        "car_2": {
+          "l1": 0.0,
+          "linf": 0.0,
+          "present_both": 1.0
+        },
+        "car_3": {
+          "l1": 0.0,
+          "linf": 0.0,
+          "present_both": 1.0
+        },
+        "car_4": {
+          "l1": 0.0,
+          "linf": 0.0,
+          "present_both": 1.0
+        },
+        "car_5": {
+          "l1": 0.0,
+          "linf": 0.0,
+          "present_both": 1.0
+        },
+        "car_6": {
+          "l1": 0.0,
+          "linf": 0.0,
+          "present_both": 1.0
+        },
+        "car_7": {
+          "l1": 0.0,
+          "linf": 0.0,
+          "present_both": 1.0
+        },
+        "car_8": {
+          "l1": 0.0,
+          "linf": 0.0,
+          "present_both": 1.0
+        },
+        "car_9": {
+          "l1": 0.0,
+          "linf": 0.0,
+          "present_both": 1.0
+        },
+        "chicken": {
+          "l1": 0.0,
+          "linf": 0.0,
+          "present_both": 1.0
+        }
+      },
+      "per_entity_at_end": {
+        "car_0": {
+          "l1": 0.0,
+          "linf": 0.0,
+          "present_both": 1.0
+        },
+        "car_1": {
+          "l1": 0.0,
+          "linf": 0.0,
+          "present_both": 1.0
+        },
+        "car_2": {
+          "l1": 1.0,
+          "linf": 1.0,
+          "present_both": 1.0
+        },
+        "car_3": {
+          "l1": 0.0,
+          "linf": 0.0,
+          "present_both": 1.0
+        },
+        "car_4": {
+          "l1": 0.0,
+          "linf": 0.0,
+          "present_both": 1.0
+        },
+        "car_5": {
+          "l1": 0.0,
+          "linf": 0.0,
+          "present_both": 1.0
+        },
+        "car_6": {
+          "l1": 1.0,
+          "linf": 1.0,
+          "present_both": 1.0
+        },
+        "car_7": {
+          "l1": 0.0,
+          "linf": 0.0,
+          "present_both": 1.0
+        },
+        "car_8": {
+          "l1": 0.0,
+          "linf": 0.0,
+          "present_both": 1.0
+        },
+        "car_9": {
+          "l1": 1.0,
+          "linf": 1.0,
+          "present_both": 1.0
+        },
+        "chicken": {
+          "l1": 27.0,
+          "linf": 27.0,
+          "present_both": 1.0
+        }
+      }
+    },
+    {
+      "traj_path": "/home/paul/Documents/JAXAtari/data/oc_parity_corpus/raw/freeway_play01.npz",
+      "t0": 740,
+      "traj_seed": 0,
+      "first_diverge_soft": 118,
+      "survived_soft": false,
+      "first_diverge_strict": 118,
+      "survived_strict": false,
+      "metrics_at_0": {
+        "entity_mean_l1": 0.0,
+        "entity_max_linf": 0.0,
+        "entity_presence": 1.0,
+        "score_mean_abs": 0.0,
+        "score_max_abs": 0.0,
+        "pixel_mae": 0.6066666841506958,
+        "pixel_equal_frac": 0.9925595238095238,
+        "pixel_mae_excess": 0.0,
+        "pixel_mae_delta": 0.0,
+        "pixel_mae_signed_delta": 0.0
+      },
+      "metrics_at_end": {
+        "entity_mean_l1": 0.36363636363636365,
+        "entity_max_linf": 1.0,
+        "entity_presence": 1.0,
+        "score_mean_abs": 0.0,
+        "score_max_abs": 0.0,
+        "pixel_mae": 0.6016666889190674,
+        "pixel_equal_frac": 0.9925595238095238,
+        "pixel_mae_excess": -0.004999995231628418,
+        "pixel_mae_delta": 1.0595238208770752,
+        "pixel_mae_signed_delta": 1.0595238208770752
+      },
+      "per_entity_at_0": {
+        "car_0": {
+          "l1": 0.0,
+          "linf": 0.0,
+          "present_both": 1.0
+        },
+        "car_1": {
+          "l1": 0.0,
+          "linf": 0.0,
+          "present_both": 1.0
+        },
+        "car_2": {
+          "l1": 0.0,
+          "linf": 0.0,
+          "present_both": 1.0
+        },
+        "car_3": {
+          "l1": 0.0,
+          "linf": 0.0,
+          "present_both": 1.0
+        },
+        "car_4": {
+          "l1": 0.0,
+          "linf": 0.0,
+          "present_both": 1.0
+        },
+        "car_5": {
+          "l1": 0.0,
+          "linf": 0.0,
+          "present_both": 1.0
+        },
+        "car_6": {
+          "l1": 0.0,
+          "linf": 0.0,
+          "present_both": 1.0
+        },
+        "car_7": {
+          "l1": 0.0,
+          "linf": 0.0,
+          "present_both": 1.0
+        },
+        "car_8": {
+          "l1": 0.0,
+          "linf": 0.0,
+          "present_both": 1.0
+        },
+        "car_9": {
+          "l1": 0.0,
+          "linf": 0.0,
+          "present_both": 1.0
+        },
+        "chicken": {
+          "l1": 0.0,
+          "linf": 0.0,
+          "present_both": 1.0
+        }
+      },
+      "per_entity_at_end": {
+        "car_0": {
+          "l1": 1.0,
+          "linf": 1.0,
+          "present_both": 1.0
+        },
+        "car_1": {
+          "l1": 0.0,
+          "linf": 0.0,
+          "present_both": 1.0
+        },
+        "car_2": {
+          "l1": 1.0,
+          "linf": 1.0,
+          "present_both": 1.0
+        },
+        "car_3": {
+          "l1": 0.0,
+          "linf": 0.0,
+          "present_both": 1.0
+        },
+        "car_4": {
+          "l1": 0.0,
+          "linf": 0.0,
+          "present_both": 1.0
+        },
+        "car_5": {
+          "l1": 0.0,
+          "linf": 0.0,
+          "present_both": 1.0
+        },
+        "car_6": {
+          "l1": 1.0,
+          "linf": 1.0,
+          "present_both": 1.0
+        },
+        "car_7": {
+          "l1": 0.0,
+          "linf": 0.0,
+          "present_both": 1.0
+        },
+        "car_8": {
+          "l1": 1.0,
+          "linf": 1.0,
+          "present_both": 1.0
+        },
+        "car_9": {
+          "l1": 0.0,
+          "linf": 0.0,
+          "present_both": 1.0
+        },
+        "chicken": {
+          "l1": 0.0,
+          "linf": 0.0,
+          "present_both": 1.0
+        }
+      }
+    },
+    {
+      "traj_path": "/home/paul/Documents/JAXAtari/data/oc_parity_corpus/raw/freeway_play01.npz",
+      "t0": 922,
+      "traj_seed": 0,
+      "first_diverge_soft": 98,
+      "survived_soft": false,
+      "first_diverge_strict": 98,
+      "survived_strict": false,
+      "metrics_at_0": {
+        "entity_mean_l1": 0.0,
+        "entity_max_linf": 0.0,
+        "entity_presence": 1.0,
+        "score_mean_abs": 0.0,
+        "score_max_abs": 0.0,
+        "pixel_mae": 0.3194444477558136,
+        "pixel_equal_frac": 0.9961904761904762,
+        "pixel_mae_excess": 0.0,
+        "pixel_mae_delta": 0.0,
+        "pixel_mae_signed_delta": 0.0
+      },
+      "metrics_at_end": {
+        "entity_mean_l1": 0.09090909090909091,
+        "entity_max_linf": 1.0,
+        "entity_presence": 1.0,
+        "score_mean_abs": 0.0,
+        "score_max_abs": 0.0,
+        "pixel_mae": 0.2988095283508301,
+        "pixel_equal_frac": 0.9964880952380952,
+        "pixel_mae_excess": -0.02063491940498352,
+        "pixel_mae_delta": 0.4694444537162781,
+        "pixel_mae_signed_delta": 0.4694444537162781
+      },
+      "per_entity_at_0": {
+        "car_0": {
+          "l1": 0.0,
+          "linf": 0.0,
+          "present_both": 1.0
+        },
+        "car_1": {
+          "l1": 0.0,
+          "linf": 0.0,
+          "present_both": 1.0
+        },
+        "car_2": {
+          "l1": 0.0,
+          "linf": 0.0,
+          "present_both": 1.0
+        },
+        "car_3": {
+          "l1": 0.0,
+          "linf": 0.0,
+          "present_both": 1.0
+        },
+        "car_4": {
+          "l1": 0.0,
+          "linf": 0.0,
+          "present_both": 1.0
+        },
+        "car_5": {
+          "l1": 0.0,
+          "linf": 0.0,
+          "present_both": 1.0
+        },
+        "car_6": {
+          "l1": 0.0,
+          "linf": 0.0,
+          "present_both": 1.0
+        },
+        "car_7": {
+          "l1": 0.0,
+          "linf": 0.0,
+          "present_both": 1.0
+        },
+        "car_8": {
+          "l1": 0.0,
+          "linf": 0.0,
+          "present_both": 1.0
+        },
+        "car_9": {
+          "l1": 0.0,
+          "linf": 0.0,
+          "present_both": 1.0
+        },
+        "chicken": {
+          "l1": 0.0,
+          "linf": 0.0,
+          "present_both": 1.0
+        }
+      },
+      "per_entity_at_end": {
+        "car_0": {
+          "l1": 0.0,
+          "linf": 0.0,
+          "present_both": 1.0
+        },
+        "car_1": {
+          "l1": 0.0,
+          "linf": 0.0,
+          "present_both": 1.0
+        },
+        "car_2": {
+          "l1": 0.0,
+          "linf": 0.0,
+          "present_both": 1.0
+        },
+        "car_3": {
+          "l1": 0.0,
+          "linf": 0.0,
+          "present_both": 1.0
+        },
+        "car_4": {
+          "l1": 0.0,
+          "linf": 0.0,
+          "present_both": 1.0
+        },
+        "car_5": {
+          "l1": 0.0,
+          "linf": 0.0,
+          "present_both": 1.0
+        },
+        "car_6": {
+          "l1": 1.0,
+          "linf": 1.0,
+          "present_both": 1.0
+        },
+        "car_7": {
+          "l1": 0.0,
+          "linf": 0.0,
+          "present_both": 1.0
+        },
+        "car_8": {
+          "l1": 0.0,
+          "linf": 0.0,
+          "present_both": 1.0
+        },
+        "car_9": {
+          "l1": 0.0,
+          "linf": 0.0,
+          "present_both": 1.0
+        },
+        "chicken": {
+          "l1": 0.0,
+          "linf": 0.0,
+          "present_both": 1.0
+        }
+      }
+    },
+    {
+      "traj_path": "/home/paul/Documents/JAXAtari/data/oc_parity_corpus/raw/freeway_play01.npz",
+      "t0": 1230,
+      "traj_seed": 0,
+      "first_diverge_soft": 108,
+      "survived_soft": false,
+      "first_diverge_strict": 108,
+      "survived_strict": false,
+      "metrics_at_0": {
+        "entity_mean_l1": 0.0,
+        "entity_max_linf": 0.0,
+        "entity_presence": 1.0,
+        "score_mean_abs": 0.0,
+        "score_max_abs": 0.0,
+        "pixel_mae": 0.4129762053489685,
+        "pixel_equal_frac": 0.9951785714285715,
+        "pixel_mae_excess": 0.0,
+        "pixel_mae_delta": 0.0,
+        "pixel_mae_signed_delta": 0.0
+      },
+      "metrics_at_end": {
+        "entity_mean_l1": 0.2727272727272727,
+        "entity_max_linf": 1.0,
+        "entity_presence": 1.0,
+        "score_mean_abs": 0.0,
+        "score_max_abs": 0.0,
+        "pixel_mae": 0.6721031665802002,
+        "pixel_equal_frac": 0.9922619047619048,
+        "pixel_mae_excess": 0.2591269612312317,
+        "pixel_mae_delta": 0.9362698197364807,
+        "pixel_mae_signed_delta": 0.9362698197364807
+      },
+      "per_entity_at_0": {
+        "car_0": {
+          "l1": 0.0,
+          "linf": 0.0,
+          "present_both": 1.0
+        },
+        "car_1": {
+          "l1": 0.0,
+          "linf": 0.0,
+          "present_both": 1.0
+        },
+        "car_2": {
+          "l1": 0.0,
+          "linf": 0.0,
+          "present_both": 1.0
+        },
+        "car_3": {
+          "l1": 0.0,
+          "linf": 0.0,
+          "present_both": 1.0
+        },
+        "car_4": {
+          "l1": 0.0,
+          "linf": 0.0,
+          "present_both": 1.0
+        },
+        "car_5": {
+          "l1": 0.0,
+          "linf": 0.0,
+          "present_both": 1.0
+        },
+        "car_6": {
+          "l1": 0.0,
+          "linf": 0.0,
+          "present_both": 1.0
+        },
+        "car_7": {
+          "l1": 0.0,
+          "linf": 0.0,
+          "present_both": 1.0
+        },
+        "car_8": {
+          "l1": 0.0,
+          "linf": 0.0,
+          "present_both": 1.0
+        },
+        "car_9": {
+          "l1": 0.0,
+          "linf": 0.0,
+          "present_both": 1.0
+        },
+        "chicken": {
+          "l1": 0.0,
+          "linf": 0.0,
+          "present_both": 1.0
+        }
+      },
+      "per_entity_at_end": {
+        "car_0": {
+          "l1": 1.0,
+          "linf": 1.0,
+          "present_both": 1.0
+        },
+        "car_1": {
+          "l1": 0.0,
+          "linf": 0.0,
+          "present_both": 1.0
+        },
+        "car_2": {
+          "l1": 0.0,
+          "linf": 0.0,
+          "present_both": 1.0
+        },
+        "car_3": {
+          "l1": 0.0,
+          "linf": 0.0,
+          "present_both": 1.0
+        },
+        "car_4": {
+          "l1": 0.0,
+          "linf": 0.0,
+          "present_both": 1.0
+        },
+        "car_5": {
+          "l1": 0.0,
+          "linf": 0.0,
+          "present_both": 1.0
+        },
+        "car_6": {
+          "l1": 1.0,
+          "linf": 1.0,
+          "present_both": 1.0
+        },
+        "car_7": {
+          "l1": 1.0,
+          "linf": 1.0,
+          "present_both": 1.0
+        },
+        "car_8": {
+          "l1": 0.0,
+          "linf": 0.0,
+          "present_both": 1.0
+        },
+        "car_9": {
+          "l1": 0.0,
+          "linf": 0.0,
+          "present_both": 1.0
+        },
+        "chicken": {
+          "l1": 0.0,
+          "linf": 0.0,
+          "present_both": 1.0
+        }
+      }
+    }
+  ]
+}

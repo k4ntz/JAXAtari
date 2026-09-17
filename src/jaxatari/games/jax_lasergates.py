@@ -1,8 +1,3 @@
-"""
-
-Lukas Bergholz, Linus Orlob, Vincent Jahn
-
-"""
 import os
 from functools import partial
 from typing import Tuple, NamedTuple, Callable

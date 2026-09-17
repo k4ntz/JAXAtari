@@ -3,13 +3,11 @@ import os
 from typing import NamedTuple, Tuple
 import jax.numpy as jnp
 import chex
-import pygame
 from functools import partial
 from jax import lax
 import jax.lax
 import jax
 from flax import struct
-from sympy import false
 
 import jaxatari.spaces as spaces
 
@@ -210,67 +208,6 @@ class RiverraidObservation:
 # island_transition_state that manages the required straight segment at start and end
 # islands can always shrink, if shrank below a threshold it is removed entirely
 # the logic also tests wheter to despawn the island at any point (even when large)
-
-@jax.jit
-def get_action_from_keyboard(state: RiverraidState) -> Action:
-    keys = pygame.key.get_pressed()
-    left = keys[pygame.K_a] or keys[pygame.K_LEFT]
-    right = keys[pygame.K_d] or keys[pygame.K_RIGHT]
-    up = keys[pygame.K_w] or keys[pygame.K_UP]
-    down = keys[pygame.K_s] or keys[pygame.K_DOWN]
-    shooting = keys[pygame.K_SPACE]
-
-    # Diagonale Bewegungen
-    up_right = up and right and not left and not down
-    up_left = up and left and not right and not down
-    down_right = down and right and not left and not up
-    down_left = down and left and not right and not up
-
-    # Einzelne Richtungen
-    up_only = up and not left and not right and not down
-    down_only = down and not left and not right and not up
-    left_only = left and not right and not up and not down
-    right_only = right and not left and not up and not down
-
-    if shooting:
-        if up_right:
-            return Action.UPRIGHTFIRE
-        elif up_left:
-            return Action.UPLEFTFIRE
-        elif down_right:
-            return Action.DOWNRIGHTFIRE
-        elif down_left:
-            return Action.DOWNLEFTFIRE
-        elif up_only:
-            return Action.UPFIRE
-        elif down_only:
-            return Action.DOWNFIRE
-        elif left_only:
-            return Action.LEFTFIRE
-        elif right_only:
-            return Action.RIGHTFIRE
-        else:
-            return Action.FIRE
-    else:
-        if up_right:
-            return Action.UPRIGHT
-        elif up_left:
-            return Action.UPLEFT
-        elif down_right:
-            return Action.DOWNRIGHT
-        elif down_left:
-            return Action.DOWNLEFT
-        elif up_only:
-            return Action.UP
-        elif down_only:
-            return Action.DOWN
-        elif left_only:
-            return Action.LEFT
-        elif right_only:
-            return Action.RIGHT
-        else:
-            return Action.NOOP
-
 
 class JaxRiverraid(JaxEnvironment):
     # Minimal ALE action set for River Raid
@@ -893,7 +830,7 @@ class JaxRiverraid(JaxEnvironment):
         is_start_frame = (state.player_velocity_x == 0.0) & (target_dir != 0.0)
         raw_subpixel = jnp.where(is_start_frame, raw_subpixel + target_dir, raw_subpixel)
 
-        step_x = jnp.fix(raw_subpixel)
+        step_x = jnp.trunc(raw_subpixel)
         new_subpixel = raw_subpixel - step_x
 
         new_x = state.player_x + step_x
@@ -1684,10 +1621,6 @@ class JaxRiverraid(JaxEnvironment):
         observation = self._get_observation(state)
         return observation, state
 
-    @partial(jax.jit, static_argnums=(0,))
-    def get_action_space(self):
-        return jnp.array([Action.NOOP, Action.LEFT, Action.RIGHT, Action.FIRE, Action.LEFTFIRE, Action.RIGHTFIRE])
-
     def action_space(self) -> spaces.Discrete:
         return spaces.Discrete(len(self.ACTION_SET))
 
@@ -1960,7 +1893,8 @@ class RiverraidRenderer(JAXGameRenderer):
         is_bank = is_left_bank | is_right_bank | is_island
         
         # 6. Create base raster of river color at target resolution
-        raster = jnp.full((target_h, target_w), river_color, dtype=jnp.uint8)
+        id_dtype = self.BACKGROUND.dtype
+        raster = jnp.full((target_h, target_w), river_color, dtype=id_dtype)
         
         # 7. Paint banks on top
         raster = jnp.where(is_bank, green_banks, raster)
@@ -2180,7 +2114,9 @@ class RiverraidRenderer(JAXGameRenderer):
         ui_height_px = int(round(self.consts.UI_HEIGHT * self.config.height_scaling))
         
         if ui_height_px > 0:
-            ui_block = jnp.full((ui_height_px, target_w), self.UI_COLOR_ID, dtype=jnp.uint8)
+            ui_block = jnp.full(
+                (ui_height_px, target_w), self.UI_COLOR_ID, dtype=raster.dtype
+            )
             raster = raster.at[target_h - ui_height_px:, :].set(ui_block)
 
         # Redraw black line

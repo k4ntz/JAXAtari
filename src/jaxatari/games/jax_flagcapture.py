@@ -14,10 +14,6 @@ from jaxatari.spaces import Space
 from jaxatari.environment import ObjectObservation, JAXAtariAction as Action
 
 
-#
-# by Tim Morgner and Jan Larionow
-#
-
 class FlagCaptureConstants(struct.PyTreeNode):
     WIDTH: int = struct.field(pytree_node=False, default=160)
     HEIGHT: int = struct.field(pytree_node=False, default=210)
@@ -212,7 +208,7 @@ class JaxFlagCapture(JaxEnvironment[FlagCaptureState, FlagCaptureObservation, Fl
         Returns the action space of the environment.
         Returns: The action space of the environment as a Discrete space.
         """
-        return spaces.Discrete(18)
+        return spaces.Discrete(len(self.ACTION_SET))
 
     def observation_space(self) -> spaces:
         return spaces.Dict({

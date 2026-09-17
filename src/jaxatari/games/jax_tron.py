@@ -1,13 +1,14 @@
 import chex
 from jaxatari.renderers import JAXGameRenderer
-from typing import NamedTuple, Tuple, TypeVar, Dict, Any
-from jax import Array, jit, random, numpy as jnp, vmap
+from typing import NamedTuple, Tuple
+from jax import Array, jit, random, numpy as jnp
 import jax
 from functools import partial
 from flax import struct
+import numpy as np
 
 import jaxatari.rendering.jax_rendering_utils as render_utils
-from jaxatari.environment import JaxEnvironment, JAXAtariAction as Action, EnvObs, ObjectObservation
+from jaxatari.environment import JaxEnvironment, JAXAtariAction as Action, ObjectObservation
 import jaxatari.spaces as spaces
 from jaxatari.modification import AutoDerivedConstants
 import jax.lax
@@ -15,36 +16,72 @@ import os
 
 SIDE_TOP, SIDE_BOTTOM, SIDE_LEFT, SIDE_RIGHT = 0, 1, 2, 3
 
-def _create_static_procedural_sprites(c: 'TronConstants') -> dict:
-    """Creates procedural sprites that don't depend on dynamic values or file loading."""
-    # Door sprites (solid color sprites)
-    door_spawn_sprite = _solid_sprite(c.door_h, c.door_w, c.rgba_door_spawn)
-    door_locked_sprite = _solid_sprite(c.door_h, c.door_w, c.rgba_door_locked)
-    
-    return {
-        'door_spawn': door_spawn_sprite,
-        'door_locked': door_locked_sprite,
-    }
+# Default color tables used in ASSET_CONFIG recolorings. Kept in sync with TronConstants
+# so file-based sprites can be overridden by mods; the renderer refreshes from consts.
+_PLAYER_LIFE_COLORS_RGB = (
+    (18, 19, 157),
+    (114, 39, 164),
+    (160, 39, 132),
+    (210, 81, 80),
+    (189, 134, 50),
+    (205, 155, 62),
+)
+_WAVE_ENEMY_COLORS_RGB = (
+    (151, 163, 67),
+    (0, 100, 0),
+    (0, 128, 255),
+    (255, 255, 255),
+    (255, 255, 0),
+    (16, 16, 16),
+    (220, 20, 60),
+    (255, 215, 0),
+)
+_SCORE_COLOR_RGB = (151, 163, 67)
+
+
+def _rgb(color) -> tuple:
+    vals = np.asarray(color).tolist()
+    return (int(vals[0]), int(vals[1]), int(vals[2]))
+
 
 def _get_default_asset_config() -> tuple:
     """
-    Returns the default declarative asset manifest for Tron.
-    Kept immutable (tuple of dicts) to fit NamedTuple defaults.
-    Note: Most assets are procedurally generated from loaded sprites in the renderer.
-    This returns an empty config that will be populated in the renderer.
+    Declarative asset manifest for Tron.
+    File-based sprites live here so mods can override them via ASSET_CONFIG / asset_overrides.
+    Procedural sprites (background, doors, discs) are added by the renderer from constants.
     """
-    # Tron's asset config is mostly built dynamically from loaded sprites
-    # We return an empty tuple here, and the renderer will build the full config
-    # This allows the structure to be in constants while keeping file-dependent logic in renderer
-    return ()
+    return (
+        {
+            'name': 'player',
+            'type': 'group',
+            'files': [f'player{i}.npy' for i in range(1, 5)],
+            'recolorings': {f'life{i}': rgb for i, rgb in enumerate(_PLAYER_LIFE_COLORS_RGB)},
+        },
+        {
+            'name': 'enemy',
+            'type': 'group',
+            'files': [f'enemy{i}.npy' for i in range(1, 5)],
+            'recolorings': {f'wave{i}': rgb for i, rgb in enumerate(_WAVE_ENEMY_COLORS_RGB)},
+        },
+        {
+            'name': 'digits',
+            'type': 'digits',
+            'pattern': '{}.npy',
+            'recolorings': {'score': _SCORE_COLOR_RGB},
+        },
+    )
 
 class TronConstants(AutoDerivedConstants):
     screen_width: int = struct.field(pytree_node=False, default=160)
     screen_height: int = struct.field(pytree_node=False, default=210)
     scaling_factor: int = struct.field(pytree_node=False, default=3)
 
+    # NTSC is 60 Hz; original Deadly Discs updates motion on a 30 Hz logic clock.
+    # Speeds below were authored as pixels-per-logic-tick (play.py defaults to 30 FPS).
+    movement_period: int = struct.field(pytree_node=False, default=2)
+
     # Player
-    player_speed: int = struct.field(pytree_node=False, default=1)  # Player speed in pixels per frame
+    player_speed: int = struct.field(pytree_node=False, default=1)  # pixels per logic tick (every movement_period frames)
     player_lives: int = struct.field(pytree_node=False, default=5)  # starting number of lives
     # Player color progression by number of hits taken (index 0..5)
     # 0 = freshly spawned (5/5 lives), 1 = after first hit, ... 4 = fourth hit (1/5),
@@ -72,8 +109,9 @@ class TronConstants(AutoDerivedConstants):
         2,
         4,
     ]))  # size for the returning discs
-    disc_speed: int = struct.field(pytree_node=False, default=2)  # outbound (thrown) speed
-    enemy_disc_speed: int = struct.field(pytree_node=False, default=2)  # 1px/step
+    disc_speed: int = struct.field(pytree_node=False, default=2)  # outbound speed, pixels per logic tick
+    # ALE wave-1 enemy discs step ~1–2px every logic tick (~1.5px Euclidean).
+    enemy_disc_speed: float = struct.field(pytree_node=False, default=1.5)
     inbound_disc_speed: int = struct.field(pytree_node=False, default=3)
 
     """
@@ -128,13 +166,11 @@ class TronConstants(AutoDerivedConstants):
     enemy_spawn_offset: int = struct.field(pytree_node=False, default=3)  # distance in pixels from when spawning
     enemy_respawn_timer: int = struct.field(pytree_node=False, default=200)  # time in frames until the next enemy spawns
     enemy_recalc_target: Tuple[int, int] = struct.field(pytree_node=False, default=(200, 350))  # After how many frames should the target be recalculated? min,max
-    enemy_speed: int = struct.field(pytree_node=False, default=3)  # inversed: move envery third frame
+    enemy_speed: int = struct.field(pytree_node=False, default=3)  # inverted: move every Nth logic tick
     enemy_target_radius: int = struct.field(pytree_node=False, default=50)  # radius (px) around player to sample target (where to walk)
 
-    # Asset config baked into constants (immutable default) for asset overrides
-    # Note: Tron's assets are mostly procedurally generated from loaded sprites,
-    # so the renderer builds the full config from loaded files
-    ASSET_CONFIG: tuple = struct.field(pytree_node=False, default=_get_default_asset_config())
+    # Asset config baked into constants for full modding support (file overrides + recolorings)
+    ASSET_CONFIG: tuple = struct.field(pytree_node=False, default_factory=_get_default_asset_config)
     enemy_min_dist: int = struct.field(pytree_node=False, default=32)  # min distance between the enemies
     enemy_firing_cooldown_range: Tuple[int, int] = struct.field(pytree_node=False, default=(30, 60))  # frames until the enemy can fire again
     enemy_animation_steps: int = struct.field(pytree_node=False, default=6)  # interval for changing the animation-sprite of walking enemies
@@ -308,298 +344,6 @@ class TronInfo:
     frame_idx: Array  # () int32
 
 
-# Organize all helper functions concerning the disc-movement in this class
-class _DiscOps:
-
-    @staticmethod
-    @jit
-    def check_wall_hit(
-        discs: Discs, min_x: Array, min_y: Array, max_x: Array, max_y: Array
-    ) -> Array:
-        """
-        Boolean mask that checks, if the next (x,y) step would leave the visible area
-        """
-        nx, ny = discs.x + discs.vx, discs.y + discs.vy
-        return (
-            (nx < min_x)
-            | (ny < min_y)
-            | ((nx + discs.w) > max_x)
-            | ((ny + discs.h) > max_y)
-        )
-
-    @staticmethod
-    @jit
-    def compute_next_phase(
-        discs: Discs, fire_pressed: Array, next_step_wall: Array
-    ) -> Array:
-        """
-        Decide the next phase from current phase/owner and inputs.
-        0=inactive, 1=outbound, 2=returning (player only)
-        """
-        current_phase = discs.phase
-        is_outbound = current_phase == jnp.int32(1)
-        is_owner_player = discs.owner == jnp.int32(0)
-        is_owner_enemy = discs.owner == jnp.int32(1)
-
-        # return disc back to player, if the player pressed fire again
-        # or would hit a wall next
-        # IMPORANT: Only the playerr can recall the disc. Enemies can only shoot them
-        return_disc = is_outbound & is_owner_player & (fire_pressed | next_step_wall)
-        next_phase = jnp.where(
-            return_disc,
-            jnp.int32(2),  # returning
-            current_phase,  # keep the same phase if the disc shouldn't return
-        )
-        # Check if the discs of the enemies will hit a wall next step
-        enemy_despawn_wall = is_outbound & is_owner_enemy & next_step_wall
-        next_phase = jnp.where(
-            enemy_despawn_wall,
-            jnp.int32(0),  # Set to inactive
-            next_phase,  # keep the same phase if the disc shouldn't return
-        )
-        return next_phase
-
-    @staticmethod
-    @jit
-    def compute_velocity(
-        discs: Discs,
-        next_phase: Array,
-        player_center_x: Array,
-        player_center_y: Array,
-        inbound_speed: Array,
-    ) -> Tuple[Array, Array]:
-        """
-        Recomputes a homing velocity every step for player-returning discs (phase==2)
-        - Uses the normalized vector from the discs center to the players current center.
-        - If the disc is within one step of the player, step exactly onto the player
-          to avoid overshoot/orbit.
-        - Inactive discs (phase==0) have zero velocity.
-        """
-        is_returning_player = (next_phase == jnp.int32(2)) & (
-            discs.owner == jnp.int32(0)
-        )
-        is_inactive = next_phase == jnp.int32(0)
-
-        # Use centers to compute a direction towards the players body
-        disc_cx, disc_cy = rect_center(discs.x, discs.y, discs.w, discs.h)
-
-        # Vector from disc -> player center
-        # convert to float for normalization
-        dx_f = (player_center_x - disc_cx).astype(jnp.float32)
-        dy_f = (player_center_y - disc_cy).astype(jnp.float32)
-        dist = jnp.sqrt(dx_f * dx_f + dy_f * dy_f)  # euclidean distance
-
-        # Unit direction (float), scaled by inbound speed
-        denom = jnp.maximum(dist, jnp.float32(1.0))  # avoid div-by-zero
-        ux = dx_f / denom
-        uy = dy_f / denom
-
-        speed_f = jnp.asarray(inbound_speed, dtype=jnp.float32)
-
-        # round to the nearest integer pixel velocity. THis preserves average grid while
-        # keeping movement constraint to the integer grid
-        vx_homing = jnp.round(ux * speed_f).astype(jnp.int32)
-        vy_homing = jnp.round(uy * speed_f).astype(jnp.int32)
-
-        # If the disc is within one step (<= speed) to the player, move exactly to the remaining
-        # integer delte so the disc lands on the players center this frame
-        dx_i = (player_center_x - disc_cx).astype(jnp.int32)
-        dy_i = (player_center_y - disc_cy).astype(jnp.int32)
-        close = dist <= speed_f
-        vx_close = dx_i
-        vy_close = dy_i
-
-        vx_new = jnp.where(close, vx_close, vx_homing)
-        vy_new = jnp.where(close, vy_close, vy_homing)
-
-        # ensure progress when rounding yields (0,0)
-        # this can happen when |ux|and |uy| are both < 0.5 with speed==1, producing
-        # rounded zeros. If the distance is still nonzero, nudge one pixel in the
-        # correct signed direction to guarantee forward progress.
-        zero_pair = (
-            (vx_new == jnp.int32(0))
-            & (vy_new == jnp.int32(0))
-            & (dist > jnp.float32(0))
-        )
-        vx_new = jnp.where(zero_pair, jnp.sign(dx_f).astype(jnp.int32), vx_new)
-        vy_new = jnp.where(zero_pair, jnp.sign(dy_f).astype(jnp.int32), vy_new)
-
-        # Apply homing velocity only for returning player discs; keep stored velocity otherwise
-        velocity_x = jnp.where(is_returning_player, vx_new, discs.vx)
-        velocity_y = jnp.where(is_returning_player, vy_new, discs.vy)
-
-        # Inactive discs don't move
-        velocity_x = jnp.where(is_inactive, jnp.int32(0), velocity_x)
-        velocity_y = jnp.where(is_inactive, jnp.int32(0), velocity_y)
-
-        return velocity_x, velocity_y
-
-    @staticmethod
-    @jit
-    def add_and_clamp(
-        discs: Discs,
-        next_phase: Array,
-        velocity_x: Array,
-        velocity_y: Array,
-        min_x: Array,
-        min_y: Array,
-        max_x: Array,
-        max_y: Array,
-    ) -> Tuple[Array, Array]:
-        """
-        Apply velocity to update position for active discs and clamp to screen size
-        """
-        is_active = next_phase > jnp.int32(0)
-
-        # only update position if the disc is active
-        x_next = jnp.where(is_active, discs.x + velocity_x, discs.x)
-        y_next = jnp.where(is_active, discs.y + velocity_y, discs.y)
-
-        # clamp position to stay within the screen boundaries
-        x_next = jnp.clip(x_next, min_x, max_x - discs.w)
-        y_next = jnp.clip(y_next, min_y, max_y - discs.h)
-        return x_next, y_next
-
-    @staticmethod
-    @jit
-    def player_pickup_returning_discs(
-        discs: Discs,
-        next_phase: Array,
-        next_x: Array,
-        next_y: Array,
-        player_x0: Array,
-        player_y0: Array,
-        player_w: Array,
-        player_h: Array,
-        vx: Array,
-        vy: Array,
-    ) -> Tuple[Array, Array, Array]:
-        """
-        If a returning player disc overlaps the player after integration:
-        - set phase to 0 (inactive)
-        - zero its velocity
-        """
-        is_returning_player = (discs.owner == jnp.int32(0)) & (
-            next_phase == jnp.int32(2)
-        )
-        overlaps_player = (
-            (next_x < player_x0 + player_w)
-            & ((next_x + discs.w) > player_x0)
-            & (next_y < player_y0 + player_h)
-            & ((next_y + discs.h) > player_y0)
-        )
-        picked_up = is_returning_player & overlaps_player
-
-        final_phase = jnp.where(picked_up, jnp.int32(0), next_phase)
-        final_vx = jnp.where(picked_up, jnp.int32(0), vx)
-        final_vy = jnp.where(picked_up, jnp.int32(0), vy)
-        return final_phase, final_vx, final_vy
-
-
-class _ArenaOps:
-    @staticmethod
-    def compute_arena(
-        c: TronConstants,
-    ) -> Tuple[Rect, Rect, Tuple[Rect, Rect, Rect, Rect], Rect]:
-        """
-        Returns: (gamefield_rect, scorebar_rect, (top,bottom,left,right) border rects, inner_play_rect)
-        All rects are in screen coordinates.
-        """
-        game = Rect(c.game_x, c.game_y, c.game_w, c.game_h)
-        score = Rect(game.x, game.y, game.w, c.score_h)
-
-        # y positions for purple border bands
-        top_y = game.y + c.score_h + c.score_gap
-        bottom_y = game.y + game.h - c.bord_bot
-
-        # horizontal bars (top/bottom)
-        # note: width ends before the right 8px margin to match the original layout
-        horizontal_w = game.w - c.bord_right
-        top = Rect(game.x, top_y, horizontal_w, c.bord_top)
-        bottom = Rect(game.x, bottom_y, horizontal_w, c.bord_bot)
-
-        # vertical bars (left/right)
-        inner_h = bottom.y - (top.y + c.bord_top)  # space between top/bottom bars
-        left = Rect(game.x, top.y + c.bord_top, c.bord_left, inner_h)
-        right = Rect(game.x + game.w - 2 * c.bord_right, left.y, c.bord_right, inner_h)
-
-        # inner play rectangle = area inside the purple bars
-        inner = Rect(left.x + left.w, left.y, right.x - (left.x + left.w), inner_h)
-        return game, score, (top, bottom, left, right), inner
-
-    @staticmethod
-    def _place_doors_evenly(start: int, length: int, n: int, size: int) -> list[int]:
-        """
-        Place n doors of `size` evenly within [start, start+length)
-        Returns the list of left/top coordinates for door
-        """
-        # split free space into (n+1) gaps. one on the left, (n-1) between the slots and
-        # one on the right
-        gap = (length - n * size) // (n + 1)
-        return [start + gap + i * (size + gap) for i in range(n)]
-
-    @staticmethod
-    def make_initial_doors(c: TronConstants) -> Doors:
-        # Use arena rects (ints)
-        game, score, (top, bottom, left, right), inner = _ArenaOps.compute_arena(c)
-
-        door_w, door_h = c.door_w, c.door_h
-
-        # Top/bottom: 4 each, doors sit ON the purple border
-        top_xs = _ArenaOps._place_doors_evenly(top.x, top.w, 4, door_w)
-        bottom_xs = _ArenaOps._place_doors_evenly(bottom.x, bottom.w, 4, door_w)
-        top_ys, bottom_ys = [top.y] * 4, [bottom.y] * 4
-
-        # Left/right: 2 each, vary along vertical span; x fixed at bars x
-        left_ys = _ArenaOps._place_doors_evenly(left.y, left.h, 2, door_h)
-        right_ys = _ArenaOps._place_doors_evenly(right.y, right.h, 2, door_h)
-        left_xs, right_xs = [left.x] * 2, [right.x] * 2
-
-        # Concatenate in order: top(4), bottom(4), left(2), right(2)
-        xs = top_xs + bottom_xs + left_xs + right_xs
-        ys = top_ys + bottom_ys + left_ys + right_ys
-        ws = [door_w] * c.max_doors
-        hs = [door_h] * c.max_doors
-
-        # Sides
-        # ids 0 - 3 for the sides
-        sides = [SIDE_TOP] * 4 + [SIDE_BOTTOM] * 4 + [SIDE_LEFT] * 2 + [SIDE_RIGHT] * 2
-
-        # Pair mapping (teleport targets): Top i <-> Bottom i, Left i <-> Right i
-        # Indices: 0..3 top, 4..7 bottom, 8..9 left, 10..11 right
-        pairs = [4 + i for i in range(4)] + [i for i in range(4)] + [10, 11] + [8, 9]
-
-        # Initial state: show doors; not locked; no cooldown
-        is_spawned = [False] * c.max_doors
-        is_locked_open = [False] * c.max_doors
-        lockdown = [0] * c.max_doors
-
-        # Convert to JAX arrays
-        to_i32 = lambda L: jnp.asarray(L, dtype=jnp.int32)
-        to_b = lambda L: jnp.asarray(L, dtype=jnp.bool_)
-
-        return Doors(
-            x=to_i32(xs),
-            y=to_i32(ys),
-            w=to_i32(ws),
-            h=to_i32(hs),
-            is_spawned=to_b(is_spawned),
-            is_locked_open=to_b(is_locked_open),
-            spawn_lockdown=to_i32(lockdown),
-            side=to_i32(sides),
-            pair=to_i32(pairs),
-        )
-
-    @staticmethod
-    @jit
-    def tick_door_lockdown(doors: Doors) -> Doors:
-        """Decrement per-door spawn cooldown timers (floored at 0)."""
-        return doors.replace(spawn_lockdown=jnp.maximum(doors.spawn_lockdown - 1, 0))
-
-
-Actor = TypeVar("Actor", Player, Discs)
-
-
 class UserAction(NamedTuple):
     """Boolean flags for the players action"""
 
@@ -611,157 +355,13 @@ class UserAction(NamedTuple):
     moved: Array  # flag for any movement
 
 
-@jit
-def parse_action(action: Array) -> UserAction:
-    """Translate the raw action integer into a UserAction"""
-    is_up = (
-        (action == Action.UP)
-        | (action == Action.UPRIGHT)
-        | (action == Action.UPLEFT)
-        | (action == Action.UPFIRE)
-        | (action == Action.UPRIGHTFIRE)
-        | (action == Action.UPLEFTFIRE)
-    )
-
-    is_down = (
-        (action == Action.DOWN)
-        | (action == Action.DOWNRIGHT)
-        | (action == Action.DOWNLEFT)
-        | (action == Action.DOWNFIRE)
-        | (action == Action.DOWNRIGHTFIRE)
-        | (action == Action.DOWNLEFTFIRE)
-    )
-
-    is_right = (
-        (action == Action.RIGHT)
-        | (action == Action.UPRIGHT)
-        | (action == Action.DOWNRIGHT)
-        | (action == Action.RIGHTFIRE)
-        | (action == Action.UPRIGHTFIRE)
-        | (action == Action.DOWNRIGHTFIRE)
-    )
-
-    is_left = (
-        (action == Action.LEFT)
-        | (action == Action.UPLEFT)
-        | (action == Action.DOWNLEFT)
-        | (action == Action.LEFTFIRE)
-        | (action == Action.UPLEFTFIRE)
-        | (action == Action.DOWNLEFTFIRE)
-    )
-
-    is_fire = (
-        (action == Action.FIRE)
-        | (action == Action.UPFIRE)
-        | (action == Action.RIGHTFIRE)
-        | (action == Action.LEFTFIRE)
-        | (action == Action.DOWNFIRE)
-        | (action == Action.UPRIGHTFIRE)
-        | (action == Action.UPLEFTFIRE)
-        | (action == Action.DOWNRIGHTFIRE)
-        | (action == Action.DOWNLEFTFIRE)
-    )
-
-    # The moved flag is just an OR of the directions
-    has_moved = is_up | is_down | is_left | is_right
-
-    return UserAction(
-        up=is_up,
-        down=is_down,
-        left=is_left,
-        right=is_right,
-        fire=is_fire,
-        moved=has_moved,
-    )
-
-
-# --- Helper functions for procedural asset creation ---
-def _solid_sprite(h: int, w: int, rgba: Tuple[int, int, int, int]) -> Array:
-    """Creates a JAX array for a solid color sprite."""
-    return jnp.broadcast_to(jnp.asarray(rgba, dtype=jnp.uint8), (h, w, 4))
-
-def _normalize_rgba(arr: jnp.ndarray) -> jnp.ndarray:
-    """Ensure sprite is RGBA uint8."""
-    if arr.ndim == 2:  # Grayscale
-        mask = (arr > 0).astype(jnp.uint8)
-        arr_3c = jnp.stack([arr, arr, arr], axis=-1)
-        alpha = mask * 255
-        return jnp.concatenate([arr_3c, alpha[..., None]], axis=-1).astype(jnp.uint8)
-    if arr.shape[-1] == 3:  # RGB
-        a = (jnp.max(arr, axis=-1, keepdims=True) > 0).astype(jnp.uint8) * 255
-        return jnp.concatenate([arr, a], axis=-1).astype(jnp.uint8)
-    return arr.astype(jnp.uint8)
-
-def _load_and_normalize_seq(sprite_path: str, prefix: str) -> jnp.ndarray:
-    """Loads a sequence of 4 sprites (e.g., 'player1.npy'...) and normalizes to RGBA."""
-    frames = []
-    for i in range(1, 5):
-        path = os.path.join(sprite_path, f"{prefix}{i}.npy")
-        frame = jnp.load(path)
-        if not isinstance(frame, jnp.ndarray):
-            raise FileNotFoundError(path)
-        frames.append(_normalize_rgba(frame))
-    return jnp.stack(frames, axis=0)
-
-def _load_base_digit_sprites(sprite_path: str) -> Tuple[Array, int, int]:
-    """Loads 0..9.npy files, normalizes to RGBA, and stacks them."""
-    frames = []
-    for d in range(10):
-        path = os.path.join(sprite_path, f"{d}.npy")
-        frame = jnp.load(path)
-        if not isinstance(frame, jnp.ndarray):
-            raise FileNotFoundError(path)
-        frames.append(_normalize_rgba(frame))
-    
-    arr = jnp.stack(frames, axis=0)  # (10, H, W, 4)
-    H = int(arr.shape[1])
-    W = int(arr.shape[2])
-    return arr, W, H
-
-@jit
-def _tint_rgba(sprite_rgba: Array, rgba_any: Array) -> Array:
-    """Colorizes a base sprite by multiplying channels (alpha preserved)."""
-    base_rgb = sprite_rgba[..., :3].astype(jnp.float32)
-    alpha = sprite_rgba[..., 3:4].astype(jnp.uint8)
-    color_rgb = jnp.asarray(rgba_any, dtype=jnp.float32)[:3]  # (3,)
-    
-    rgb_tinted = jnp.clip(jnp.round((base_rgb / 255.0) * color_rgb), 0, 255).astype(
-        jnp.uint8
-    )
-    return jnp.concatenate([rgb_tinted, alpha], axis=-1)
-
-@partial(jit, static_argnames=("h", "w"))
-def _make_solid_sprites(colors: Array, h: int, w: int) -> Array:
-    """Build one solid color sprite (h, w, 4) for each color in colors (N, 4)."""
-    # colors shape (N, 4) -> reshape to (N, 1, 1, 4)
-    # broadcast to (N, h, w, 4)
-    return jnp.broadcast_to(colors[:, None, None, :], (colors.shape[0], h, w, 4))
-
-@jit
-def _precompute_tints(seq: Array, colors: Array) -> Array:
-    """
-    Tints a sprite sequence (F, H, W, 4) by a color array (C, 4).
-    Returns (C, F, H, W, 4).
-    """
-    def tint_one(color, frame):
-        return _tint_rgba(frame, color)
-    # vmap over frames (F), then vmap over colors (C)
-    # Result shape (F, C, H, W, 4)
-    tinted = vmap(
-        lambda frame: vmap(lambda col: tint_one(col, frame))(colors)
-    )(seq)
-    # Reorder to (C, F, H, W, 4)
-    return jnp.transpose(tinted, (1, 0, 2, 3, 4))
-
-
 class TronRenderer(JAXGameRenderer):
 
     def __init__(self, consts: TronConstants = None, config: render_utils.RendererConfig = None) -> None:
         self.consts = consts or TronConstants()
         super().__init__(self.consts)
         c = self.consts
-        
-        # Use injected config if provided, else default
+
         if config is None:
             self.config = render_utils.RendererConfig(
                 game_dimensions=(c.screen_height, c.screen_width),
@@ -772,80 +372,12 @@ class TronRenderer(JAXGameRenderer):
             self.config = config
         self.jr = render_utils.JaxRenderingUtils(self.config)
         self.sprite_path = os.path.join(render_utils.get_base_sprite_dir(), "tron")
-        
-        # 1.5. Compute arena geometry (needed for background generation)
+
         (self.game_rect, self.score_rect, self.border_rects, self.inner_rect) = (
-            _ArenaOps.compute_arena(self.consts)
+            self._compute_arena(c)
         )
-        
-        # 2. Create procedural background (RGBA array)
-        procedural_background = self._build_static_background(c)
-        
-        # 3. Load base (grayscale/white) sprites
-        player_seq = _load_and_normalize_seq(self.sprite_path, "player")
-        enemy_seq = _load_and_normalize_seq(self.sprite_path, "enemy")
-        base_digits, digit_w, digit_h = _load_base_digit_sprites(self.sprite_path)
-        
-        # 4. Create color arrays
-        player_colors = jnp.asarray(c.player_life_colors_rgba, dtype=jnp.uint8)
-        wave_colors = jnp.asarray(c.wave_enemy_colors_rgba, dtype=jnp.uint8)
-        score_color = jnp.asarray(c.rgba_score_color, dtype=jnp.uint8)
-        
-        # 5. Pre-tint all procedural assets
-        player_frames_by_color = _precompute_tints(player_seq, player_colors)  # (C, F, H, W, 4)
-        enemy_frames_by_wave = _precompute_tints(enemy_seq, wave_colors)  # (W, F, H, W, 4)
-        tinted_digits = vmap(lambda fr: _tint_rgba(fr, score_color))(base_digits)  # (10, H, W, 4)
-        player_disc_out = _make_solid_sprites(
-            player_colors, int(c.disc_size_out[1]), int(c.disc_size_out[0])
-        )  # (C, H, W, 4)
-        player_disc_ret = _make_solid_sprites(
-            player_colors, int(c.disc_size_ret[1]), int(c.disc_size_ret[0])
-        )  # (C, H, W, 4)
-        enemy_disc_out = _make_solid_sprites(
-            wave_colors, int(c.disc_size_out[1]), int(c.disc_size_out[0])
-        )  # (W, H, W, 4)
-        door_spawn_sprite = _solid_sprite(c.door_h, c.door_w, c.rgba_door_spawn)
-        door_locked_sprite = _solid_sprite(c.door_h, c.door_w, c.rgba_door_locked)
-        
-        # Reshape 5D arrays to 4D for asset loading (flatten color and frame dimensions)
-        # player_frames_by_color: (C, F, H, W, 4) -> (C*F, H, W, 4)
-        n_player_colors = player_frames_by_color.shape[0]
-        n_player_frames = player_frames_by_color.shape[1]
-        player_frames_flat = player_frames_by_color.reshape(-1, *player_frames_by_color.shape[2:])
-        
-        # enemy_frames_by_wave: (W, F, H, W, 4) -> (W*F, H, W, 4)
-        n_waves = enemy_frames_by_wave.shape[0]
-        n_enemy_frames = enemy_frames_by_wave.shape[1]
-        enemy_frames_flat = enemy_frames_by_wave.reshape(-1, *enemy_frames_by_wave.shape[2:])
-        
-        # 6. Start from (possibly modded) asset config provided via constants
-        final_asset_config = list(self.consts.ASSET_CONFIG)
-        
-        # 6.1. Build the full asset manifest from loaded sprites
-        # Note: Most assets are procedurally generated from loaded files
-        static_procedural = _create_static_procedural_sprites(c)
-        
-        final_asset_config.extend([
-            {'name': 'background', 'type': 'background', 'data': procedural_background},
-            
-            # Pre-tinted animation stacks (reshaped to 4D for asset loading)
-            {'name': 'player_all_tints', 'type': 'procedural', 'data': player_frames_flat},
-            {'name': 'enemy_all_tints', 'type': 'procedural', 'data': enemy_frames_flat},
-            
-            # Pre-tinted digits
-            {'name': 'digits_tinted', 'type': 'procedural', 'data': tinted_digits},
-            
-            # Doors (from static procedural)
-            {'name': 'door_spawn', 'type': 'procedural', 'data': static_procedural['door_spawn']},
-            {'name': 'door_locked', 'type': 'procedural', 'data': static_procedural['door_locked']},
-            
-            # Pre-tinted disc stacks
-            {'name': 'player_disc_out_all_tints', 'type': 'procedural', 'data': player_disc_out},
-            {'name': 'player_disc_ret_all_tints', 'type': 'procedural', 'data': player_disc_ret},
-            {'name': 'enemy_disc_out_all_tints', 'type': 'procedural', 'data': enemy_disc_out},
-        ])
-        
-        # 7. Load all assets and build palette/masks
+
+        final_asset_config = self._build_asset_config(c)
         (
             self.PALETTE,
             self.SHAPE_MASKS,
@@ -853,21 +385,152 @@ class TronRenderer(JAXGameRenderer):
             self.COLOR_TO_ID,
             self.FLIP_OFFSETS
         ) = self.jr.load_and_setup_assets(final_asset_config, self.sprite_path)
-        
-        # 8. Store sprite dimensions
-        # player_all_tints mask shape is (C*F, H, W) after flattening
-        self.PLAYER_H, self.PLAYER_W = self.SHAPE_MASKS["player_all_tints"].shape[1:3]
-        self.N_PLAYER_FRAMES = n_player_frames
-        self.N_PLAYER_COLORS = n_player_colors
-        
-        # enemy_all_tints mask shape is (W*F, H, W) after flattening
-        self.ENEMY_H, self.ENEMY_W = self.SHAPE_MASKS["enemy_all_tints"].shape[1:3]
-        self.N_ENEMY_FRAMES = n_enemy_frames
-        self.N_WAVES = n_waves
-        
-        # digits_tinted mask shape is (10, H, W)
-        self.DIGIT_H, self.DIGIT_W = self.SHAPE_MASKS["digits_tinted"].shape[1:3]
-    
+
+        n_player_colors = int(np.asarray(c.player_life_colors_rgba).shape[0])
+        n_waves = int(np.asarray(c.wave_enemy_colors_rgba).shape[0])
+        self.PLAYER_TINTS = self._stack_recolored("player", "life", n_player_colors)
+        self.ENEMY_TINTS = self._stack_recolored("enemy", "wave", n_waves)
+
+        self.N_PLAYER_COLORS = int(self.PLAYER_TINTS.shape[0])
+        self.N_PLAYER_FRAMES = int(self.PLAYER_TINTS.shape[1])
+        self.PLAYER_H = int(self.PLAYER_TINTS.shape[2])
+        self.PLAYER_W = int(self.PLAYER_TINTS.shape[3])
+        self.N_WAVES = int(self.ENEMY_TINTS.shape[0])
+        self.N_ENEMY_FRAMES = int(self.ENEMY_TINTS.shape[1])
+        self.ENEMY_H = int(self.ENEMY_TINTS.shape[2])
+        self.ENEMY_W = int(self.ENEMY_TINTS.shape[3])
+
+        digits_key = "digits_score" if "digits_score" in self.SHAPE_MASKS else "digits"
+        self.DIGITS = self.SHAPE_MASKS[digits_key]
+        self.DIGIT_H = int(self.DIGITS.shape[1])
+        self.DIGIT_W = int(self.DIGITS.shape[2])
+        self.PLAYER_FLIP_OFFSET = self.FLIP_OFFSETS["player"]
+        self.ENEMY_FLIP_OFFSET = self.FLIP_OFFSETS["enemy"]
+
+    def _compute_arena(
+        self, c: TronConstants
+    ) -> Tuple[Rect, Rect, Tuple[Rect, Rect, Rect, Rect], Rect]:
+        game = Rect(c.game_x, c.game_y, c.game_w, c.game_h)
+        score = Rect(game.x, game.y, game.w, c.score_h)
+        top_y = game.y + c.score_h + c.score_gap
+        bottom_y = game.y + game.h - c.bord_bot
+        horizontal_w = game.w - c.bord_right
+        top = Rect(game.x, top_y, horizontal_w, c.bord_top)
+        bottom = Rect(game.x, bottom_y, horizontal_w, c.bord_bot)
+        inner_h = bottom.y - (top.y + c.bord_top)
+        left = Rect(game.x, top.y + c.bord_top, c.bord_left, inner_h)
+        right = Rect(game.x + game.w - 2 * c.bord_right, left.y, c.bord_right, inner_h)
+        inner = Rect(left.x + left.w, left.y, right.x - (left.x + left.w), inner_h)
+        return game, score, (top, bottom, left, right), inner
+
+    @staticmethod
+    def _solid_sprite(h: int, w: int, rgba) -> Array:
+        return jnp.broadcast_to(jnp.asarray(rgba, dtype=jnp.uint8), (h, w, 4))
+
+    @staticmethod
+    def _make_solid_sprites(colors: Array, h: int, w: int) -> Array:
+        return jnp.broadcast_to(colors[:, None, None, :], (colors.shape[0], h, w, 4))
+
+    def _build_asset_config(self, c: TronConstants) -> list:
+        """Start from (possibly modded) ASSET_CONFIG, refresh recolorings from consts, add procedural assets."""
+        final_asset_config = [dict(asset) for asset in self.consts.ASSET_CONFIG]
+        names = {asset.get("name") for asset in final_asset_config}
+
+        player_colors = np.asarray(c.player_life_colors_rgba)
+        wave_colors = np.asarray(c.wave_enemy_colors_rgba)
+        score_color = np.asarray(c.rgba_score_color)
+
+        for asset in final_asset_config:
+            name = asset.get("name")
+            if name == "player":
+                asset["recolorings"] = {
+                    f"life{i}": _rgb(col) for i, col in enumerate(player_colors)
+                }
+            elif name == "enemy":
+                asset["recolorings"] = {
+                    f"wave{i}": _rgb(col) for i, col in enumerate(wave_colors)
+                }
+            elif name == "digits":
+                asset["recolorings"] = {"score": _rgb(score_color)}
+
+        if "background" not in names:
+            final_asset_config.insert(0, {
+                "name": "background",
+                "type": "background",
+                "data": self._build_static_background(c),
+            })
+        if "door_spawn" not in names:
+            final_asset_config.append({
+                "name": "door_spawn",
+                "type": "procedural",
+                "data": self._solid_sprite(c.door_h, c.door_w, c.rgba_door_spawn),
+            })
+        if "door_locked" not in names:
+            final_asset_config.append({
+                "name": "door_locked",
+                "type": "procedural",
+                "data": self._solid_sprite(c.door_h, c.door_w, c.rgba_door_locked),
+            })
+        if "player_disc_out" not in names:
+            final_asset_config.append({
+                "name": "player_disc_out",
+                "type": "procedural",
+                "data": self._make_solid_sprites(
+                    jnp.asarray(c.player_life_colors_rgba, dtype=jnp.uint8),
+                    int(c.disc_size_out[1]),
+                    int(c.disc_size_out[0]),
+                ),
+            })
+        if "player_disc_ret" not in names:
+            final_asset_config.append({
+                "name": "player_disc_ret",
+                "type": "procedural",
+                "data": self._make_solid_sprites(
+                    jnp.asarray(c.player_life_colors_rgba, dtype=jnp.uint8),
+                    int(c.disc_size_ret[1]),
+                    int(c.disc_size_ret[0]),
+                ),
+            })
+        if "enemy_disc_out" not in names:
+            final_asset_config.append({
+                "name": "enemy_disc_out",
+                "type": "procedural",
+                "data": self._make_solid_sprites(
+                    jnp.asarray(c.wave_enemy_colors_rgba, dtype=jnp.uint8),
+                    int(c.disc_size_out[1]),
+                    int(c.disc_size_out[0]),
+                ),
+            })
+        return final_asset_config
+
+    def _stack_recolored(self, base_name: str, prefix: str, n: int) -> Array:
+        keys = [f"{base_name}_{prefix}{i}" for i in range(n)]
+        present = [k for k in keys if k in self.SHAPE_MASKS]
+        if present:
+            return jnp.stack([self.SHAPE_MASKS[k] for k in present], axis=0)
+        base = self.SHAPE_MASKS[base_name]
+        if base.ndim == 2:
+            base = base[None, ...]
+        return base[None, ...]
+
+    @staticmethod
+    def _player_color_index(
+        lives,
+        max_lives,
+        blink_ticks_remaining,
+        blink_period_frames,
+    ):
+        max_lives = jnp.int32(max_lives)
+        hits = jnp.clip(max_lives - lives, 0, jnp.int32(5))
+        base_idx = jnp.clip(hits, 0, jnp.int32(4))
+        period = jnp.int32(blink_period_frames)
+        toggle = jnp.mod(blink_ticks_remaining // period, 2)
+        return jax.lax.select(
+            lives == jnp.int32(0),
+            jax.lax.select(toggle == 0, jnp.int32(5), jnp.int32(4)),
+            base_idx,
+        )
+
     def _build_static_background(self, c: TronConstants) -> Array:
         """
         Compose the static background layer for the game as an RGBA array.
@@ -957,7 +620,7 @@ class TronRenderer(JAXGameRenderer):
             x0, 
             y0, 
             digits_idx, 
-            self.SHAPE_MASKS["digits_tinted"], 
+            self.DIGITS, 
             spacing=self.DIGIT_W + c.score_spacing,  # Python int computation
             max_digits=c.score_digits  # Python int from constants
         )
@@ -981,7 +644,7 @@ class TronRenderer(JAXGameRenderer):
         # 4. Render Player
         def draw_player(r):
             # Get correct color index
-            color_idx = player_color_index(
+            color_idx = self._player_color_index(
                 state.player.lives[0],
                 c.player_lives,
                 state.player_blink_ticks_remaining,
@@ -997,9 +660,7 @@ class TronRenderer(JAXGameRenderer):
                 jnp.int32(0),
             )
             
-            # Select the pre-tinted mask (flattened index: color_idx * n_frames + frame_idx)
-            flat_idx = color_idx * jnp.int32(self.N_PLAYER_FRAMES) + fidx
-            player_mask = self.SHAPE_MASKS["player_all_tints"][flat_idx]
+            player_mask = self.PLAYER_TINTS[color_idx, fidx]
             
             # Flipping logic
             face_left = state.facing_dx < jnp.int32(0)
@@ -1010,13 +671,13 @@ class TronRenderer(JAXGameRenderer):
                 state.player.y[0], 
                 player_mask, 
                 flip_horizontal=face_left,
-                flip_offset=self.FLIP_OFFSETS["player_all_tints"]
+                flip_offset=self.PLAYER_FLIP_OFFSET
             )
         raster = jax.lax.cond(state.player_gone, lambda r: r, draw_player, raster)
         
         # 5. Render Discs
         # Get target color indices for this frame
-        player_color_idx = player_color_index(
+        player_color_idx = self._player_color_index(
             state.player.lives[0],
             c.player_lives,
             state.player_blink_ticks_remaining,
@@ -1037,14 +698,14 @@ class TronRenderer(JAXGameRenderer):
                 def draw_player(rr):
                     return jax.lax.cond(
                         phase == jnp.int32(1),  # outbound
-                        lambda r2: self.jr.render_at(r2, xi, yi, self.SHAPE_MASKS["player_disc_out_all_tints"][player_color_idx]),
-                        lambda r2: self.jr.render_at(r2, xi, yi, self.SHAPE_MASKS["player_disc_ret_all_tints"][player_color_idx]),
+                        lambda r2: self.jr.render_at(r2, xi, yi, self.SHAPE_MASKS["player_disc_out"][player_color_idx]),
+                        lambda r2: self.jr.render_at(r2, xi, yi, self.SHAPE_MASKS["player_disc_ret"][player_color_idx]),
                         rr
                     )
                 
                 # Enemy discs always use the same shape
                 def draw_enemy(rr):
-                    mask = self.SHAPE_MASKS["enemy_disc_out_all_tints"][wave_idx]
+                    mask = self.SHAPE_MASKS["enemy_disc_out"][wave_idx]
                     return self.jr.render_at(rr, xi, yi, mask)
                 
                 return jax.lax.cond(is_player, draw_player, draw_enemy, r)
@@ -1055,9 +716,7 @@ class TronRenderer(JAXGameRenderer):
         e_step = jnp.int32(c.enemy_animation_steps)
         e_idx = jnp.mod(state.frame_idx // e_step, jnp.int32(self.N_ENEMY_FRAMES))
         
-        # Get the pre-tinted mask for this wave color and anim frame (flattened index)
-        enemy_flat_idx = wave_idx * jnp.int32(self.N_ENEMY_FRAMES) + e_idx
-        enemy_mask = self.SHAPE_MASKS["enemy_all_tints"][enemy_flat_idx]
+        enemy_mask = self.ENEMY_TINTS[wave_idx, e_idx]
         def render_enemy(i, ras):
             alive = state.enemies.alive[i]
             ex = state.enemies.x[i]
@@ -1065,7 +724,7 @@ class TronRenderer(JAXGameRenderer):
             
             return jax.lax.cond(
                 alive, 
-                lambda r: self.jr.render_at(r, ex, ey, enemy_mask, flip_offset=self.FLIP_OFFSETS["enemy_all_tints"]), 
+                lambda r: self.jr.render_at(r, ex, ey, enemy_mask, flip_offset=self.ENEMY_FLIP_OFFSET), 
                 lambda r: r, 
                 ras
             )
@@ -1073,122 +732,6 @@ class TronRenderer(JAXGameRenderer):
         
         # 7. Final Palette Lookup (NO color swapping needed)
         return self.jr.render_from_palette(raster, self.PALETTE)
-
-
-####
-# Helper functions
-####
-@jit
-def rect_center(x, y, w, h) -> Tuple[Array, Array]:
-    """Calculates the center of a rectangle"""
-    return x + jnp.floor_divide(w, 2), y + jnp.floor_divide(h, 2)
-
-
-@jit
-def _find_first_true(mask: Array) -> Tuple[Array, Array]:
-    """Return (has_any, first_index) for a 1D bool mask"""
-    idx = jnp.argmax(mask.astype(jnp.int32))
-    has = jnp.any(mask)
-    return has, idx
-
-
-@jit
-def player_color_index(
-    lives,  # () int32
-    max_lives,  # python int or () int32
-    blink_ticks_remaining,  # () int32
-    blink_period_frames,  # python int or () int32
-):
-    # Map lives to color index
-    # - while alive (lives > 0): index increases with number of hits (0..4)
-    # - when dead (lives == 0): blink by alternating between indices 5 and 4
-    max_lives = jnp.int32(max_lives)
-    hits = jnp.clip(max_lives - lives, 0, jnp.int32(5))
-    base_idx = jnp.clip(hits, 0, jnp.int32(4))
-
-    # Compute blink toggle: every player_blink_period_frames frames flip 0/1
-    period = jnp.int32(blink_period_frames)
-    toggle = jnp.mod(blink_ticks_remaining // period, 2)
-
-    return jax.lax.select(
-        lives == jnp.int32(0),  # dead → blink 5/4
-        jax.lax.select(toggle == 0, jnp.int32(5), jnp.int32(4)),
-        base_idx,  # alive → 0..4
-    )
-
-
-@jit
-def tick_cd(x: Array) -> Array:
-    # Decrement by 1 but never below 0, preserving dtype
-    one = jnp.asarray(1, dtype=x.dtype)
-    zero = jnp.asarray(0, dtype=x.dtype)
-    return jnp.maximum(x - one, zero)
-
-
-@jit
-def _select_door_for_spawn(
-    doors: Doors,
-    rng_key: random.PRNGKey,
-    prefer_new_prob: float,
-) -> Tuple[Array, Array, Doors, random.PRNGKey]:
-    """
-    Choose a door index to spawn an enemy from:
-      - prefer reusing an existing spawned door
-      - otherwise, try to spawn (make visible) a new door
-      - fallback: any spawned & unlocked door if all quadrants are busy
-      - when BOTH reuse and new are available, pick NEW with probability `prefer_new_prob`
-
-    Returns (has_choice, door_index, updated_doors, next_rng_key).
-    """
-    # total number of doors
-    n_doors = doors.x.shape[0]
-
-    # All doors have a lockdown, between spawning enemies
-    # Select only those, with a lockdown of 0
-    door_unlocked = doors.spawn_lockdown == jnp.int32(0)
-
-    # Select doors, that are already spawned, have a cooldown of 0
-    reuse_mask = doors.is_spawned & door_unlocked
-    # Select doors, that are not yet spawned, have a cooldown of 0
-    new_mask = (~doors.is_spawned) & door_unlocked
-
-    reuse_cnt = jnp.sum(reuse_mask.astype(jnp.int32))
-    new_cnt = jnp.sum(new_mask.astype(jnp.int32))
-
-    has_reuse = reuse_cnt > 0
-    has_new = new_cnt > 0
-
-    rng_key, k_pick_set, k_pick_new, k_pick_reuse = random.split(rng_key, 4)
-    pick_new_sample = random.bernoulli(k_pick_set, p=jnp.float32(prefer_new_prob))
-
-    choose_new = has_new & (~has_reuse | pick_new_sample)
-    choose_reuse = has_reuse & (~has_new | (~pick_new_sample))
-
-    def _sample(mask, count, key):
-        idx_pad = jnp.nonzero(mask, size=n_doors)[0]
-        pos = random.randint(key, (), 0, jnp.maximum(count, 1), dtype=jnp.int32)
-        return idx_pad[pos]
-
-    def _pick_reuse(_):
-        idx = _sample(reuse_mask, reuse_cnt, k_pick_reuse)
-        return True, idx, doors, rng_key
-
-    def _pick_new(_):
-        idx = _sample(new_mask, new_cnt, k_pick_new)
-        upd = doors.replace(is_spawned=doors.is_spawned.at[idx].set(True))
-        return True, idx, upd, rng_key
-
-    def _fallback(_):
-        # reuse_mask==spawned&unlocked, and we already know has_reuse==False here,
-        # so return (False,0,…) to signal no choice.
-        return False, jnp.int32(0), doors, rng_key
-
-    return jax.lax.cond(
-        choose_new,
-        _pick_new,
-        lambda _: jax.lax.cond(choose_reuse, _pick_reuse, _fallback, operand=None),
-        operand=None,
-    )
 
 
 class JaxTron(JaxEnvironment[TronState, TronObservation, TronInfo, TronConstants]):
@@ -1226,7 +769,7 @@ class JaxTron(JaxEnvironment[TronState, TronObservation, TronInfo, TronConstants
 
         # Precompute static rects
         (self.game_rect, self.score_rect, self.border_rects, self.inner_rect) = (
-            _ArenaOps.compute_arena(self.consts)
+            self._compute_arena(self.consts)
         )
 
         # Precompute JAX scalars
@@ -1236,7 +779,7 @@ class JaxTron(JaxEnvironment[TronState, TronObservation, TronInfo, TronConstants
         self.inner_max_y = jnp.int32(self.inner_rect.y + self.inner_rect.h)
 
         # Prebuild initial doors (geometry + default state)
-        self.initial_doors = _ArenaOps.make_initial_doors(self.consts)
+        self.initial_doors = self._make_initial_doors(self.consts)
 
         self.player_w = jnp.int32(self.renderer.PLAYER_W)
         self.player_h = jnp.int32(self.renderer.PLAYER_H)
@@ -1246,6 +789,300 @@ class JaxTron(JaxEnvironment[TronState, TronObservation, TronInfo, TronConstants
         # Disc sizes (match renderer atlases)
         self.disc_w = jnp.int32(self.consts.disc_size_out[0])  # 4
         self.disc_h = jnp.int32(self.consts.disc_size_out[1])  # 2
+
+    def _compute_arena(
+        self, c: TronConstants = None
+    ) -> Tuple[Rect, Rect, Tuple[Rect, Rect, Rect, Rect], Rect]:
+        """Returns (gamefield_rect, scorebar_rect, (top,bottom,left,right) border rects, inner_play_rect)."""
+        c = self.consts if c is None else c
+        game = Rect(c.game_x, c.game_y, c.game_w, c.game_h)
+        score = Rect(game.x, game.y, game.w, c.score_h)
+        top_y = game.y + c.score_h + c.score_gap
+        bottom_y = game.y + game.h - c.bord_bot
+        horizontal_w = game.w - c.bord_right
+        top = Rect(game.x, top_y, horizontal_w, c.bord_top)
+        bottom = Rect(game.x, bottom_y, horizontal_w, c.bord_bot)
+        inner_h = bottom.y - (top.y + c.bord_top)
+        left = Rect(game.x, top.y + c.bord_top, c.bord_left, inner_h)
+        right = Rect(game.x + game.w - 2 * c.bord_right, left.y, c.bord_right, inner_h)
+        inner = Rect(left.x + left.w, left.y, right.x - (left.x + left.w), inner_h)
+        return game, score, (top, bottom, left, right), inner
+
+    @staticmethod
+    def _place_doors_evenly(start: int, length: int, n: int, size: int) -> list:
+        gap = (length - n * size) // (n + 1)
+        return [start + gap + i * (size + gap) for i in range(n)]
+
+    def _make_initial_doors(self, c: TronConstants = None) -> Doors:
+        c = self.consts if c is None else c
+        game, score, (top, bottom, left, right), inner = self._compute_arena(c)
+        del game, score, inner
+        door_w, door_h = c.door_w, c.door_h
+        top_xs = self._place_doors_evenly(top.x, top.w, 4, door_w)
+        bottom_xs = self._place_doors_evenly(bottom.x, bottom.w, 4, door_w)
+        top_ys, bottom_ys = [top.y] * 4, [bottom.y] * 4
+        left_ys = self._place_doors_evenly(left.y, left.h, 2, door_h)
+        right_ys = self._place_doors_evenly(right.y, right.h, 2, door_h)
+        left_xs, right_xs = [left.x] * 2, [right.x] * 2
+        xs = top_xs + bottom_xs + left_xs + right_xs
+        ys = top_ys + bottom_ys + left_ys + right_ys
+        ws = [door_w] * c.max_doors
+        hs = [door_h] * c.max_doors
+        sides = [SIDE_TOP] * 4 + [SIDE_BOTTOM] * 4 + [SIDE_LEFT] * 2 + [SIDE_RIGHT] * 2
+        pairs = [4 + i for i in range(4)] + [i for i in range(4)] + [10, 11] + [8, 9]
+        is_spawned = [False] * c.max_doors
+        is_locked_open = [False] * c.max_doors
+        lockdown = [0] * c.max_doors
+        to_i32 = lambda L: jnp.asarray(L, dtype=jnp.int32)
+        to_b = lambda L: jnp.asarray(L, dtype=jnp.bool_)
+        return Doors(
+            x=to_i32(xs),
+            y=to_i32(ys),
+            w=to_i32(ws),
+            h=to_i32(hs),
+            is_spawned=to_b(is_spawned),
+            is_locked_open=to_b(is_locked_open),
+            spawn_lockdown=to_i32(lockdown),
+            side=to_i32(sides),
+            pair=to_i32(pairs),
+        )
+
+    @partial(jit, static_argnums=(0,))
+    def _tick_door_lockdown(self, doors: Doors) -> Doors:
+        return doors.replace(spawn_lockdown=jnp.maximum(doors.spawn_lockdown - 1, 0))
+
+    @partial(jit, static_argnums=(0,))
+    def _parse_action(self, action: Array) -> UserAction:
+        is_up = (
+            (action == Action.UP)
+            | (action == Action.UPRIGHT)
+            | (action == Action.UPLEFT)
+            | (action == Action.UPFIRE)
+            | (action == Action.UPRIGHTFIRE)
+            | (action == Action.UPLEFTFIRE)
+        )
+        is_down = (
+            (action == Action.DOWN)
+            | (action == Action.DOWNRIGHT)
+            | (action == Action.DOWNLEFT)
+            | (action == Action.DOWNFIRE)
+            | (action == Action.DOWNRIGHTFIRE)
+            | (action == Action.DOWNLEFTFIRE)
+        )
+        is_right = (
+            (action == Action.RIGHT)
+            | (action == Action.UPRIGHT)
+            | (action == Action.DOWNRIGHT)
+            | (action == Action.RIGHTFIRE)
+            | (action == Action.UPRIGHTFIRE)
+            | (action == Action.DOWNRIGHTFIRE)
+        )
+        is_left = (
+            (action == Action.LEFT)
+            | (action == Action.UPLEFT)
+            | (action == Action.DOWNLEFT)
+            | (action == Action.LEFTFIRE)
+            | (action == Action.UPLEFTFIRE)
+            | (action == Action.DOWNLEFTFIRE)
+        )
+        is_fire = (
+            (action == Action.FIRE)
+            | (action == Action.UPFIRE)
+            | (action == Action.RIGHTFIRE)
+            | (action == Action.LEFTFIRE)
+            | (action == Action.DOWNFIRE)
+            | (action == Action.UPRIGHTFIRE)
+            | (action == Action.UPLEFTFIRE)
+            | (action == Action.DOWNRIGHTFIRE)
+            | (action == Action.DOWNLEFTFIRE)
+        )
+        has_moved = is_up | is_down | is_left | is_right
+        return UserAction(
+            up=is_up,
+            down=is_down,
+            left=is_left,
+            right=is_right,
+            fire=is_fire,
+            moved=has_moved,
+        )
+
+    @partial(jit, static_argnums=(0,))
+    def _rect_center(self, x, y, w, h) -> Tuple[Array, Array]:
+        return x + jnp.floor_divide(w, 2), y + jnp.floor_divide(h, 2)
+
+    @partial(jit, static_argnums=(0,))
+    def _find_first_true(self, mask: Array) -> Tuple[Array, Array]:
+        idx = jnp.argmax(mask.astype(jnp.int32))
+        has = jnp.any(mask)
+        return has, idx
+
+    @partial(jit, static_argnums=(0,))
+    def _tick_cd(self, x: Array) -> Array:
+        one = jnp.asarray(1, dtype=x.dtype)
+        zero = jnp.asarray(0, dtype=x.dtype)
+        return jnp.maximum(x - one, zero)
+
+    @partial(jit, static_argnums=(0,))
+    def _is_movement_frame(self, state: TronState) -> Array:
+        """True on 30 Hz logic ticks (every movement_period NTSC frames)."""
+        period = jnp.maximum(jnp.int32(self.consts.movement_period), jnp.int32(1))
+        # Align so the first step after reset (frame_idx == 1) is a movement tick.
+        return jnp.equal(jnp.mod(state.frame_idx, period), jnp.mod(jnp.int32(1), period))
+
+    @partial(jit, static_argnums=(0,))
+    def _check_disc_wall_hit(
+        self, discs: Discs, min_x: Array, min_y: Array, max_x: Array, max_y: Array
+    ) -> Array:
+        nx, ny = discs.x + discs.vx, discs.y + discs.vy
+        return (
+            (nx < min_x)
+            | (ny < min_y)
+            | ((nx + discs.w) > max_x)
+            | ((ny + discs.h) > max_y)
+        )
+
+    @partial(jit, static_argnums=(0,))
+    def _compute_disc_next_phase(
+        self, discs: Discs, fire_pressed: Array, next_step_wall: Array
+    ) -> Array:
+        current_phase = discs.phase
+        is_outbound = current_phase == jnp.int32(1)
+        is_owner_player = discs.owner == jnp.int32(0)
+        is_owner_enemy = discs.owner == jnp.int32(1)
+        return_disc = is_outbound & is_owner_player & (fire_pressed | next_step_wall)
+        next_phase = jnp.where(return_disc, jnp.int32(2), current_phase)
+        enemy_despawn_wall = is_outbound & is_owner_enemy & next_step_wall
+        next_phase = jnp.where(enemy_despawn_wall, jnp.int32(0), next_phase)
+        return next_phase
+
+    @partial(jit, static_argnums=(0,))
+    def _compute_disc_velocity(
+        self,
+        discs: Discs,
+        next_phase: Array,
+        player_center_x: Array,
+        player_center_y: Array,
+        inbound_speed: Array,
+    ) -> Tuple[Array, Array]:
+        is_returning_player = (next_phase == jnp.int32(2)) & (discs.owner == jnp.int32(0))
+        is_inactive = next_phase == jnp.int32(0)
+        disc_cx, disc_cy = self._rect_center(discs.x, discs.y, discs.w, discs.h)
+        dx_f = (player_center_x - disc_cx).astype(jnp.float32)
+        dy_f = (player_center_y - disc_cy).astype(jnp.float32)
+        dist = jnp.sqrt(dx_f * dx_f + dy_f * dy_f)
+        denom = jnp.maximum(dist, jnp.float32(1.0))
+        ux = dx_f / denom
+        uy = dy_f / denom
+        speed_f = jnp.asarray(inbound_speed, dtype=jnp.float32)
+        vx_homing = jnp.round(ux * speed_f).astype(jnp.int32)
+        vy_homing = jnp.round(uy * speed_f).astype(jnp.int32)
+        dx_i = (player_center_x - disc_cx).astype(jnp.int32)
+        dy_i = (player_center_y - disc_cy).astype(jnp.int32)
+        close = dist <= speed_f
+        vx_new = jnp.where(close, dx_i, vx_homing)
+        vy_new = jnp.where(close, dy_i, vy_homing)
+        zero_pair = (
+            (vx_new == jnp.int32(0))
+            & (vy_new == jnp.int32(0))
+            & (dist > jnp.float32(0))
+        )
+        vx_new = jnp.where(zero_pair, jnp.sign(dx_f).astype(jnp.int32), vx_new)
+        vy_new = jnp.where(zero_pair, jnp.sign(dy_f).astype(jnp.int32), vy_new)
+        velocity_x = jnp.where(is_returning_player, vx_new, discs.vx)
+        velocity_y = jnp.where(is_returning_player, vy_new, discs.vy)
+        velocity_x = jnp.where(is_inactive, jnp.int32(0), velocity_x)
+        velocity_y = jnp.where(is_inactive, jnp.int32(0), velocity_y)
+        return velocity_x, velocity_y
+
+    @partial(jit, static_argnums=(0,))
+    def _add_and_clamp_discs(
+        self,
+        discs: Discs,
+        next_phase: Array,
+        velocity_x: Array,
+        velocity_y: Array,
+        min_x: Array,
+        min_y: Array,
+        max_x: Array,
+        max_y: Array,
+    ) -> Tuple[Array, Array]:
+        is_active = next_phase > jnp.int32(0)
+        x_next = jnp.where(is_active, discs.x + velocity_x, discs.x)
+        y_next = jnp.where(is_active, discs.y + velocity_y, discs.y)
+        x_next = jnp.clip(x_next, min_x, max_x - discs.w)
+        y_next = jnp.clip(y_next, min_y, max_y - discs.h)
+        return x_next, y_next
+
+    @partial(jit, static_argnums=(0,))
+    def _player_pickup_returning_discs(
+        self,
+        discs: Discs,
+        next_phase: Array,
+        next_x: Array,
+        next_y: Array,
+        player_x0: Array,
+        player_y0: Array,
+        player_w: Array,
+        player_h: Array,
+        vx: Array,
+        vy: Array,
+    ) -> Tuple[Array, Array, Array]:
+        is_returning_player = (discs.owner == jnp.int32(0)) & (next_phase == jnp.int32(2))
+        overlaps_player = (
+            (next_x < player_x0 + player_w)
+            & ((next_x + discs.w) > player_x0)
+            & (next_y < player_y0 + player_h)
+            & ((next_y + discs.h) > player_y0)
+        )
+        picked_up = is_returning_player & overlaps_player
+        final_phase = jnp.where(picked_up, jnp.int32(0), next_phase)
+        final_vx = jnp.where(picked_up, jnp.int32(0), vx)
+        final_vy = jnp.where(picked_up, jnp.int32(0), vy)
+        return final_phase, final_vx, final_vy
+
+    @partial(jit, static_argnums=(0,))
+    def _select_door_for_spawn(
+        self,
+        doors: Doors,
+        rng_key: random.PRNGKey,
+        prefer_new_prob: float,
+    ) -> Tuple[Array, Array, Doors, random.PRNGKey]:
+        n_doors = doors.x.shape[0]
+        door_unlocked = doors.spawn_lockdown == jnp.int32(0)
+        reuse_mask = doors.is_spawned & door_unlocked
+        new_mask = (~doors.is_spawned) & door_unlocked
+        reuse_cnt = jnp.sum(reuse_mask.astype(jnp.int32))
+        new_cnt = jnp.sum(new_mask.astype(jnp.int32))
+        has_reuse = reuse_cnt > 0
+        has_new = new_cnt > 0
+        rng_key, k_pick_set, k_pick_new, k_pick_reuse = random.split(rng_key, 4)
+        pick_new_sample = random.bernoulli(k_pick_set, p=jnp.float32(prefer_new_prob))
+        choose_new = has_new & (~has_reuse | pick_new_sample)
+        choose_reuse = has_reuse & (~has_new | (~pick_new_sample))
+
+        def _sample(mask, count, key):
+            idx_pad = jnp.nonzero(mask, size=n_doors)[0]
+            pos = random.randint(key, (), 0, jnp.maximum(count, 1), dtype=jnp.int32)
+            return idx_pad[pos]
+
+        def _pick_reuse(_):
+            idx = _sample(reuse_mask, reuse_cnt, k_pick_reuse)
+            return True, idx, doors, rng_key
+
+        def _pick_new(_):
+            idx = _sample(new_mask, new_cnt, k_pick_new)
+            upd = doors.replace(is_spawned=doors.is_spawned.at[idx].set(True))
+            return True, idx, upd, rng_key
+
+        def _fallback(_):
+            return False, jnp.int32(0), doors, rng_key
+
+        return jax.lax.cond(
+            choose_new,
+            _pick_new,
+            lambda _: jax.lax.cond(choose_reuse, _pick_reuse, _fallback, operand=None),
+            operand=None,
+        )
 
     def reset(self, key: random.PRNGKey = None) -> Tuple[TronObservation, TronState]:
         def _get_centered_player(consts: TronConstants) -> Player:
@@ -1353,8 +1190,9 @@ class JaxTron(JaxEnvironment[TronState, TronObservation, TronInfo, TronConstants
             norm = jnp.maximum(jnp.sqrt(dx_f * dx_f + dy_f * dy_f), jnp.float32(1.0))
 
             # Normalize velocity * speed -> constant Eucld speed in any direction
-            fvx = (dx_f / norm) * speed
-            fvy = (dy_f / norm) * speed
+            move = self._is_movement_frame(s).astype(jnp.float32)
+            fvx = (dx_f / norm) * speed * move
+            fvy = (dy_f / norm) * speed * move
 
             # precise (float) integration
             fx_try = s.player.fx[0] + fvx
@@ -1472,6 +1310,14 @@ class JaxTron(JaxEnvironment[TronState, TronObservation, TronInfo, TronConstants
         return jax.lax.cond(can_spawn, do_spawn, no_spawn, state)
 
     @partial(jit, static_argnums=(0,))
+    def _recall_player_disc(self, state: TronState, fire_pressed: Array) -> TronState:
+        """Apply fire-recall without advancing disc positions (off-logic NTSC frames)."""
+        discs = state.discs
+        no_wall = jnp.zeros_like(discs.phase, dtype=jnp.bool_)
+        next_phase = self._compute_disc_next_phase(discs, fire_pressed, no_wall)
+        return state.replace(discs=discs.replace(phase=next_phase))
+
+    @partial(jit, static_argnums=(0,))
     def _move_discs(self, state: TronState, fire_pressed: Array) -> TronState:
         discs = state.discs
 
@@ -1492,7 +1338,7 @@ class JaxTron(JaxEnvironment[TronState, TronObservation, TronInfo, TronConstants
             | ((ny_i + discs.h) > self.inner_max_y)
         )
 
-        will_hit_wall_std = _DiscOps.check_wall_hit(
+        will_hit_wall_std = self._check_disc_wall_hit(
             discs,
             self.inner_min_x,
             self.inner_min_y,
@@ -1502,20 +1348,20 @@ class JaxTron(JaxEnvironment[TronState, TronObservation, TronInfo, TronConstants
         # Use float-based prediction for enemy outbound discs
         will_hit_wall_next = jnp.where(is_out, hit_next, will_hit_wall_std)
 
-        next_phase = _DiscOps.compute_next_phase(
+        next_phase = self._compute_disc_next_phase(
             discs, fire_pressed, will_hit_wall_next
         )
 
         # Player center for homing
-        pcx, pcy = rect_center(
+        pcx, pcy = self._rect_center(
             state.player.x[0], state.player.y[0], state.player.w[0], state.player.h[0]
         )
 
-        velocity_x, velocity_y = _DiscOps.compute_velocity(
+        velocity_x, velocity_y = self._compute_disc_velocity(
             discs, next_phase, pcx, pcy, self.consts.inbound_disc_speed
         )
 
-        x_next, y_next = _DiscOps.add_and_clamp(
+        x_next, y_next = self._add_and_clamp_discs(
             discs,
             next_phase,
             velocity_x,
@@ -1545,7 +1391,7 @@ class JaxTron(JaxEnvironment[TronState, TronObservation, TronInfo, TronConstants
         fvy_next = jnp.where(next_phase == jnp.int32(0), jnp.float32(0), discs.fvy)
 
         # Returning player discs pickup logic
-        final_phase, final_vx, final_vy = _DiscOps.player_pickup_returning_discs(
+        final_phase, final_vx, final_vy = self._player_pickup_returning_discs(
             discs,
             next_phase,
             x_next,
@@ -1627,7 +1473,7 @@ class JaxTron(JaxEnvironment[TronState, TronObservation, TronInfo, TronConstants
             s = carry_state
 
             # Choose a door (handles reuse/new preference and returns next RNG key)
-            has, door_idx, doors2, key2 = _select_door_for_spawn(
+            has, door_idx, doors2, key2 = self._select_door_for_spawn(
                 s.doors,
                 s.rng_key,
                 prefer_new_prob=prefer_new_prob,  # ensure proper dtype
@@ -1636,7 +1482,7 @@ class JaxTron(JaxEnvironment[TronState, TronObservation, TronInfo, TronConstants
             def do_spawn(s_in):
                 # Find the first dead slot to reuse
                 dead_mask = ~s_in.enemies.alive
-                _, slot = _find_first_true(dead_mask)
+                _, slot = self._find_first_true(dead_mask)
 
                 # Enemy size is already in the arrays (set in reset)
                 ew = s_in.enemies.w[slot]
@@ -1749,13 +1595,13 @@ class JaxTron(JaxEnvironment[TronState, TronObservation, TronInfo, TronConstants
 
             def player_center(s: TronState):
                 """Center of the (single) player box"""
-                return rect_center(
+                return self._rect_center(
                     s.player.x[0], s.player.y[0], s.player.w[0], s.player.h[0]
                 )
 
             def enemy_centers(enemies: Enemies):
                 """Per-enemy centers"""
-                return rect_center(enemies.x, enemies.y, enemies.w, enemies.h)
+                return self._rect_center(enemies.x, enemies.y, enemies.w, enemies.h)
 
             def update_goals(
                 enemies: Enemies,
@@ -1921,8 +1767,10 @@ class JaxTron(JaxEnvironment[TronState, TronObservation, TronInfo, TronConstants
                 )
                 return x_next, y_next, vx_ok, vy_ok
 
-            # Move only on allowed frames (global throttle).
-            step_mask = step_gate(s.frame_idx, self.consts.enemy_speed)  # int32 0/1
+            # Move every Nth 30 Hz logic tick (enemy_speed), not every NTSC frame.
+            period = jnp.maximum(jnp.int32(self.consts.movement_period), jnp.int32(1))
+            logic_tick = jnp.floor_divide(s.frame_idx + period - jnp.int32(1), period)
+            step_mask = step_gate(logic_tick, self.consts.enemy_speed)  # int32 0/1
 
             # All randomness for this tick.
             ttl_min, ttl_max = self.consts.enemy_recalc_target
@@ -2065,7 +1913,7 @@ class JaxTron(JaxEnvironment[TronState, TronObservation, TronInfo, TronConstants
         should_tick = any_dead & (alive_now > jnp.int32(0))
         cd_next = jnp.where(
             should_tick,
-            tick_cd(state.inwave_spawn_cd),
+            self._tick_cd(state.inwave_spawn_cd),
             state.inwave_spawn_cd,
         )
 
@@ -2237,7 +2085,7 @@ class JaxTron(JaxEnvironment[TronState, TronObservation, TronInfo, TronConstants
         )
 
         m_any = m_top | m_bottom | m_left | m_right
-        has, idx = _find_first_true(m_any)
+        has, idx = self._find_first_true(m_any)
 
         def do_tp(s: TronState) -> TronState:
             doors2, player2 = s.doors, s.player
@@ -2467,7 +2315,7 @@ class JaxTron(JaxEnvironment[TronState, TronObservation, TronInfo, TronConstants
 
         state = jax.lax.cond(
             (~enemy_active_now) & (state.enemy_global_fire_cd > jnp.int32(0)),
-            lambda s: s.replace(enemy_global_fire_cd=tick_cd(s.enemy_global_fire_cd)),
+            lambda s: s.replace(enemy_global_fire_cd=self._tick_cd(s.enemy_global_fire_cd)),
             lambda s: s,
             state,
         )
@@ -2477,7 +2325,7 @@ class JaxTron(JaxEnvironment[TronState, TronObservation, TronInfo, TronConstants
             d, e = s.discs, s.enemies
             # Need a free disc slot.
             free_mask = d.phase == jnp.int32(0)
-            has_free, slot = _find_first_true(free_mask)
+            has_free, slot = self._find_first_true(free_mask)
 
             def spawn_into_free(ss: TronState) -> TronState:
                 d, e = ss.discs, ss.enemies
@@ -2517,7 +2365,7 @@ class JaxTron(JaxEnvironment[TronState, TronObservation, TronInfo, TronConstants
 
                     # Player center (scalar each). Player arrays are shape (1,), so index [0]
                     # Keep integer centers for rendering/collision, but cast to float for direction match
-                    pcx, pcy = rect_center(
+                    pcx, pcy = self._rect_center(
                         sin.player.x[0],
                         sin.player.y[0],
                         sin.player.w[0],
@@ -2527,7 +2375,7 @@ class JaxTron(JaxEnvironment[TronState, TronObservation, TronInfo, TronConstants
                     pcy_f = pcy.astype(jnp.float32)
 
                     # Enemy centers for all enemies (vectors). Select the chosen shooters center
-                    ecx, ecy = rect_center(e.x, e.y, e.w, e.h)
+                    ecx, ecy = self._rect_center(e.x, e.y, e.w, e.h)
                     ecx_f = ecx[shooter].astype(jnp.float32)
                     ecy_f = ecy[shooter].astype(jnp.float32)
 
@@ -2572,8 +2420,8 @@ class JaxTron(JaxEnvironment[TronState, TronObservation, TronInfo, TronConstants
 
                     # Write the disc into the chosen free slot
                     # We keep both float and int positions:
-                    #   - fx/fy: precise float state that advances by fvx, fvy each frame (subpixel motion)
-                    #   - x/y: integer state for collision/rendering (rounded from fx/fy each frame)
+                    #   - fx/fy: precise float state that advances by fvx, fvy on logic ticks
+                    #   - x/y: integer state for collision/rendering (rounded from fx/fy)
                     #
                     # Enemy bullets use (fx, fy, fvx, fvy) for movement, the integer (vx, vy) is unised
                     # but kept at 0 to keep the structure uniform with player discs
@@ -2626,13 +2474,11 @@ class JaxTron(JaxEnvironment[TronState, TronObservation, TronInfo, TronConstants
         atari_action = jnp.take(self.ACTION_SET, action.astype(jnp.int32))
         
         previous_state = state
-        user_action: UserAction = parse_action(atari_action)
+        user_action: UserAction = self._parse_action(atari_action)
         # pressed_fire should only be true, if in the previous frame it wasn't pressed
 
         # track whether fire was already pressed in the frame before
-        # pressed_fire is checked 60 times per second (60 fps)
-        # if not tracking the previous action, pressing space (fire)
-        # for one second would spawn 60 discs
+        # Fire is sampled every NTSC frame; motion itself runs on a 30 Hz logic clock.
         # pressed_fire should only be true, if in the previous frame it wasn't pressed
         # and we have a change in state
         pressed_fire_changed: Array = user_action.fire & jnp.logical_not(
@@ -2659,12 +2505,17 @@ class JaxTron(JaxEnvironment[TronState, TronObservation, TronInfo, TronConstants
         # Only recall if a player-owned disc existed before this step
         recall_edge = pressed_fire_changed & had_player_disc_before
         state: TronState = self._lock_doors_from_disc_hits(state)
-        state: TronState = self._move_discs(state, recall_edge)
+        state: TronState = jax.lax.cond(
+            self._is_movement_frame(state),
+            lambda s: self._move_discs(s, recall_edge),
+            lambda s: self._recall_player_disc(s, recall_edge),
+            state,
+        )
 
         state = state.replace(fire_down_prev=user_action.fire)
 
         # tick door cooldowns so used doors eventually become available again
-        state = state.replace(doors=_ArenaOps.tick_door_lockdown(state.doors))
+        state = state.replace(doors=self._tick_door_lockdown(state.doors))
 
         # on the first input movement, spawn up to max_enemies once
         def _spawn_initial_wave(s: TronState) -> TronState:
@@ -2686,7 +2537,7 @@ class JaxTron(JaxEnvironment[TronState, TronObservation, TronInfo, TronConstants
 
         def _pause_step(s: TronState) -> TronState:
             return s.replace(
-                wave_end_cooldown_remaining=tick_cd(s.wave_end_cooldown_remaining)
+                wave_end_cooldown_remaining=self._tick_cd(s.wave_end_cooldown_remaining)
             )
 
         def _wave_step(s: TronState) -> TronState:
@@ -2730,7 +2581,12 @@ class JaxTron(JaxEnvironment[TronState, TronObservation, TronInfo, TronConstants
             # Enemy discs that moved this frame can hit the player now
             s = self._enemy_disc_player_collisions(s)
 
-            s = self._move_enemies(s)
+            s = jax.lax.cond(
+                self._is_movement_frame(s),
+                self._move_enemies,
+                lambda ss: ss,
+                s,
+            )
             s = self._disc_enemy_collisions(s)
             s = self._update_respawn_cooldown_on_kills(s)
 
