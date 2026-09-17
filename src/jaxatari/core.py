@@ -54,7 +54,6 @@ GAME_MODULES = {
     "hauntedhouse": "jaxatari.games.jax_hauntedhouse",
     "humancannonball": "jaxatari.games.jax_humancannonball",
     "kangaroo": "jaxatari.games.jax_kangaroo",
-    "kungfumaster": "jaxatari.games.jax_kungfumaster",
     "kingkong": "jaxatari.games.jax_kingkong",
     "klax": "jaxatari.games.jax_klax",
     "lasergates": "jaxatari.games.jax_lasergates",
