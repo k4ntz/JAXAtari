@@ -295,7 +295,6 @@ class JaxCentipede(JaxEnvironment[CentipedeState, CentipedeObservation, Centiped
     def __init__(self, consts: CentipedeConstants = None):
         consts = consts or CentipedeConstants()
         super().__init__(consts)
-        self.obs_size = 6 + 304 * 5 + 9 * 5 + 5 + 5 + 5 + 5 + 1 + 1
         self.renderer = CentipedeRenderer(self.consts)
 
     @partial(jax.jit, static_argnums=(0,))
@@ -342,6 +341,18 @@ class JaxCentipede(JaxEnvironment[CentipedeState, CentipedeObservation, Centiped
             dtype=jnp.uint8
         )
 
+    def _trim_to_screen(self, x, y, width, height, active):
+        """Intersects a box with the screen; active drops once nothing is left."""
+        xi = x.astype(jnp.int32)
+        yi = y.astype(jnp.int32)
+        x0 = jnp.clip(xi, 0, self.consts.WIDTH)
+        y0 = jnp.clip(yi, 0, self.consts.HEIGHT)
+        x1 = jnp.clip(xi + width, 0, self.consts.WIDTH)
+        y1 = jnp.clip(yi + height, 0, self.consts.HEIGHT)
+        w = jnp.maximum(x1 - x0, 0).astype(jnp.int32)
+        h = jnp.maximum(y1 - y0, 0).astype(jnp.int32)
+        return x0, y0, w, h, active * ((w > 0) & (h > 0)).astype(jnp.int32)
+
     @partial(jax.jit, static_argnums=(0,))
     def _get_observation(self, state: CentipedeState) -> CentipedeObservation:
         # Helper for vector to angle (0-360)
@@ -349,13 +360,21 @@ class JaxCentipede(JaxEnvironment[CentipedeState, CentipedeObservation, Centiped
             return jnp.mod(jnp.degrees(jnp.arctan2(dy, dx)), 360.0)
 
         # --- Player ---
+        # The renderer hides the player sprite while the death animation runs
+        p_x, p_y, p_w, p_h, p_active = self._trim_to_screen(
+            state.player_x,
+            state.player_y,
+            jnp.array(self.consts.PLAYER_SIZE[0], dtype=jnp.int32),
+            jnp.array(self.consts.PLAYER_SIZE[1], dtype=jnp.int32),
+            (state.death_counter >= 0).astype(jnp.int32),
+        )
         player = ObjectObservation.create(
-            x=jnp.clip(state.player_x, 0, self.consts.WIDTH),
-            y=jnp.clip(state.player_y, 0, self.consts.HEIGHT),
-            width=jnp.array(self.consts.PLAYER_SIZE[0], dtype=jnp.int32),
-            height=jnp.array(self.consts.PLAYER_SIZE[1], dtype=jnp.int32),
+            x=p_x,
+            y=p_y,
+            width=p_w,
+            height=p_h,
             orientation=jnp.array(0.0, dtype=jnp.float32), # Player faces Up (0) or default
-            active=jnp.array(1, dtype=jnp.int32)
+            active=p_active
         )
 
         # --- Mushrooms ---
@@ -365,13 +384,20 @@ class JaxCentipede(JaxEnvironment[CentipedeState, CentipedeObservation, Centiped
         m_poisoned = state.mushroom_positions[:, 2]
         m_lives = state.mushroom_positions[:, 3]
 
+        m_bx, m_by, m_bw, m_bh, m_active = self._trim_to_screen(
+            m_x,
+            m_y,
+            jnp.full(m_x.shape, self.consts.MUSHROOM_SIZE[0], dtype=jnp.int32),
+            jnp.full(m_x.shape, self.consts.MUSHROOM_SIZE[1], dtype=jnp.int32),
+            (m_lives > 0).astype(jnp.int32),
+        )
         mushrooms = ObjectObservation.create(
-            x=jnp.clip(m_x, 0, self.consts.WIDTH),
-            y=jnp.clip(m_y, 0, self.consts.HEIGHT),
-            width=jnp.full(m_x.shape, self.consts.MUSHROOM_SIZE[0], dtype=jnp.int32),
-            height=jnp.full(m_x.shape, self.consts.MUSHROOM_SIZE[1], dtype=jnp.int32),
+            x=m_bx,
+            y=m_by,
+            width=m_bw,
+            height=m_bh,
             state=m_poisoned.astype(jnp.int32), # 1 if poisoned, 0 if normal
-            active=(m_lives > 0).astype(jnp.int32)
+            active=m_active
         )
 
         # --- Centipede ---
@@ -382,13 +408,21 @@ class JaxCentipede(JaxEnvironment[CentipedeState, CentipedeObservation, Centiped
         c_vy = state.centipede_position[:, 3]
         c_status = state.centipede_position[:, 4]
         
+        # The renderer hides all segments while the death animation runs
+        c_bx, c_by, c_bw, c_bh, c_active = self._trim_to_screen(
+            c_x,
+            c_y,
+            jnp.full(c_x.shape, self.consts.SEGMENT_SIZE[0], dtype=jnp.int32),
+            jnp.full(c_x.shape, self.consts.SEGMENT_SIZE[1], dtype=jnp.int32),
+            ((c_status != 0) & (state.death_counter <= 0)).astype(jnp.int32),
+        )
         centipede = ObjectObservation.create(
-            x=jnp.clip(c_x, 0, self.consts.WIDTH),
-            y=jnp.clip(c_y, 0, self.consts.HEIGHT),
-            width=jnp.full(c_x.shape, self.consts.SEGMENT_SIZE[0], dtype=jnp.int32),
-            height=jnp.full(c_x.shape, self.consts.SEGMENT_SIZE[1], dtype=jnp.int32),
+            x=c_bx,
+            y=c_by,
+            width=c_bw,
+            height=c_bh,
             orientation=vec_to_angle(c_vx, c_vy),
-            active=(c_status != 0).astype(jnp.int32)
+            active=c_active
         )
 
         # --- Spider ---
@@ -397,25 +431,40 @@ class JaxCentipede(JaxEnvironment[CentipedeState, CentipedeObservation, Centiped
         # Direction to angle: Right(1)->90, Left(-1)->270, Inactive->0
         s_angle = jnp.select([s_dir > 0, s_dir < 0], [90.0, 270.0], default=0.0)
         
+        # The renderer draws the sprite two pixels right of and two pixels above the state position
+        s_bx, s_by, s_bw, s_bh, s_active = self._trim_to_screen(
+            s_x + 2,
+            s_y - 2,
+            jnp.array(self.consts.SPIDER_SIZE[0], dtype=jnp.int32),
+            jnp.array(self.consts.SPIDER_SIZE[1], dtype=jnp.int32),
+            (s_dir != 0).astype(jnp.int32),
+        )
         spider = ObjectObservation.create(
-            x=jnp.clip(s_x, 0, self.consts.WIDTH),
-            y=jnp.clip(s_y, 0, self.consts.HEIGHT),
-            width=jnp.array(self.consts.SPIDER_SIZE[0], dtype=jnp.int32),
-            height=jnp.array(self.consts.SPIDER_SIZE[1], dtype=jnp.int32),
+            x=s_bx,
+            y=s_by,
+            width=s_bw,
+            height=s_bh,
             orientation=s_angle.astype(jnp.float32),
-            active=(s_dir != 0).astype(jnp.int32)
+            active=s_active
         )
 
         # --- Flea ---
         # flea_position: (3) -> x, y, lives
         f_x, f_y, f_lives = state.flea_position
+        f_bx, f_by, f_bw, f_bh, f_active = self._trim_to_screen(
+            f_x,
+            f_y,
+            jnp.array(self.consts.FLEA_SIZE[0], dtype=jnp.int32),
+            jnp.array(self.consts.FLEA_SIZE[1], dtype=jnp.int32),
+            (f_lives > 0).astype(jnp.int32),
+        )
         flea = ObjectObservation.create(
-            x=jnp.clip(f_x.astype(jnp.int32), 0, self.consts.WIDTH),
-            y=jnp.clip(f_y.astype(jnp.int32), 0, self.consts.HEIGHT),
-            width=jnp.array(self.consts.FLEA_SIZE[0], dtype=jnp.int32),
-            height=jnp.array(self.consts.FLEA_SIZE[1], dtype=jnp.int32),
+            x=f_bx,
+            y=f_by,
+            width=f_bw,
+            height=f_bh,
             orientation=jnp.array(180.0, dtype=jnp.float32), # Flea falls down (180)
-            active=(f_lives > 0).astype(jnp.int32)
+            active=f_active
         )
 
         # --- Scorpion ---
@@ -423,25 +472,41 @@ class JaxCentipede(JaxEnvironment[CentipedeState, CentipedeObservation, Centiped
         sc_x, sc_y, sc_dir, _ = state.scorpion_position
         sc_angle = jnp.select([sc_dir > 0, sc_dir < 0], [90.0, 270.0], default=0.0)
         
+        # The renderer draws the sprite two pixels right of and two pixels above the state position
+        sc_bx, sc_by, sc_bw, sc_bh, sc_active = self._trim_to_screen(
+            sc_x + 2,
+            sc_y - 2,
+            jnp.array(self.consts.SCORPION_SIZE[0], dtype=jnp.int32),
+            jnp.array(self.consts.SCORPION_SIZE[1], dtype=jnp.int32),
+            (sc_dir != 0).astype(jnp.int32),
+        )
         scorpion = ObjectObservation.create(
-            x=jnp.clip(sc_x, 0, self.consts.WIDTH),
-            y=jnp.clip(sc_y, 0, self.consts.HEIGHT),
-            width=jnp.array(self.consts.SCORPION_SIZE[0], dtype=jnp.int32),
-            height=jnp.array(self.consts.SCORPION_SIZE[1], dtype=jnp.int32),
+            x=sc_bx,
+            y=sc_by,
+            width=sc_bw,
+            height=sc_bh,
             orientation=sc_angle.astype(jnp.float32),
-            active=(sc_dir != 0).astype(jnp.int32)
+            active=sc_active
         )
 
         # --- Player Spell ---
         # player_spell: (3) -> x, y, is_alive
         ps_x, ps_y, ps_alive = state.player_spell
+        # The spell stays alive for one frame after it has left the screen at the top
+        ps_bx, ps_by, ps_bw, ps_bh, ps_active = self._trim_to_screen(
+            ps_x,
+            ps_y,
+            jnp.array(self.consts.PLAYER_SPELL_SIZE[0], dtype=jnp.int32),
+            jnp.array(self.consts.PLAYER_SPELL_SIZE[1], dtype=jnp.int32),
+            (ps_alive != 0).astype(jnp.int32),
+        )
         player_spell = ObjectObservation.create(
-            x=jnp.clip(ps_x, 0, self.consts.WIDTH),
-            y=jnp.clip(ps_y, 0, self.consts.HEIGHT),
-            width=jnp.array(self.consts.PLAYER_SPELL_SIZE[0], dtype=jnp.int32),
-            height=jnp.array(self.consts.PLAYER_SPELL_SIZE[1], dtype=jnp.int32),
+            x=ps_bx,
+            y=ps_by,
+            width=ps_bw,
+            height=ps_bh,
             orientation=jnp.array(0.0, dtype=jnp.float32), # Moves Up (0)
-            active=(ps_alive != 0).astype(jnp.int32)
+            active=ps_active
         )
 
         return CentipedeObservation(
