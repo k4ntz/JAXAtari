@@ -1276,6 +1276,12 @@ class PitfallState:
     treasure_bits: chex.Array  # (4,) uint8
     treasure_cnt: chex.Array
 
+    # Runtime god-mode flag (NOT part of the ROM). Starts from
+    # consts.debug_god_mode and can be toggled live. While set, Harry cannot
+    # die, pits are solid under him, and logs don't block or drain him. Speed
+    # and the jump arc stay at the ROM's normal rate.
+    god_mode: chex.Array
+
 class PitfallConstants(struct.PyTreeNode):
     screen_width: int = 160     # Atari 2600 horizontal resolution
     screen_height: int = 210   # Atari vertical resolution used in ALE
@@ -1291,9 +1297,10 @@ class PitfallConstants(struct.PyTreeNode):
     # (30 px/s at 60 Hz). One JAX step is two Atari frames, so this is 1 px/step.
     player_speed: float = 1.0
     # Temporary testing flag (NOT part of the ROM). When True, Harry cannot die
-    # (hazards and pits never trigger KilledHarry) and he runs at 1.5x speed.
-    # Default False gives the normal, ROM-accurate game.
-    debug_god_mode: bool = False
+    # (hazards never trigger KilledHarry), pits are solid under him, and logs
+    # don't block or drain him. Speed and the jump arc stay at the ROM's normal
+    # rate. Default False gives the normal, ROM-accurate game.
+    debug_god_mode: bool = True
     gravity: float = 0.55       # (global gravity for falls/ladder-exit; keep stable)
     fall_speed: float = 3.0    # terminal velocity cap on descent
 
@@ -2140,6 +2147,8 @@ class JaxPitfall(JaxEnvironment[PitfallState, PitfallObservation, PitfallInfo, P
             consts = PitfallConstants()
         super().__init__(consts)
         self.consts = consts
+        # Pitfall reads the full 18-action ALE set directly (button = jump).
+        self.ACTION_SET = jnp.arange(18, dtype=jnp.int32)
         self.num_screens = 255
         W = self.consts.screen_width
         WW = self.consts.tunnel_wall_width
@@ -2665,11 +2674,9 @@ class JaxPitfall(JaxEnvironment[PitfallState, PitfallObservation, PitfallInfo, P
         jump_pressed = move_jump
         jump_rise = jump_pressed & (~state.jump_pressed_prev)
 
-        # debug_god_mode is a static consts field, so this is a trace-time choice.
-        speed = jnp.asarray(
-            consts.player_speed * (1.5 if consts.debug_god_mode else 1.0),
-            dtype=jnp.float32,
-        )
+        # god mode does not change Harry's speed: the run, the jump carry and the
+        # ladder-exit hop all keep the ROM's 1px-per-2-frames rate.
+        speed = jnp.asarray(consts.player_speed, dtype=jnp.float32)
 
         vx = jnp.where(move_left, -speed, jnp.where(move_right, speed, 0.0))
         # ROM jumping uses the same 1px xPosHarry inc/dec, directed by oldJoystick.
@@ -2936,10 +2943,15 @@ class JaxPitfall(JaxEnvironment[PitfallState, PitfallObservation, PitfallInfo, P
         # so being above an opening never affects an airborne Harry.
         over_any_hole = self._over_hole(new_room_byte, x.astype(jnp.int32), x_pos_quicksand, croc_open)
 
+        # god mode makes a pit (not an ordinary ladder hole) solid under Harry,
+        # so he runs across tar, swamp, crocodile and quicksand openings without
+        # falling in. Ordinary ladder holes still drop him to the underground.
+        pit_solid = scene_is_pit(new_room_byte) & state.god_mode
+
         previous_ground = state.current_ground_y
         clamp_mask = ~state.on_ladder
 
-        raw_on_ground_upper = (y >= previous_ground) & (~over_any_hole)
+        raw_on_ground_upper = (y >= previous_ground) & ((~over_any_hole) | pit_solid)
 
         # No pit scene has a ladder and so none has an underground floor to
         # arrive on. `ContRandom` only writes WITHLADDER for sceneType 0 and 1
@@ -3014,6 +3026,7 @@ class JaxPitfall(JaxEnvironment[PitfallState, PitfallObservation, PitfallInfo, P
             & on_upper_level
             & over_any_hole
             & (state.player_y == previous_ground)
+            & (~pit_solid)
         )
 
         # NTSC frame 1: the `inc`, then .doJump's first table step.
@@ -3223,7 +3236,8 @@ class JaxPitfall(JaxEnvironment[PitfallState, PitfallObservation, PitfallInfo, P
         # Rolling logs: block Harry without dragging him. If a rolling log
         # would overlap this frame, freeze X at the contact point.
         rolling_active = has_logs & logs_are_rolling & gameplay_active & on_upper_level & on_ground & (~on_ladder)
-        rolling_would_overlap = rolling_active & jnp.any(active & roll_overlap_x & overlap_y)
+        # god mode: Harry whizzes straight through logs - no block, no drain.
+        rolling_would_overlap = rolling_active & (~state.god_mode) & jnp.any(active & roll_overlap_x & overlap_y)
         # Both the blocking position and the contact flag come from the previous
         # frame, which is a different room once Harry has just wrapped. Fall back
         # to the already-wrapped x and drop the stale flag in that case.
@@ -3257,10 +3271,10 @@ class JaxPitfall(JaxEnvironment[PitfallState, PitfallObservation, PitfallInfo, P
         # none of the hazards below.
         off_liana = ~at_liana_step
         touching_any = jnp.any(active & overlap_x & overlap_y)
-        touching_wood = has_logs & jnp.any(active & visual_overlap_x & overlap_y) & off_liana
+        touching_wood = has_logs & jnp.any(active & visual_overlap_x & overlap_y) & off_liana & (~state.god_mode)
         # Moving logs (rolling): visual slide/contact matches the blocked state.
         touching_rolling_wood = rolling_would_overlap
-        log_contact_first = has_logs & touching_any & gameplay_active & off_liana
+        log_contact_first = has_logs & touching_any & gameplay_active & off_liana & (~state.god_mode)
 
         upper_ground = jnp.asarray(consts.ground_y, dtype=jnp.float32)
         lower_ground = jnp.asarray(consts.underground_y, dtype=jnp.float32)
@@ -3352,11 +3366,10 @@ class JaxPitfall(JaxEnvironment[PitfallState, PitfallObservation, PitfallInfo, P
 
         hit_other_hazard = hit_fire | hit_snake | hit_pit
         hit_hazard = hit_scorpion | hit_other_hazard
-        # debug_god_mode (a static consts flag, so a trace-time choice): no
-        # hazard or pit is fatal. Harry still falls into openings and lands on
-        # the underground floor; he just is never killed.
-        if consts.debug_god_mode:
-            hit_hazard = jnp.array(False, dtype=jnp.bool_)
+        # god_mode (a runtime state field): no hazard or pit is fatal. Harry
+        # still falls into openings and lands on the floor below; he just is
+        # never killed.
+        hit_hazard = hit_hazard & (~state.god_mode)
 
         # Every fatal path in the ROM ends at the same three instructions, and
         # none of them touches livesPat or Harry: the life and the restart come
@@ -3667,6 +3680,7 @@ class JaxPitfall(JaxEnvironment[PitfallState, PitfallObservation, PitfallInfo, P
             x_pos_quicksand=x_pos_quicksand,
             treasure_bits=treasure_bits,
             treasure_cnt=treasure_cnt,
+            god_mode=state.god_mode,
             screen_id=new_screen_id,
             room_byte=new_room_byte,
         )
@@ -3840,6 +3854,7 @@ class JaxPitfall(JaxEnvironment[PitfallState, PitfallObservation, PitfallInfo, P
             # unchanged and a collected treasure stays collected.
             treasure_bits=state.treasure_bits,
             treasure_cnt=state.treasure_cnt,
+            god_mode=state.god_mode,
             screen_id=state.screen_id,
             room_byte=state.room_byte,
         )
@@ -3921,20 +3936,20 @@ class JaxPitfall(JaxEnvironment[PitfallState, PitfallObservation, PitfallInfo, P
                 "screen_id": spaces.Box(low=0, high=254, shape=(), dtype=jnp.int32),
                 "room_byte": spaces.Box(low=0, high=255, shape=(), dtype=jnp.uint8),
                 "current_ground_y": spaces.Box(low=0.0, high=float(self.consts.screen_height - 1), shape=(), dtype=jnp.float32),
-                "on_ground": spaces.Discrete(2),
-                "on_ladder": spaces.Discrete(2),
-                "facing_left": spaces.Discrete(2),
+                "on_ground": spaces.Box(low=0, high=1, shape=(), dtype=jnp.int32),
+                "on_ladder": spaces.Box(low=0, high=1, shape=(), dtype=jnp.int32),
+                "facing_left": spaces.Box(low=0, high=1, shape=(), dtype=jnp.int32),
                 "scorpion_x": spaces.Box(low=0.0, high=float(self.consts.screen_width - 1), shape=(), dtype=jnp.float32),
-                "has_scorpion": spaces.Discrete(2),
-                "has_fire": spaces.Discrete(2),
-                "has_snake": spaces.Discrete(2),
-                "has_logs": spaces.Discrete(2),
+                "has_scorpion": spaces.Box(low=0, high=1, shape=(), dtype=jnp.int32),
+                "has_fire": spaces.Box(low=0, high=1, shape=(), dtype=jnp.int32),
+                "has_snake": spaces.Box(low=0, high=1, shape=(), dtype=jnp.int32),
+                "has_logs": spaces.Box(low=0, high=1, shape=(), dtype=jnp.int32),
                 "log_count": spaces.Box(low=0, high=3, shape=(), dtype=jnp.int32),
                 "log_xs": spaces.Box(low=0, high=int(self.consts.screen_width - 1), shape=(3,), dtype=jnp.int32),
-                "logs_are_rolling": spaces.Discrete(2),
-                "has_ladder": spaces.Discrete(2),
+                "logs_are_rolling": spaces.Box(low=0, high=1, shape=(), dtype=jnp.int32),
+                "has_ladder": spaces.Box(low=0, high=1, shape=(), dtype=jnp.int32),
                 "ladder_x": spaces.Box(low=0, high=int(self.consts.screen_width - 1), shape=(), dtype=jnp.int32),
-                "has_wall": spaces.Discrete(2),
+                "has_wall": spaces.Box(low=0, high=1, shape=(), dtype=jnp.int32),
                 "wall_x": spaces.Box(low=0, high=int(self.consts.screen_width - 1), shape=(), dtype=jnp.int32),
                 "wall_side": spaces.Box(low=-1, high=1, shape=(), dtype=jnp.int32),
                 "time_left": spaces.Box(
@@ -4021,6 +4036,8 @@ class JaxPitfall(JaxEnvironment[PitfallState, PitfallObservation, PitfallInfo, P
             # `lda #31 / sta treasureCnt` (32 treasures, counted down to -1).
             treasure_bits=jnp.zeros((4,), dtype=jnp.uint8),
             treasure_cnt=jnp.array(TREASURE_COUNT_INIT, dtype=jnp.int32),
+            # god_mode starts from the consts default; toggle it live after.
+            god_mode=jnp.array(bool(consts.debug_god_mode), dtype=jnp.bool_),
             screen_id=jnp.array(0, dtype=jnp.int32),
             room_byte=jnp.array(SEED, dtype=jnp.uint8),
         )
@@ -4074,7 +4091,24 @@ class PitfallRenderer(JAXGameRenderer):
             game_dimensions=(self.consts.screen_height, self.consts.screen_width),
             channels=3,
         )
-        self.jr = render_utils.JaxRenderingUtils(self.config)
+        # Native downscaling: the whole pipeline (asset loading, kernel bands,
+        # collision-matched masks, HUD) is ROM-faithful at full resolution, so
+        # the renderer always works at full resolution internally and only the
+        # final frame is resized to the requested target in render(). This
+        # keeps the pixel-exact load-time validations and the collision
+        # geometry intact while still honouring config.downscale. self.config
+        # keeps the requested value (the framework inspects it); only the
+        # internal pipeline runs on a full-resolution copy.
+        self._downscale_target = self.config.downscale
+        if self._downscale_target is not None:
+            jr_config = render_utils.RendererConfig(
+                game_dimensions=self.config.game_dimensions,
+                channels=self.config.channels,
+                downscale=None,
+            )
+        else:
+            jr_config = self.config
+        self.jr = render_utils.JaxRenderingUtils(jr_config)
 
         sprite_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'sprites', 'pitfall')
         asset_config = list(self.consts.ASSET_CONFIG)
@@ -5125,5 +5159,18 @@ class PitfallRenderer(JAXGameRenderer):
         black = jnp.zeros((), dtype=frame.dtype)
         frame = frame.at[:, :HMOVE_BLANK_COLS, :].set(black)
         frame = frame.at[:VBLANK_ROWS, :, :].set(black)
+
+        # Native downscaling: everything above ran at full resolution; only
+        # the final frame is resized (bilinear, like the wrapper-side resize).
+        if self._downscale_target is not None:
+            frame = jax.image.resize(
+                frame,
+                (
+                    int(self._downscale_target[0]),
+                    int(self._downscale_target[1]),
+                    frame.shape[-1],
+                ),
+                method="bilinear",
+            ).astype(jnp.uint8)
 
         return frame
