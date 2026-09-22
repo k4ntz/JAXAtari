@@ -20,6 +20,8 @@ from jaxatari.games import hero_levels as HL
 BANDS = {"A": (16, 59), "B": (60, 98), "C": (99, 141)}
 BAND_HEIGHT = {16: 44, 60: 39, 99: 43}
 CELLS, CELL_W, X0 = 38, 4, 8
+# the rows a '~' cell IS drawn on; everything above them in that cell is air
+LIQUID_ROWS = (136, 141)
 ROLES = ("edge", "dark", "mid", "light", "hi1", "hi2", "hi3")
 MAGMA_RGB = {(167, 26, 26), (184, 50, 50)}
 
@@ -40,14 +42,28 @@ def bands_of(image):
 
     Sampled down the middle of each band, the way the reference pack's own
     checker does it, so the wavy trim on the outer rows cannot confuse it.
+
+    There are FOUR cell values, not three. A floor cell that is black down the
+    middle may still be `~`, the lethal LIQUID surface: it is empty from row 99
+    to about 135 and drawn only on rows 136-141, so the middle sample sees
+    black and a reader that stops there calls a water room a row of holes. It
+    is a floor the hero dies on and it is not a way down (CORRECTIONS.md, the
+    second bug). Level 7 room 10 is the first room in this repository that has
+    any, and it is twenty-four cells of it.
     """
     out = {}
     for band, (r0, r1) in BANDS.items():
         row = (r0 + r1) // 2
         s = ""
         for i in range(CELLS):
-            px = tuple(int(v) for v in image[row, X0 + CELL_W * i + 1])
-            s += "." if px == (0, 0, 0) else "%" if px in MAGMA_RGB else "#"
+            x = X0 + CELL_W * i
+            px = tuple(int(v) for v in image[row, x + 1])
+            if px != (0, 0, 0):
+                s += "%" if px in MAGMA_RGB else "#"
+                continue
+            strip = image[LIQUID_ROWS[0]:LIQUID_ROWS[1] + 1, x:x + CELL_W]
+            drawn = (strip.reshape(-1, strip.shape[-1]).sum(axis=-1) > 0).mean()
+            s += "~" if (band == "C" and drawn > 0.5) else "."
         out[band] = s
     return out
 
@@ -86,11 +102,19 @@ def check_walls_on_the_grid(level):
 
     HERO_SPEC.md: a wall edge at an x that is not a multiple of 4, or a band
     boundary on a row other than 16 / 60 / 99 / 142, is a bug.
+
+    The LIQUID surface is the one exception, and it is not a band: a `~` cell
+    is drawn only on rows 136-141 and is black above them, so its rect is
+    those six rows. Filling the whole floor band instead puts an invisible
+    ledge across the room thirty-seven pixels above the water.
     """
+    liquid_h = LIQUID_ROWS[1] - LIQUID_ROWS[0] + 1
     for room, rects in enumerate(getattr(HL, f"WALL_RECTS_L{level}")):
         for x, y, w, h in rects:
             assert (x - X0) % CELL_W == 0 and w % CELL_W == 0, \
                 f"level {level} room {room}: {x},{w} off the 4 px grid"
+            if (y, h) == (LIQUID_ROWS[0], liquid_h):
+                continue
             assert y in BAND_HEIGHT, \
                 f"level {level} room {room}: band top {y} is not 16/60/99"
             assert h == BAND_HEIGHT[y], \

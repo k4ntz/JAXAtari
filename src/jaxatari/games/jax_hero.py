@@ -319,13 +319,21 @@ def _build_level_arrays():
     mg = np.zeros((nL, nMg, 5), np.int32)         # room, x, y, w, h
     mg_valid = np.zeros((nL, nMg), bool)
     # Side exits: per (level, room), whether that room's corridor is open at
-    # the left / right edge of the screen. See HL.SIDE_EXITS.
+    # the left / right edge of the screen, and which way along the chain that
+    # edge goes. The direction is data because it is not the same on every
+    # level: level 5 descends through a LEFT edge and level 7 through a RIGHT
+    # one. See HL.SIDE_EXITS.
     side_l = np.zeros((nL, _MAX_ROOMS), bool)
     side_r = np.zeros((nL, _MAX_ROOMS), bool)
+    side_l_d = np.zeros((nL, _MAX_ROOMS), np.int32)
+    side_r_d = np.zeros((nL, _MAX_ROOMS), np.int32)
     for li in range(nL):
         rooms_n[li] = _ROOMS[li]
-        for (rm, side) in HL.SIDE_EXITS[li]:
-            (side_l if side < 0 else side_r)[li, rm] = True
+        for (rm, side, delta) in HL.SIDE_EXITS[li]:
+            if side < 0:
+                side_l[li, rm], side_l_d[li, rm] = True, delta
+            else:
+                side_r[li, rm], side_r_d[li, rm] = True, delta
         for ri in range(len(_RECTS[li])):
             for wi, (x, y, w, h) in enumerate(_CARVED[(li, ri)]):
                 walls[li, ri, wi] = (x, y, w, h)
@@ -470,7 +478,8 @@ def _build_level_arrays():
                 dw_group=dw_group, dw_scores=dw_scores,
                 lan=lan, lan_valid=lan_valid, de=de, de_valid=de_valid,
                 fl=fl, fl_valid=fl_valid, mg=mg, mg_valid=mg_valid,
-                side_l=side_l, side_r=side_r)
+                side_l=side_l, side_r=side_r,
+                side_l_d=side_l_d, side_r_d=side_r_d)
 
 
 _LV = _build_level_arrays()
@@ -498,9 +507,12 @@ class HeroConstants(AutoDerivedConstants):
     # centre row crosses the screen edge: centre = top + 11).
     flip_bottom_y: int = struct.field(pytree_node=False, default=133)
     flip_enter_top_y: int = struct.field(pytree_node=False, default=-3)
-    # Where a side exit lands him, measured on level 5 (HL.SIDE_ENTER_X):
-    # off the LEFT edge he arrives near the right of the next room down, off
-    # the RIGHT edge near the left of the room above. His y does not change.
+    # Where a side exit lands him, measured on level 5 (HL.SIDE_ENTER_X). It
+    # is a property of the EDGE he left by, not of which way along the chain
+    # that edge goes: off the LEFT edge he arrives near the right of the other
+    # room, off the RIGHT edge near its left. His y does not change. Level 7
+    # room 10 leaves by the right edge and the ROM puts him at x 16 in room
+    # 11, which is the same rule.
     side_enter_left_x: int = struct.field(pytree_node=False,
                                           default=HL.SIDE_ENTER_X[-1])
     side_enter_right_x: int = struct.field(pytree_node=False,
@@ -663,6 +675,12 @@ class HeroConstants(AutoDerivedConstants):
         default_factory=lambda: jnp.array(_LV["side_l"], dtype=jnp.bool_))
     SIDE_EXIT_RIGHT: jnp.ndarray = struct.field(pytree_node=False,
         default_factory=lambda: jnp.array(_LV["side_r"], dtype=jnp.bool_))
+    # ... and which way along the chain that edge goes: +1 down, -1 back up.
+    # Level 5 descends through a left edge, level 7 through a right one.
+    SIDE_EXIT_LEFT_DELTA: jnp.ndarray = struct.field(pytree_node=False,
+        default_factory=lambda: jnp.array(_LV["side_l_d"], dtype=jnp.int32))
+    SIDE_EXIT_RIGHT_DELTA: jnp.ndarray = struct.field(pytree_node=False,
+        default_factory=lambda: jnp.array(_LV["side_r_d"], dtype=jnp.int32))
     ROOM_WALLS: jnp.ndarray = struct.field(pytree_node=False,
         default_factory=lambda: jnp.array(_LV["walls"], dtype=jnp.int32))
     ROOM_WALL_VALID: jnp.ndarray = struct.field(pytree_node=False,
@@ -1073,20 +1091,32 @@ class JaxHero(JaxEnvironment[HeroState, HeroObservation, HeroInfo, HeroConstants
 
         # The cave also turns sideways. Where a room's corridor reaches the
         # edge of the screen as open air, walking into that edge leaves the
-        # room exactly as falling through the floor does: the left edge leads
-        # DOWN the chain and the right edge back UP it, and the hero keeps his
-        # height. Level 5 room 1 is sealed floor to ceiling and this is the
-        # only way on from it. Measured on the ROM, 2026-09-22; see
-        # HL.SIDE_EXITS for the numbers.
+        # room exactly as falling through the floor does, and the hero keeps
+        # his height. Level 5 room 1 is sealed floor to ceiling and this is the
+        # only way on from it; so is level 7 room 10, whose floor is all
+        # liquid.
+        #
+        # WHICH WAY an edge goes is measured per room, not fixed. Level 5
+        # descends through a LEFT edge and level 7 through a RIGHT one, so the
+        # delta comes out of HL.SIDE_EXITS. Measured on the ROM, 2026-09-22.
         x_min, x_max = 8, c.screen_width - 8 - c.player_width
         side_l = c.SIDE_EXIT_LEFT[lvl, state.room] & left & (new_x <= x_min)
         side_r = c.SIDE_EXIT_RIGHT[lvl, state.room] & right & (new_x >= x_max)
         # a room flip has already happened this frame -> that one wins
         flipped = flip_down | flip_up
-        side_l = side_l & (~flipped) & (state.room < n_rooms - 1)
-        side_r = side_r & (~flipped) & (state.room > 0)
-        new_room = (new_room + side_l.astype(jnp.int32)
-                    - side_r.astype(jnp.int32)).astype(jnp.int32)
+        side_l = side_l & ~flipped
+        side_r = side_r & ~flipped
+        delta = jnp.where(side_l, c.SIDE_EXIT_LEFT_DELTA[lvl, state.room],
+                          jnp.where(side_r,
+                                    c.SIDE_EXIT_RIGHT_DELTA[lvl, state.room],
+                                    0)).astype(jnp.int32)
+        # never off either end of the chain
+        delta = jnp.where((state.room + delta < 0)
+                          | (state.room + delta > n_rooms - 1), 0, delta)
+        took_side = delta != 0
+        side_l = side_l & took_side
+        side_r = side_r & took_side
+        new_room = (new_room + delta).astype(jnp.int32)
         new_x = jnp.where(side_l, c.side_enter_left_x,
                           jnp.where(side_r, c.side_enter_right_x,
                                     new_x)).astype(jnp.int32)
@@ -1285,12 +1315,19 @@ class JaxHero(JaxEnvironment[HeroState, HeroObservation, HeroInfo, HeroConstants
                                              kx, ey, kw, eh)
 
         # --- deadly zones (water strips) + periodic flare-ups (L7-10) ---
+        # The liquid surface is SOLID - it is in the wall rects, on the rows
+        # the ROM draws it - so the hero can never be inside it and the only
+        # way to meet it is to come to rest on it. Its lethal box is therefore
+        # the measured rect grown by one pixel, exactly as magma's is below
+        # and for the same reason: standing on a rect leaves his feet on the
+        # row above its top, which does not overlap the rect itself.
         de = c.DEADLY_R[lvl]
         died_deadly = ((state.invuln_timer <= 0) &
                        jnp.any(c.DEADLY_VALID[lvl] & (de[:, 0] == new_room) &
                                self._aabb(new_x, new_y, c.player_width,
-                                          c.player_height, de[:, 1], de[:, 2],
-                                          de[:, 3], de[:, 4])))
+                                          c.player_height, de[:, 1] - 1,
+                                          de[:, 2] - 1, de[:, 3] + 2,
+                                          de[:, 4] + 2)))
         # --- magma: cave rock that burns (HERO_SPEC.md section 3) ---
         # It is solid because it is in the wall rects, so the hero can never
         # be INSIDE it - the only way to meet it is to end up against it.

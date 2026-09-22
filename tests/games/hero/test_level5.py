@@ -188,8 +188,12 @@ def test_room_1_is_sealed_and_has_no_blastable_floor():
 
 
 def test_the_side_exits_are_the_open_corridor_edges():
-    assert HL.SIDE_EXITS[L - 1] == [(1, -1), (2, 1)]
-    for room, side in HL.SIDE_EXITS[L - 1]:
+    # (room, side, delta): room 1's LEFT edge goes DOWN the chain (+1) and
+    # room 2's RIGHT edge comes back UP it (-1). Which edge descends is a
+    # property of the room - level 7 descends through a RIGHT edge - so the
+    # direction is carried as data rather than derived from the side.
+    assert HL.SIDE_EXITS[L - 1] == [(1, -1, 1), (2, 1, -1)]
+    for room, side, _delta in HL.SIDE_EXITS[L - 1]:
         cell = 0 if side < 0 else 37
         assert BANDS[room]["B"][cell] == ".", \
             "a side exit is an open corridor cell at the edge of the screen"
@@ -197,7 +201,8 @@ def test_the_side_exits_are_the_open_corridor_edges():
     for room, band in enumerate(BANDS):
         for cell, side in ((0, -1), (37, 1)):
             if band["B"][cell] == ".":
-                assert (room, side) in HL.SIDE_EXITS[L - 1]
+                assert room in {r for r, sd, _d in HL.SIDE_EXITS[L - 1]
+                                if sd == side}
 
 
 def test_walking_off_room_1s_left_edge_enters_room_2(env):
@@ -256,7 +261,7 @@ def test_a_room_without_an_open_edge_keeps_him_in(env):
 def test_every_room_but_the_last_has_a_way_on():
     """A hole in the floor, or an open side edge. Room 1 has only the second
     kind, which is why the level used to be unfinishable here."""
-    sides = {room for room, _side in HL.SIDE_EXITS[L - 1]}
+    sides = {room for room, _side, _delta in HL.SIDE_EXITS[L - 1]}
     for room in range(7):
         has_hole = "." in BANDS[room]["C"]
         assert has_hole or room in sides, f"room {room} has no way on"

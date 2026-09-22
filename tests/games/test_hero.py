@@ -510,8 +510,18 @@ def test_levels_4_to_16_data_present():
     # rebuilt level, where the first pass recorded only 140-141.
     assert HL.DEADLY[3] == [(7, 8, 139, 152, 3)]
     assert HL.DEADLY[4] == [(7, 8, 140, 152, 2)]
-    assert HL.DEADLY[5] == []
-    assert all(HL.FLARES[lv] == [] for lv in range(6))
+    # level 6's miner's room is flooded too - the same trim on rows 139-141
+    # that levels 1 to 4 have. It came out of the level-6 regeneration; this
+    # assertion still said [] from before it.
+    assert HL.DEADLY[5] == [(9, 8, 139, 152, 3)]
+    # level 7's water room, and its own flooded miner's room. Room 10's rect
+    # is all six rows a '~' cell is drawn on, because the top one is the row
+    # the hero comes to rest on.
+    assert HL.DEADLY[6] == [(10, 8, 136, 152, 6), (11, 8, 139, 152, 3)]
+    # No flare-up survives a regeneration: the rows levels 7-13 used to carry
+    # were authored on top of the superseded reference, and no capture finds
+    # a periodic eruption anywhere. Level 7's three went with its rebuild.
+    assert all(HL.FLARES[lv] == [] for lv in range(7))
     for blobs, pal, n in [(HL.BG_RLE_L4, HL.PALETTE_L4, 8),
                           (HL.BG_RLE_L5, HL.PALETTE_L5, 8),
                           (HL.BG_RLE_L6, HL.PALETTE_L6, 10),
@@ -529,12 +539,12 @@ def test_levels_4_to_16_data_present():
         for b in blobs:
             assert HL.decode_bg(b, pal).shape == (142, 160, 3)
     # Every level's way down starts with the room-0 central pillar. Levels
-    # 1-5 have been rebuilt from the ROM and state it on the band grid (rows
+    # 1-7 have been rebuilt from the ROM and state it on the band grid (rows
     # 16-98, the ceiling and middle cells a stick takes together); levels
-    # 6-16 still carry the older y=19 authoring until their turn comes.
-    for lv in range(5):
+    # 8-16 still carry the older y=19 authoring until their turn comes.
+    for lv in range(7):
         assert (0, 60, 16, 8, 83, 1) in HL.DESTRUCTIBLE[lv], f"level {lv + 1}"
-    for lv in range(5, 16):
+    for lv in range(7, 16):
         assert (0, 60, 19, 8, 80, 1) in HL.DESTRUCTIBLE[lv]
     for lv in range(16):
         assert HL.MINER_POS[lv][0] < HL.ROOMS_PER_LEVEL[lv]
@@ -655,7 +665,8 @@ def test_l5r1_is_left_through_the_open_left_edge():
     from jaxatari.games import hero_levels as HL
     env = _env()
     c = env.consts
-    assert (1, -1) in HL.SIDE_EXITS[4], "room 1's left edge is the way on"
+    assert (1, -1, 1) in HL.SIDE_EXITS[4], \
+        "room 1's left edge is the way on, and it goes DOWN the chain"
     assert [z for z in HL.DESTRUCTIBLE[4] if z[0] == 1] == [], \
         "nothing in room 1 is blastable"
     _, state = env.reset()
@@ -684,18 +695,28 @@ def test_l5r1_magma_is_at_the_right_edge_not_the_left():
 
 
 def test_opening_pillar_breakable_on_deep_levels():
-    """Every level's opening pillar is dynamite-breakable (convention)."""
+    """Every level's opening pillar is dynamite-breakable (convention).
+
+    He plants beside it and RUNS, then stands. He cannot simply hold LEFT for
+    the whole fuse any more: from level 6 on, room 0's corridor is magma at
+    both ends as well as in the pillar, so walking left for ever walks into
+    the magma at x 8-19 - and planting from x 54 puts him inside the lethal
+    box of the magma pillar itself before the fuse even starts. Eighteen
+    frames of retreat clears the blast on all four levels and stops short of
+    the magma on the two that have it.
+    """
     env = _env()
     c = env.consts
-    for lvl in (3, 4, 5):
+    for lvl in (3, 4, 5, 6):
         _, state = env.reset()
         state = state.replace(level=jnp.int32(lvl),
-                              player_x=jnp.int32(54), player_y=jnp.int32(75),
+                              player_x=jnp.int32(52), player_y=jnp.int32(75),
                               spider_alive=jnp.zeros_like(state.spider_alive))
         _, state, _, _, _ = env.step(state, DOWN)
-        for _ in range(c.dyn_fuse_playable + 6):
-            _, state, _, _, _ = env.step(state, LEFT)
+        for i in range(c.dyn_fuse_playable + 6):
+            _, state, _, _, _ = env.step(state, LEFT if i < 18 else NOOP)
         assert int(state.wall_stage[0]) == 2, f"pillar not broken on level {lvl}"
+        assert int(state.lives) == c.starting_lives,             f"and he got clear of it on level {lvl}"
 
 
 def test_advance_chain_walks_every_level():
@@ -740,17 +761,25 @@ def test_water_strip_kills_when_stood_in():
 
 
 def test_flare_kills_only_while_its_cycle_is_on():
-    """Levels 7-10 gap-mouth flare-ups (measured eruptions, recreated as
-    periodic cycles): deadly during the on-window, harmless while off."""
+    """The flare mechanism: deadly during the on-window, harmless while off.
+
+    Checked on level 9, which still carries the authored rows. Level 7's three
+    went when it was regenerated - they were invented on top of the superseded
+    reference, and the ROM capture finds no periodic eruption in room 6 or
+    along room 10's water line. The mechanism is kept and tested because
+    levels 9-13 still use it; the next level to be rebuilt will most likely
+    empty its rows too.
+    """
     env = _env()
     c = env.consts
     from jaxatari.games import hero_levels as HL
-    rm, fx, fy, fw, fh, period, duty = HL.FLARES[6][0]
+    lvl = 8
+    rm, fx, fy, fw, fh, period, duty = HL.FLARES[lvl][0]
     _, state = env.reset()
-    base = state.replace(level=jnp.int32(6), room=jnp.int32(rm),
+    base = state.replace(level=jnp.int32(lvl), room=jnp.int32(rm),
                          player_x=jnp.int32(fx + 1),
                          player_y=jnp.int32(fy - c.player_height + fh - 1),
-                         spider_alive=c.SPIDER_VALID[6])
+                         spider_alive=c.SPIDER_VALID[lvl])
     on = base.replace(step_counter=jnp.int32(0))          # cycle on
     _, s, _, _, _ = env.step(on, NOOP)
     assert int(s.lives) == c.starting_lives - 1
@@ -763,7 +792,10 @@ def test_levels_7_to_10_miners_on_the_measured_ledges():
     """The deep-level miners sit at the classic side positions (measured by
     RAM-teleport room scans): L7 R11, L8 R13, L9 R15, L10 R15."""
     from jaxatari.games import hero_levels as HL
-    assert HL.MINER_POS[6] == (11, 129, 86)
+    # level 7's is the ROM capture's, from a real entry into room 11 rather
+    # than a RAM teleport: x 128, one pixel left of what the teleport scan
+    # reported, and where the recorded playthrough draws him.
+    assert HL.MINER_POS[6] == (11, 128, 86)
     assert HL.MINER_POS[7] == (13, 23, 86)
     assert HL.MINER_POS[8] == (15, 129, 86)
     assert HL.MINER_POS[9] == (15, 23, 86)
