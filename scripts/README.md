@@ -8,7 +8,7 @@ Utility and development scripts for JAXAtari. Most scripts accept a `--help` fla
 
 | Script | Description |
 |--------|-------------|
-| `play.py` | Play any JAXAtari environment with keyboard input. Requires `pip install -e ".[dev]"` (pygame). `python scripts/play.py -g Pong` |
+| `play.py` | Play any JAXAtari environment with keyboard input. Requires `pip install -e ".[dev]"` (pygame). `python scripts/play.py -g Pong`. Level-debugging shortcuts `-l N -lifes -granades` select a game's `start_level_N` / `unlimited_lives` / `unlimited_dynamite` mods (H.E.R.O. ships them): `python scripts/play.py -g hero -l 5 -lifes -granades` |
 
 ---
 

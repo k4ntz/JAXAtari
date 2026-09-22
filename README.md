@@ -231,6 +231,10 @@ env = MultiRewardLogWrapper(env)
 ```bash
 # requires the [dev] extra (pygame)
 python3 scripts/play.py -g Pong --mods lazy_enemy
+
+# level debugging: start on level 5 with unlimited lives and dynamite
+# (shorthands for the start_level_N / unlimited_lives / unlimited_dynamite mods)
+python3 scripts/play.py -g hero -l 5 -lifes -granades
 ```
 
 ---
