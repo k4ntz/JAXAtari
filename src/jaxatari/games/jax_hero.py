@@ -295,6 +295,7 @@ def _build_level_arrays():
     sp_bob_base = np.zeros((nL, nS), np.int32)     # px the bob starts above y
     sp_bob_half = np.ones((nL, nS), np.int32)      # half a bob cycle, frames
     sp_hold = np.ones((nL, nS), np.int32)          # frames per drawn pose
+    sp_poses = np.zeros((nL, nS), np.int32)        # distinct sprites, 0 = kind's
     sp_patrol_half = np.full((nL, nS), _DEFAULT_PATROL_HALF, np.int32)
     nD = _MAX_DWALLS
     dw = np.zeros((nL, nD, 6), np.int32)          # room, x, y, w, h, dyn_ok
@@ -351,6 +352,12 @@ def _build_level_arrays():
             sp_hold[li, si] = max(1, hold)
             sp_patrol_half[li, si] = max(1, HL.CREATURE_PATROL.get(
                 (li + 1, si), _DEFAULT_PATROL_HALF))
+            # How many sprites the ROM actually draws this creature as. 0
+            # means "nobody counted", and the renderer then runs the kind's
+            # whole cycle, which is what every unmeasured level expects. A
+            # measured STILL creature counts 1 and so is drawn as one bitmap
+            # - the pose clock still ticks, it just has nowhere to go.
+            sp_poses[li, si] = HL.CREATURE_SPRITES.get((li + 1, si), 0)
         for gi, (rm, x, y) in enumerate(HL.LANTERNS[li]):
             lan[li, gi] = (rm, x, y)
             lan_valid[li, gi] = True
@@ -457,6 +464,7 @@ def _build_level_arrays():
                 sp_room=sp_room, sp_x=sp_x, sp_y=sp_y, sp_patrol=sp_patrol,
                 sp_kind=sp_kind, sp_valid=sp_valid,
                 sp_bob=sp_bob, sp_bob_half=sp_bob_half, sp_hold=sp_hold,
+                sp_poses=sp_poses,
                 sp_bob_base=sp_bob_base, sp_patrol_half=sp_patrol_half,
                 dw=dw, dw_valid=dw_valid,
                 dw_group=dw_group, dw_scores=dw_scores,
@@ -680,6 +688,10 @@ class HeroConstants(AutoDerivedConstants):
         default_factory=lambda: jnp.array(_LV["sp_bob_base"], dtype=jnp.int32))
     SPIDER_HOLD: jnp.ndarray = struct.field(pytree_node=False,
         default_factory=lambda: jnp.array(_LV["sp_hold"], dtype=jnp.int32))
+    # distinct sprites the ROM draws this creature as; 0 = use the kind's
+    # full cycle (HL.CREATURE_SPRITES)
+    SPIDER_POSES: jnp.ndarray = struct.field(pytree_node=False,
+        default_factory=lambda: jnp.array(_LV["sp_poses"], dtype=jnp.int32))
     SPIDER_PATROL_HALF: jnp.ndarray = struct.field(pytree_node=False,
         default_factory=lambda: jnp.array(_LV["sp_patrol_half"], dtype=jnp.int32))
     SPIDER_VALID: jnp.ndarray = struct.field(pytree_node=False,
@@ -2396,10 +2408,15 @@ class HeroRenderer(JAXGameRenderer):
         sx, sy = _creature_pos(c, lvl, state.step_counter)
         snake_frame = _snake_pose(_snake_length(state.step_counter),
                                   _snake_head_down(state.step_counter))
+        # How many poses this creature runs through is its own property, not
+        # its kind's: the census counted the distinct sprites the ROM draws
+        # each one as, and a creature it saw draw ONE all scan is still. A
+        # slot nobody counted carries 0 and keeps the kind's whole cycle.
+        poses = jnp.where(c.SPIDER_POSES[lvl] > 0,
+                          c.SPIDER_POSES[lvl], self.CREATURE_POSES[kind])
         anim_frame = jnp.where(
             kind == 3, snake_frame,
-            (state.step_counter // c.SPIDER_HOLD[lvl])
-            % self.CREATURE_POSES[kind])
+            (state.step_counter // c.SPIDER_HOLD[lvl]) % poses)
         sp_room = c.SPIDER_ROOM[lvl]
         for i in range(c.num_spiders):
             raster = maybe(state.spider_alive[i] & (sp_room[i] == room),
