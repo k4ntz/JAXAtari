@@ -15,11 +15,13 @@ Level 4 is the first level with two things earlier levels never had, and
 each of them changed the generator:
 
   * SNAKES, in rooms 3 and 7. The ROM draws a snake in its own green
-    whatever the cave's hue, wriggling inside a 7x7 box planted against a
-    wall's side. It classified as a spider before - its body is 7 px wide
-    too - so it came out kind 0, on a spider's clock, laser-killable, with
-    bestiary.json's grey 5x11 bitmap and a kill box six rows below the
-    sprite. See test_the_two_snakes_* below.
+    whatever the cave's hue: a tongue anchored in a wall's right face that
+    stretches out of the rock and pulls back on a 64-frame cycle. It
+    classified as a spider before - its body is 7 px wide too - so it came
+    out kind 0, on a spider's clock, with bestiary.json's grey 5x11 bitmap
+    and a kill box six rows below the sprite. Since 2026-09-22 the stretch
+    itself is measured, and so is the laser rule the older tests here left
+    open. See test_the_two_snakes_* and test_the_laser_kills_a_snake_*.
   * A PAIR OF ROOMS THAT DRAW THE SAME BAND. Rooms 5 and 6 draw the identical
     corridor, each with a two-cell pillar at cells 9-10. The generator used
     to call that one physical wall. Measured on the ROM it is not, and that
@@ -47,7 +49,8 @@ import numpy as np
 import pytest
 
 from jaxatari.games import hero_levels as HL
-from jaxatari.games.jax_hero import JaxHero
+from jaxatari.games.jax_hero import (
+    JaxHero, _SNAKE_POSES, _snake_length, _snake_pose)
 
 import level_common as common
 
@@ -304,74 +307,202 @@ def test_the_two_snakes_are_snakes_and_not_spiders(env):
     one. It is told apart by its colour - the ROM draws it green whatever the
     cave's hue - and by its box: 7 rows, with no thread hanging above it.
 
-    Being kind 3 is not cosmetic: the engine gives kind 3 its own hit box,
-    its own pose cycle and its own 3-frame hold, where a spider holds a pose
-    for 8 and a bat for 4.
-
-    UNRESOLVED, and deliberately not asserted here: whether the laser kills
-    a snake. jax_hero says it does not, citing 70 frames of fire on the
-    ROM's miner-room snake; CHARACTERS.md's cast table says it does, for 50
-    points. An attempt to settle it on this level's room 3 snake was
-    inconclusive - the control, firing the same way at room 1's spider,
-    failed to kill the spider either, so the harness was not firing. The
-    engine keeps the earlier measurement until somebody re-measures it with
-    a control that passes.
+    Being kind 3 is not cosmetic: a snake neither bobs nor patrols, it runs
+    the stretch cycle below instead of a pose cycle on SPIDER_HOLD, and the
+    x in SPIDERS is the face of the rock it is planted in, not the centre of
+    anything - which is why the cell to its LEFT is always solid and the one
+    it is drawn in is always open.
     """
     snakes = [(i, s) for i, s in enumerate(HL.SPIDERS[L - 1]) if s[4] == 3]
     assert [s for _i, s in snakes] == [(3, 112, 72, 0, 3), (7, 88, 72, 0, 3)]
-    c = env.consts
-    for i, (room, x, y, patrol, _k) in snakes:
+    for _i, (room, x, y, patrol, _k) in snakes:
         assert patrol == 0, "it never leaves its 7x7 box"
-        assert HL.CREATURE_MOTION[(L, i)] == (0, 0, 3)
-        assert int(c.SPIDER_HOLD[L - 1, i]) == 3
-        assert BANDS[room]["B"][(x - 8) // 4] == ".", "drawn in open corridor"
+        cell = (x - 8) // 4
+        assert BANDS[room]["B"][cell] == ".", "drawn in open corridor"
+        assert BANDS[room]["B"][cell - 1] == "#", "planted in the rock at its left"
 
 
-def test_a_snakes_kill_box_is_the_seven_rows_it_is_drawn_in(env):
-    """Its box is rows y..y+6 (CHARACTERS.md: 7x7 at y 72), not the spider's
-    lower five rows six pixels further down, which is where the shared
-    spider offset used to put it - inside the rock under the sprite."""
+def test_the_laser_kills_a_snake_for_fifty_points(env):
+    """SETTLED on the ROM 2026-09-22 (level 4 room 3, 18 aligned probes, all
+    18 killed): the bolt kills a snake and pays the same 50 points as any
+    other creature. Only MAGMA is laser-proof.
+
+    The earlier "laser-immune" reading came from one probe whose liveness
+    test counted every non-black pixel in the snake's box - and a snake's box
+    overlaps the rock it lives in, so that test could only ever report
+    "alive" (its px_before of 18 was exactly the rock). The probe that
+    replaced it counts the snake's three greens, and its control - the same
+    code firing at room 1's spider - kills the spider for 50.
+    """
+    c = env.consts
+    slot = next(i for i, s in enumerate(HL.SPIDERS[L - 1]) if s[4] == 3)
+    # held at the snake's own height, the way the ROM probe pinned the hero:
+    # standing on room 3's floor puts his eye row one pixel under the box, so
+    # a snake is shot from a hover
+    s = _snakes_awake(_state_in(env, room=3))
+    assert bool(s.spider_alive[slot])
+    score, fired = int(s.score), 0
+    for _ in range(200):
+        s = s.replace(player_x=np.int32(130), player_y=np.int32(71),
+                      facing=np.int32(-1))
+        _, s, _r, _, _ = env.step(s, FIRE)
+        fired += 1
+        if not bool(s.spider_alive[slot]):
+            break
+    assert not bool(s.spider_alive[slot]), \
+        f"the bolt must kill the snake ({fired} frames of fire)"
+    assert int(s.score) - score == c.creature_points
+
+
+def test_a_snake_stretches_out_of_the_wall_and_pulls_back(env):
+    """Measured on the ROM, level 4 room 3, 150 consecutive frames with the
+    hero pinned clear of it: a snake is not a creature that bobs in place but
+    a tongue anchored in the rock that STRETCHES out and pulls back, on a
+    free-running 64-frame cycle that ignores the player entirely.
+
+    It grows one pixel every 4 frames from nothing to 7 px and back, holding
+    8 frames at each end - so for 8 frames in every 64 it is inside the rock
+    and there is nothing on the screen at all.
+    """
+    length = [int(_snake_length(np.int32(t))) for t in range(64)]
+    assert length == ([0] * 8 +                       # inside the rock
+                      [1] * 4 + [2] * 4 + [3] * 4 + [4] * 4 + [5] * 4 + [6] * 4 +
+                      [7] * 8 +                       # fully out
+                      [6] * 4 + [5] * 4 + [4] * 4 + [3] * 4 + [2] * 4 + [1] * 4)
+    # and it repeats, for ever, on the same clock
+    assert [int(_snake_length(np.int32(t))) for t in range(64, 128)] == length
+
+
+def test_a_snake_inside_the_rock_can_be_neither_touched_nor_shot(env):
+    """Its box is what it is drawn in, so while it is pulled in there is
+    nothing to collide with - which is what makes level 5's eight-pixel
+    corridor at room 4 passable at all."""
+    c = env.consts
+    slot = next(i for i, s in enumerate(HL.SPIDERS[L - 1]) if s[4] == 3)
+    # the middle of the 8-frame dwell it spends inside the rock
+    hidden = [t for t in range(64) if int(_snake_length(np.int32(t))) == 0][4]
+
+    # standing right on top of it, longer than the post-respawn grace lasts
+    s = _snakes_awake(_state_in(env, room=3)).replace(
+        player_x=np.int32(112), player_y=np.int32(70))
+    lives = int(s.lives)
+    for _ in range(int(c.respawn_invuln) + 30):
+        s = s.replace(step_counter=np.int32(hidden))   # hold the clock still
+        _, s, _r, _, _ = env.step(s, NOOP)
+    assert int(s.lives) == lives, "a snake inside the rock cannot touch him"
+
+    # and the bolt goes straight through the empty rock face
+    s = _snakes_awake(_state_in(env, room=3))
+    for _ in range(60):
+        s = s.replace(step_counter=np.int32(hidden), player_x=np.int32(130),
+                      player_y=np.int32(71), facing=np.int32(-1))
+        _, s, _r, _, _ = env.step(s, FIRE)
+    assert bool(s.spider_alive[slot]), "nothing to hit while it is pulled in"
+
+
+def test_a_snakes_box_is_the_rows_and_the_pixels_it_is_drawn_in(env):
+    """Its box is rows y..y+6 (the 7x7 the ROM wriggles it in), not the
+    spider's lower five rows six pixels further down, which is where the
+    shared spider offset used to put it - inside the rock under the sprite.
+
+    Its WIDTH is however much of it is out of the wall on that frame, so the
+    box and the sprite are the same thing, as they are for every other
+    creature.
+    """
     c = env.consts
     assert c.snake_height == 7
-    obs = env._get_observation(_state_in(env, room=3))
-    box = [(int(obs.spiders.y[i]), int(obs.spiders.height[i]))
-           for i, s in enumerate(HL.SPIDERS[L - 1]) if s[4] == 3]
-    assert box == [(72, 7), (72, 7)]
+    slots = [i for i, s in enumerate(HL.SPIDERS[L - 1]) if s[4] == 3]
+    for t in (0, 10, 20, 34, 50):
+        obs = env._get_observation(
+            _state_in(env, room=3).replace(step_counter=np.int32(t)))
+        want = int(_snake_length(np.int32(t)))
+        for i in slots:
+            assert int(obs.spiders.y[i]) == 72
+            assert int(obs.spiders.height[i]) == 7
+            assert int(obs.spiders.width[i]) == want, f"frame {t}"
 
 
-def test_a_snake_wriggles_through_four_poses_and_a_bat_through_four_wings(env):
-    """CHARACTERS.md gives the snake four bitmaps inside its box and the bat
-    four wing poses, and they are NOT held for the same number of frames:
-    the bat holds each for 4, the snake for 3, and this level's spiders for
-    8. One shared rate would be wrong for all three."""
-    poses = np.asarray(_renderer(env).CREATURE_POSES)
-    assert poses[3] == 4, "snake: four poses"
-    assert poses[1] == 4, "bat: four wing poses"
-    assert poses[0] == 2, "spider: two body poses"
-    c = env.consts
-    assert int(c.SPIDER_HOLD[L - 1, 3]) == 3, "snake"
-    assert int(c.SPIDER_HOLD[L - 1, 4]) == 4, "bat"
-    assert int(c.SPIDER_HOLD[L - 1, 0]) == 8, "spider"
-
-
-def test_the_snake_is_drawn_green_and_inside_its_box(env):
+def test_the_snake_is_drawn_in_the_roms_three_greens_inside_its_box(env):
     """The superseded bitmap was bestiary.json's grey 5x11 segmented body -
     twice as tall as the box the ROM wriggles it in, and the wrong colour.
 
-    CHARACTERS.md: the snake is green whatever the level's hue, and it never
-    leaves its 7x7 box, so nothing of it may be drawn below row 6 of the
-    12-row creature canvas.
+    The ROM draws it green whatever the level's hue, in four shades, and it
+    never leaves its 7x7 box, so nothing of it may be drawn below row 6 of
+    the 12-row creature canvas or right of column 6.
     """
     r = _renderer(env)
     palette = np.asarray(r.PALETTE)
-    for pose in np.asarray(r.CREATURE_FRAMES[3]):
+    greens = {(92, 186, 92), (72, 160, 72), (111, 210, 111), (50, 132, 50)}
+    poses = np.asarray(r.CREATURE_FRAMES[3])[:_SNAKE_POSES]
+    for i, pose in enumerate(poses):
         rgb = palette[pose]
         drawn = rgb.any(axis=2)
+        if i == 0:
+            assert not drawn.any(), "pose 0 is the snake inside the rock"
+            continue
         assert drawn.any(), "a pose that draws nothing"
-        rows = np.nonzero(drawn.any(axis=1))[0]
+        rows, cols = np.nonzero(drawn.any(axis=1))[0], np.nonzero(drawn.any(axis=0))[0]
         assert int(rows.max()) <= 6, "a snake never leaves the top 7 rows"
+        assert int(cols.max()) <= 6, "nor the leftmost 7 columns"
         colours = {tuple(int(v) for v in c) for c in rgb[drawn]}
-        assert colours == {(92, 186, 92)}, colours
+        assert colours <= greens, colours
+
+
+def test_the_snakes_poses_are_the_bitmaps_the_rom_draws(env):
+    """Transcribed off the ROM (level 4 room 3, anchor x 112, rows 72-78).
+    The snake flutters between two head shapes every 8 frames while it
+    stretches, which is why each length has two bitmaps and not one.
+    """
+    r = _renderer(env)
+    palette = np.asarray(r.PALETTE)
+    code = {(0, 0, 0): ".", (50, 132, 50): "d", (72, 160, 72): "g",
+            (92, 186, 92): "G", (111, 210, 111): "h"}
+
+    def art(pose):
+        rgb = palette[np.asarray(r.CREATURE_FRAMES[3, pose])]
+        return ["".join(code[tuple(int(v) for v in px)] for px in row[:7])
+                for row in rgb[:7]]
+
+    # frame 15 of the film: 7 px out, head up
+    assert art(_snake_pose(7, False)) == [
+        "....dd.",
+        "...gg.g",
+        "GGGGGGG",
+        "hhhhh.h",
+        "GGGGGGG",
+        ".....g.",
+        ".......",
+    ]
+    # frame 18: 7 px out, head down
+    assert art(_snake_pose(7, True)) == [
+        "....dd.",
+        "...gg.g",
+        "GGGGGGG",
+        "hhhh..h",
+        "GGGGG..",
+        "....ggg",
+        ".....d.",
+    ]
+    # frame 39: 2 px out, head down
+    assert art(_snake_pose(2, True)) == [
+        "d......",
+        ".g.....",
+        "GG.....",
+        ".h.....",
+        ".......",
+        "gg.....",
+        "d......",
+    ]
+    # frame 58: 1 px out, head up - the least of it there ever is
+    assert art(_snake_pose(1, False)) == [
+        ".......",
+        "g......",
+        "G......",
+        "h......",
+        "G......",
+        ".......",
+        ".......",
+    ]
 
 
 def test_still_creatures_are_still_and_only_the_bat_patrols(env):
@@ -420,8 +551,11 @@ def test_no_creature_of_this_level_falls_back_to_an_archetype(env):
         assert (L, slot) in HL.CREATURE_MOTION
     assert int(c.SPIDER_PATROL_HALF[L - 1, 0]) == c.spider_patrol_half_period \
         or True   # a still creature keeps the default; it never sweeps
+    # 8 for a spider's two body poses, 4 for a bat's wing cycle - and 4 for
+    # the snakes too, which is a coincidence of numbers and nothing else:
+    # the engine never reads a snake's hold (see _snake_length).
     assert {int(c.SPIDER_HOLD[L - 1, i])
-            for i in range(len(HL.SPIDERS[L - 1]))} == {3, 4, 8}
+            for i in range(len(HL.SPIDERS[L - 1]))} == {4, 8}
 
 
 def test_the_flooded_floor_is_the_bottom_three_rows_of_room_7():
@@ -479,6 +613,13 @@ def _renderer(env):
 def _state_in(env, room):
     _, s = env.reset()
     return s.replace(level=np.int32(L - 1), room=np.int32(room))
+
+
+def _snakes_awake(s):
+    """reset() hands back LEVEL 1's roster, on which every slot past the
+    first is already dead - so a level-4 creature has to be revived before
+    anything can be measured against it."""
+    return s.replace(spider_alive=np.ones_like(s.spider_alive))
 
 
 def _wall_w(room, x):

@@ -477,16 +477,18 @@ def test_levels_4_to_16_data_present():
         assert all(len(t) == 5 for t in HL.DEADLY[lv])
         assert all(len(t) == 7 for t in HL.FLARES[lv])
     # levels 1 and 2 have no lamp at all; the "lamp" their level files list
-    # beside the miner is the top pixel of his own bitmap. Levels 3 and 4
-    # have real ones, and when they were regenerated off the ROM every lamp
-    # measured at y 35, not the y 33 the superseded reference gave every lamp
-    # in the game - so level 5 still carries the authored 33 until it is
-    # remeasured too (CHARACTERS.md agrees with the ROM: 5x8 at y 35).
+    # beside the miner is the top pixel of his own bitmap. Levels 3, 4 and 5
+    # have real ones, and every one of them measured at y 35 off the ROM -
+    # not the y 33 the superseded reference gave every lamp in the game.
+    # Level 5's four were the last to be remeasured (2026-09-22); its room 4
+    # has none at all, though the entity census listed one at (79, 35): the
+    # capture found no lamp yellow anywhere in that room.
     assert HL.LANTERNS[0] == HL.LANTERNS[1] == []
     assert HL.LANTERNS[2] == [(1, 83, 35), (3, 107, 35)]
     assert HL.LANTERNS[3] == [(1, 83, 35), (2, 23, 35), (3, 39, 35),
                               (4, 27, 35), (5, 83, 35), (6, 135, 35)]
-    assert all(y == 33 for _r, _x, y in HL.LANTERNS[4])
+    assert HL.LANTERNS[4] == [(1, 83, 35), (3, 131, 35),
+                              (5, 131, 35), (6, 83, 35)]
     assert all(16 <= y <= 59 for lv in range(5) for _r, _x, y in HL.LANTERNS[lv])
     # deadly water strips + flare-ups only exist in the deep levels
     # the flooded rooms: level 1 room 1 (water), 2 room 3 (lava), 3 room 5
@@ -640,39 +642,45 @@ def test_lantern_touch_darkens_room_until_next_level():
     assert not bool(s.room_dark.any())
 
 
-def test_l5r1_floor_blast_opens_the_way_down():
-    """Level 5 room 1 has no floor gap (measured): dynamite blasts a hole
-    through the floor band and the player falls through to room 2."""
+def test_l5r1_is_left_through_the_open_left_edge():
+    """Level 5 room 1 has no hole in its floor and no blastable wall either.
+
+    It used to be modelled as a floor the hero blasts through, which no
+    capture ever supported. Measured on the ROM 2026-09-22: its corridor
+    reaches the LEFT edge of the screen as open air, and walking into that
+    edge runs the game's own room-transition code - the hero leaves room 1 at
+    x 13 and arrives in room 2 at x 148, keeping his height, with RAM 28
+    stepping 1 -> 2 on its own.
+    """
+    from jaxatari.games import hero_levels as HL
     env = _env()
     c = env.consts
+    assert (1, -1) in HL.SIDE_EXITS[4], "room 1's left edge is the way on"
+    assert [z for z in HL.DESTRUCTIBLE[4] if z[0] == 1] == [], \
+        "nothing in room 1 is blastable"
     _, state = env.reset()
     state = state.replace(level=jnp.int32(4), room=jnp.int32(1),
-                          player_x=jnp.int32(48), player_y=jnp.int32(75),
+                          player_x=jnp.int32(60), player_y=jnp.int32(75),
                           spider_alive=jnp.zeros_like(state.spider_alive))
-    _, state, _, _, _ = env.step(state, DOWN)
-    assert bool(state.dyn_active)
-    # Flee left along the floor - but stop short of x 16: room 1's left wall
-    # is MAGMA (x 8-15) and touching it kills just as surely as the blast.
-    for _ in range(24):
+    y_before = int(state.player_y)
+    for _ in range(90):
         _, state, _, _, _ = env.step(state, LEFT)
-    for _ in range(c.dyn_fuse_playable + 6 - 24):
-        _, state, _, _, _ = env.step(state, NOOP)
-    assert int(state.lives) == c.starting_lives
-    assert bool((state.wall_stage >= 2).any())      # floor segment(s) gone
-    # walk back over the hole and fall through
-    state = state.replace(player_x=jnp.int32(48), player_y=jnp.int32(75))
-    for _ in range(80):
-        _, state, _, _, _ = env.step(state, NOOP)
-        if int(state.room) == 2:
+        if int(state.room) != 1:
             break
     assert int(state.room) == 2
-    # the blast opened the SAME wall as seen from room 2 (the screen flip
-    # splits one wall across both rooms): the fall continues through room
-    # 2's ceiling band instead of bouncing off it
-    for _ in range(70):
-        _, state, _, _, _ = env.step(state, NOOP)
-    assert int(state.room) == 2
-    assert int(state.player_y) > 60
+    assert int(state.player_x) == c.side_enter_left_x
+    assert int(state.player_y) == y_before
+    assert int(state.lives) == c.starting_lives, \
+        "the magma of room 1 is at the RIGHT edge, so walking left is safe"
+
+
+def test_l5r1_magma_is_at_the_right_edge_not_the_left():
+    """The superseded capture put room 1's magma at x 8-15. The ROM draws it
+    in the last two cells, x 152-159, and the corridor is open all the way to
+    the left edge - which is what makes the side exit reachable."""
+    from jaxatari.games import hero_levels as HL
+    rects = [m for m in HL.MAGMA[4] if m[0] == 1]
+    assert rects == [(1, 152, 60, 8, 39)]
 
 
 def test_opening_pillar_breakable_on_deep_levels():

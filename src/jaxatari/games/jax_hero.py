@@ -193,6 +193,56 @@ _DEFAULT_ANIM_HOLD = 8
 _DEFAULT_PATROL_HALF = 40           # HeroConstants.spider_patrol_half_period
 
 
+# --- The wall snake's stretch (measured on the ROM 2026-09-22, level 4 room
+# 3: 150 consecutive frames with the hero pinned clear of it) ---------------
+# A snake does not bob, patrol or cycle poses the way the other creatures do.
+# It is a green tongue anchored in a wall's side that STRETCHES out of the
+# rock and pulls back in, on a free-running 64-frame cycle that ignores the
+# player entirely (verified: identical traces with the hero pinned at nine
+# different spots, near and far).
+#
+#   frames  0-7   inside the rock, nothing drawn at all
+#           8-31  1, 2, 3, 4, 5, 6 px out, a pixel every 4 frames
+#          32-39  7 px out, at full stretch
+#          40-63  6, 5, 4, 3, 2, 1 px, pulling back in
+#
+# Alongside that its head flutters between two shapes every 8 frames, on its
+# own clock: the phase between the two (head up while (t + 5) % 16 < 8) is
+# measured off the same film. The old model - four blobs held 3 frames each,
+# none of them the shape of anything the ROM draws - was invented from a
+# reference whose "four poses" were a frame-differencer splitting the snake's
+# DISCONNECTED pixels into pieces (see [[hero-characters-md-motion-artefact]]).
+_SNAKE_CYCLE = 64
+_SNAKE_STEP = 4                     # frames per pixel of stretch
+_SNAKE_REACH = 7                    # pixels at full stretch
+_SNAKE_POSES = 1 + 2 * _SNAKE_REACH  # pose 0 is "inside the rock"
+
+
+def _snake_length(step):
+    """How many pixels of snake are out of the rock on a given frame (0..7).
+
+    This is the creature's whole extent: the box the engine collides with
+    and the sprite the renderer draws are both this many pixels wide, so a
+    snake that is pulled in cannot be touched, shot or drawn.
+    """
+    k = (step % _SNAKE_CYCLE) // _SNAKE_STEP          # 0..15, a pixel each
+    out = jnp.minimum(jnp.maximum(k - 1, 0), _SNAKE_REACH)
+    return jnp.where(k < 10, out, 16 - k).astype(jnp.int32)
+
+
+def _snake_head_down(step):
+    """The head flutters between two shapes every 8 frames (measured)."""
+    return ((step % _SNAKE_CYCLE) + 5) % 16 >= 8
+
+
+def _snake_pose(length, head_down):
+    """Index into the snake's sprite table: 0 is the empty canvas it draws
+    while it is inside the rock, then 1-7 head up and 8-14 head down."""
+    return jnp.where(length == 0, 0,
+                     length + jnp.where(head_down, _SNAKE_REACH, 0)
+                     ).astype(jnp.int32)
+
+
 def _creature_pos(c, lvl, step):
     """(x, y) of every creature slot of a level on a given frame.
 
@@ -267,8 +317,14 @@ def _build_level_arrays():
     nMg = _MAX_MAGMA
     mg = np.zeros((nL, nMg, 5), np.int32)         # room, x, y, w, h
     mg_valid = np.zeros((nL, nMg), bool)
+    # Side exits: per (level, room), whether that room's corridor is open at
+    # the left / right edge of the screen. See HL.SIDE_EXITS.
+    side_l = np.zeros((nL, _MAX_ROOMS), bool)
+    side_r = np.zeros((nL, _MAX_ROOMS), bool)
     for li in range(nL):
         rooms_n[li] = _ROOMS[li]
+        for (rm, side) in HL.SIDE_EXITS[li]:
+            (side_l if side < 0 else side_r)[li, rm] = True
         for ri in range(len(_RECTS[li])):
             for wi, (x, y, w, h) in enumerate(_CARVED[(li, ri)]):
                 walls[li, ri, wi] = (x, y, w, h)
@@ -405,7 +461,8 @@ def _build_level_arrays():
                 dw=dw, dw_valid=dw_valid,
                 dw_group=dw_group, dw_scores=dw_scores,
                 lan=lan, lan_valid=lan_valid, de=de, de_valid=de_valid,
-                fl=fl, fl_valid=fl_valid, mg=mg, mg_valid=mg_valid)
+                fl=fl, fl_valid=fl_valid, mg=mg, mg_valid=mg_valid,
+                side_l=side_l, side_r=side_r)
 
 
 _LV = _build_level_arrays()
@@ -433,6 +490,13 @@ class HeroConstants(AutoDerivedConstants):
     # centre row crosses the screen edge: centre = top + 11).
     flip_bottom_y: int = struct.field(pytree_node=False, default=133)
     flip_enter_top_y: int = struct.field(pytree_node=False, default=-3)
+    # Where a side exit lands him, measured on level 5 (HL.SIDE_ENTER_X):
+    # off the LEFT edge he arrives near the right of the next room down, off
+    # the RIGHT edge near the left of the room above. His y does not change.
+    side_enter_left_x: int = struct.field(pytree_node=False,
+                                          default=HL.SIDE_ENTER_X[-1])
+    side_enter_right_x: int = struct.field(pytree_node=False,
+                                           default=HL.SIDE_ENTER_X[1])
 
     # --- Flight physics (measured) ---
     fall_speed: float = struct.field(pytree_node=False, default=1.0)
@@ -533,8 +597,11 @@ class HeroConstants(AutoDerivedConstants):
     #   amplitude is per creature, measured (HL.CREATURE_MOTION);
     # kind 1 bat: X-wing critter, small bob, patrols horizontally (measured
     #   patrol range per creature);
-    # kind 3 snake: head in a wall's side, wiggles +-2 (patrol), kills on
-    #   touch, laser-immune (measured L4, 2026-09-11);
+    # kind 3 snake: a green tongue anchored in a wall's side that stretches
+    #   out of the rock and pulls back on a 64-frame cycle (_snake_length),
+    #   kills on touch and dies to the laser like any other creature
+    #   (re-measured on the ROM 2026-09-22; the earlier "laser-immune" note
+    #   was an artefact of a probe that counted the rock as the snake);
     # kind 2 MAGMA: not a creature at all but a red block of the cave.
     #   Static, lethal on contact, immune to the laser - but DESTRUCTIBLE BY
     #   DYNAMITE for the same 75 points as ordinary rock (measured on the
@@ -547,9 +614,10 @@ class HeroConstants(AutoDerivedConstants):
     # the bat is 11 rows of wing throughout and has no thread above it, so
     # its whole sprite is body (CHARACTERS.md, measured on level 3)
     bat_height: int = struct.field(pytree_node=False, default=11)
-    # the snake has no thread either: it wriggles inside a 7x7 box planted
-    # against a wall's side, so its whole box is body (CHARACTERS.md,
-    # measured on level 4 rooms 3 and 7, x 112/88 y 72, box 7x7)
+    # the snake has no thread either: all 7 rows of it are body. Its WIDTH is
+    # not a constant at all - it is however far out of the rock the stretch
+    # cycle has it on this frame (_snake_length), from nothing to 7 px.
+    # Measured on level 4 rooms 3 and 7, anchored at x 112/88, rows 72-78.
     snake_height: int = struct.field(pytree_node=False, default=7)
     spider_body_top: int = struct.field(pytree_node=False, default=6)
     # Archetype fallbacks, used only for a creature nobody has measured yet.
@@ -581,6 +649,12 @@ class HeroConstants(AutoDerivedConstants):
     # --- Level-indexed measured data ---
     LEVEL_ROOMS: jnp.ndarray = struct.field(pytree_node=False,
         default_factory=lambda: jnp.array(_LV["rooms_n"], dtype=jnp.int32))
+    # (level, room) -> the corridor reaches that edge of the screen as open
+    # air, so walking into it leaves the room. Measured; see HL.SIDE_EXITS.
+    SIDE_EXIT_LEFT: jnp.ndarray = struct.field(pytree_node=False,
+        default_factory=lambda: jnp.array(_LV["side_l"], dtype=jnp.bool_))
+    SIDE_EXIT_RIGHT: jnp.ndarray = struct.field(pytree_node=False,
+        default_factory=lambda: jnp.array(_LV["side_r"], dtype=jnp.bool_))
     ROOM_WALLS: jnp.ndarray = struct.field(pytree_node=False,
         default_factory=lambda: jnp.array(_LV["walls"], dtype=jnp.int32))
     ROOM_WALL_VALID: jnp.ndarray = struct.field(pytree_node=False,
@@ -985,6 +1059,26 @@ class JaxHero(JaxEnvironment[HeroState, HeroObservation, HeroInfo, HeroConstants
         # keep the player inside the last room's floor
         new_y = jnp.clip(new_y, -24, c.cave_bottom - 2)
 
+        # The cave also turns sideways. Where a room's corridor reaches the
+        # edge of the screen as open air, walking into that edge leaves the
+        # room exactly as falling through the floor does: the left edge leads
+        # DOWN the chain and the right edge back UP it, and the hero keeps his
+        # height. Level 5 room 1 is sealed floor to ceiling and this is the
+        # only way on from it. Measured on the ROM, 2026-09-22; see
+        # HL.SIDE_EXITS for the numbers.
+        x_min, x_max = 8, c.screen_width - 8 - c.player_width
+        side_l = c.SIDE_EXIT_LEFT[lvl, state.room] & left & (new_x <= x_min)
+        side_r = c.SIDE_EXIT_RIGHT[lvl, state.room] & right & (new_x >= x_max)
+        # a room flip has already happened this frame -> that one wins
+        flipped = flip_down | flip_up
+        side_l = side_l & (~flipped) & (state.room < n_rooms - 1)
+        side_r = side_r & (~flipped) & (state.room > 0)
+        new_room = (new_room + side_l.astype(jnp.int32)
+                    - side_r.astype(jnp.int32)).astype(jnp.int32)
+        new_x = jnp.where(side_l, c.side_enter_left_x,
+                          jnp.where(side_r, c.side_enter_right_x,
+                                    new_x)).astype(jnp.int32)
+
         moved_input = up | left | right | down
         has_moved = state.has_moved | moved_input
         moved_h = new_x != state.player_x
@@ -1083,8 +1177,14 @@ class JaxHero(JaxEnvironment[HeroState, HeroObservation, HeroInfo, HeroConstants
         wall_stage = jnp.where(twin.any(axis=0), 2, wall_stage).astype(jnp.int32)
 
         # --- creatures and magma ---
-        # Laser: kills spiders and bats (kind 0/1) only. It does nothing to
-        # magma (kind 2) and nothing to rock.
+        # Laser: kills every CREATURE - spiders, bats and snakes alike - for
+        # 50 points. It does nothing to magma (kind 2) and nothing to rock.
+        # A snake used to be laser-proof here, on the strength of one probe
+        # whose liveness test counted every non-black pixel in the snake's
+        # box; a snake's box overlaps the rock it is planted in, so that test
+        # could only ever report "alive". Re-measured 2026-09-22 with a green
+        # -only test and a spider control that passes: 18 of 18 aligned
+        # bursts killed level 4 room 3's snake, each paying 50.
         # Dynamite: kills creatures AND removes magma. Magma is destroyed by
         # a stick exactly like ordinary rock, for the same 75 points
         # (measured on the ROM - on level 9 room 0 blowing up the red pillar
@@ -1093,7 +1193,7 @@ class JaxHero(JaxEnvironment[HeroState, HeroObservation, HeroInfo, HeroConstants
         sp_x, sp_y = self._spider_pos(state)
         sp_room = c.SPIDER_ROOM[lvl]
         is_magma = c.SPIDER_KIND[lvl] == 2
-        laser_killable = c.SPIDER_KIND[lvl] < 2
+        laser_killable = ~is_magma
         blast_killable = c.SPIDER_KIND[lvl] != 3          # snakes sit in rock
         sp_here = state.spider_alive & (sp_room == new_room)
         # A spider's body hangs under a thread, so only the rows from
@@ -1104,6 +1204,9 @@ class JaxHero(JaxEnvironment[HeroState, HeroObservation, HeroInfo, HeroConstants
         # is body from sp_y down like the bat - not sp_y + 6. Taking the
         # spider's offset put level 4's two snakes' kill box six rows BELOW
         # the sprite, in the rock under it.
+        # A snake's WIDTH is however much of it is out of the rock on this
+        # frame (_snake_length), so the box is the sprite: pulled in, it is
+        # 0 px wide and there is nothing there to shoot, blast or walk into.
         is_bat = c.SPIDER_KIND[lvl] == 1
         is_snake = c.SPIDER_KIND[lvl] == 3
         top_aligned = is_bat | is_snake
@@ -1111,12 +1214,18 @@ class JaxHero(JaxEnvironment[HeroState, HeroObservation, HeroInfo, HeroConstants
         body_h = jnp.where(is_snake, c.snake_height,
                            jnp.where(is_bat, c.bat_height,
                                      c.spider_height - c.spider_body_top))
-        spider_laser = (laser_on & sp_here & laser_killable &
+        body_w = jnp.where(is_snake, _snake_length(state.step_counter),
+                           c.spider_width)
+        # a 0-wide box overlaps nothing, which _aabb's strict inequalities do
+        # not say on their own
+        drawn = body_w > 0
+        spider_laser = (laser_on & sp_here & laser_killable & drawn &
                         self._aabb(lx, ly, c.laser_bolt_length, c.laser_height,
-                                   sp_x, body_y, c.spider_width, body_h))
-        spider_blast = (state.spider_alive & blast_killable & (sp_room == dyn_room) & explode_now &
+                                   sp_x, body_y, body_w, body_h))
+        spider_blast = (state.spider_alive & blast_killable & drawn &
+                        (sp_room == dyn_room) & explode_now &
                         self._aabb(ex, ey, ew, eh, sp_x, body_y,
-                                   c.spider_width, body_h))
+                                   body_w, body_h))
         spider_kill = spider_laser | spider_blast
         spider_alive = state.spider_alive & (~spider_kill)
         creatures_killed = jnp.sum((spider_kill & (~is_magma)).astype(jnp.int32))
@@ -1146,9 +1255,9 @@ class JaxHero(JaxEnvironment[HeroState, HeroObservation, HeroInfo, HeroConstants
         kind_l = c.SPIDER_KIND[lvl]
         tb_x = jnp.where(kind_l == 2, sp_x + 2, sp_x)
         tb_y = jnp.where(kind_l == 2, sp_y + c.spider_body_top + 1, body_y)
-        tb_w = jnp.where(kind_l == 2, 3, c.spider_width)
+        tb_w = jnp.where(kind_l == 2, 3, body_w)
         tb_h = jnp.where(kind_l == 2, 4, body_h)
-        touching = (sp_here &
+        touching = (sp_here & drawn &
                     self._aabb(new_x, new_y, c.player_width, c.player_height,
                                tb_x, tb_y, tb_w, tb_h))
         # Touching a creature kills the HERO, and holding fire does not save
@@ -1372,7 +1481,8 @@ class JaxHero(JaxEnvironment[HeroState, HeroObservation, HeroInfo, HeroConstants
 
         sp_x, sp_y = self._spider_pos(state)
         # same boxes the collision uses: a spider is the body under its
-        # thread, a bat is all 11 rows of it, a snake all 7 of its box
+        # thread, a bat is all 11 rows of it, a snake all 7 of its box - and
+        # a snake is only as WIDE as the part of it that is out of the rock
         obs_is_bat = c.SPIDER_KIND[lvl] == 1
         obs_is_snake = c.SPIDER_KIND[lvl] == 3
         obs_y = jnp.where(obs_is_bat | obs_is_snake, sp_y,
@@ -1380,10 +1490,12 @@ class JaxHero(JaxEnvironment[HeroState, HeroObservation, HeroInfo, HeroConstants
         obs_h = jnp.where(obs_is_snake, c.snake_height,
                           jnp.where(obs_is_bat, c.bat_height,
                                     c.spider_height - c.spider_body_top))
+        obs_w = jnp.where(obs_is_snake, _snake_length(state.step_counter),
+                          c.spider_width)
         spiders = ObjectObservation.create(
             x=sp_x.astype(jnp.int32),
             y=obs_y.astype(jnp.int32),
-            width=jnp.full((c.num_spiders,), c.spider_width, jnp.int32),
+            width=obs_w.astype(jnp.int32),
             height=obs_h.astype(jnp.int32),
             active=state.spider_alive & (c.SPIDER_ROOM[lvl] == state.room),
             visual_id=jnp.arange(c.num_spiders, dtype=jnp.int32),
@@ -1507,7 +1619,7 @@ _ART_PALETTE = {
     'M': (142, 142, 142),     # lamp bracket (#8e8e8e)
     'y': (252, 252, 84),      # miner lamp spark / lamp glow (#fcfc54)
     'b': (45, 87, 176),       # HUD mini-hero suit blue
-    'K': (50, 132, 50),       # level-2 breakable pillar tone
+    'K': (50, 132, 50),       # level-2 breakable pillar / wall snake fringe
 }
 
 # Roderick (facing right), 9 wide x 24 tall. Built from stacked sections:
@@ -1724,77 +1836,61 @@ _MAGMA_ART = [
     ".......",
 ]
 
-# Snake, the ROM's four poses (CHARACTERS.md, "Snake"). It wriggles inside a
-# 7x7 box planted against a wall's side and never leaves it, so all four sit
-# in the top 7 rows of the 7x12 creature canvas and the wriggle IS the pose
-# cycle - held 3 frames each, measured, where a bat holds 4 and a spider 8.
+# Snake: the ROM's stretching tongue, transcribed from 150 consecutive frames
+# of level 4 room 3 (2026-09-22). It is anchored in the LEFT-hand rock and
+# grows rightwards out of it, so column 0 of the canvas is the face of the
+# wall and the sprite is `length` px wide - see _snake_length for the cycle.
+# Its 7 rows sit in the top 7 of the 7x12 creature canvas, which is what the
+# "7x7 box" in the older notes was describing.
 #
 # It is green whatever the level's hue, which is what tells it apart from
-# everything else in the cave: #5cba5c with #48a048 and #6fd26f alongside.
-# CHARACTERS.md gives the poses as 1-bit masks and says nothing about which
-# green each pixel takes, so the body is drawn in the first of the three.
-# The masks are 3-4 px wide and 3-6 tall and are centred in the box; the
-# reference does not record each pose's offset inside it.
+# everything else in the cave. All four of its shades are the ROM's:
+# #5cba5c body, #48a048 outline, #6fd26f highlight and #328432 at the fringe.
 #
-# The superseded bitmap here was bestiary.json's 5x11 segmented body drawn in
-# flat grey - twice as tall as the box the ROM wriggles it in, and the wrong
-# colour. CHARACTERS.md supersedes bestiary.json for sprite shapes.
-_SNAKE_ART = [
-    ".......",
-    ".......",
-    "..GGG..",
-    "..GG...",
-    "..GG...",
-    ".......",
-    ".......",
-    ".......",
-    ".......",
-    ".......",
-    ".......",
-    ".......",
-]
-_SNAKE_ART2 = [
-    ".......",
-    "..GGG..",
-    "...G...",
-    "..GGG..",
-    "...G...",
-    ".......",
-    ".......",
-    ".......",
-    ".......",
-    ".......",
-    ".......",
-    ".......",
-]
-_SNAKE_ART3 = [
-    ".......",
-    "....G..",
-    "...GG..",
-    "..G.G..",
-    "..GGG..",
-    "...G...",
-    ".......",
-    ".......",
-    ".......",
-    ".......",
-    ".......",
-    ".......",
-]
-_SNAKE_ART4 = [
-    "..GG...",
-    ".GG.G..",
-    "..GGG..",
-    ".GG.G..",
-    ".GGGG..",
-    "...G...",
-    ".......",
-    ".......",
-    ".......",
-    ".......",
-    ".......",
-    ".......",
-]
+# Every pose is this one shape, written against the tip t = length - 1 and
+# clipped at the wall face, with the head in one of two flutters:
+#
+#     row 0  d    t-2, t-1                 row 3  h    0..t-2 (up) / 0..t-3
+#     row 1  g    t-3, t-2, t                          (down), and t
+#     row 2  G    0..t                      row 4  G    0..t (up) / 0..t-2
+#                                           row 5  g    t-1 (up) / t-2..t
+#                                           row 6  d    -  (up) / t-1 (down)
+#
+# The superseded bitmaps were four blobs that neither stretched nor matched
+# any frame the ROM draws: they came from a reference whose "four poses" were
+# a frame-differencer splitting the snake's disconnected pixels into pieces.
+def _snake_art(length, head_down):
+    """The ROM's snake with `length` px of it out of the rock (0 draws
+    nothing), as rows of the shared 7x12 creature canvas."""
+    rows = [["."] * _SNAKE_REACH for _ in range(12)]
+    t = length - 1
+
+    def put(row, cols, ch):
+        for col in cols:
+            if 0 <= col <= t:
+                rows[row][col] = ch
+
+    if length > 0:
+        put(0, (t - 2, t - 1), 'K')                   # #328432, the fringe
+        put(1, (t - 3, t - 2, t), 'g')
+        put(2, range(t + 1), 'G')
+        if head_down:
+            put(3, list(range(t - 2)) + [t], 'h')
+            put(4, range(t - 1), 'G')
+            put(5, (t - 2, t - 1, t), 'g')
+            put(6, (t - 1,), 'K')
+        else:
+            put(3, list(range(t - 1)) + [t], 'h')
+            put(4, range(t + 1), 'G')
+            put(5, (t - 1,), 'g')
+    return ["".join(row) for row in rows]
+
+
+# pose 0 is the empty canvas it draws while it is inside the rock, then
+# 1-7 head up and 8-14 head down, exactly as _snake_pose indexes them
+_SNAKE_ARTS = ([_snake_art(0, False)] +
+               [_snake_art(n, False) for n in range(1, _SNAKE_REACH + 1)] +
+               [_snake_art(n, True) for n in range(1, _SNAKE_REACH + 1)])
 
 # Lantern lamp, exactly the ROM's bitmap (bestiary.json `lamp`, 5x8): a
 # silver bracket over two bright yellow bands. Touching it (or blasting it)
@@ -1994,10 +2090,9 @@ class HeroRenderer(JAXGameRenderer):
             {'name': 'bat3', 'type': 'procedural', 'data': self._sprite(_BAT_ART3)},
             {'name': 'bat4', 'type': 'procedural', 'data': self._sprite(_BAT_ART4)},
             {'name': 'magma', 'type': 'procedural', 'data': self._sprite(_MAGMA_ART)},
-            {'name': 'snake', 'type': 'procedural', 'data': self._sprite(_SNAKE_ART)},
-            {'name': 'snake2', 'type': 'procedural', 'data': self._sprite(_SNAKE_ART2)},
-            {'name': 'snake3', 'type': 'procedural', 'data': self._sprite(_SNAKE_ART3)},
-            {'name': 'snake4', 'type': 'procedural', 'data': self._sprite(_SNAKE_ART4)},
+            *({'name': f'snake{i}', 'type': 'procedural',
+               'data': self._sprite(art)}
+              for i, art in enumerate(_SNAKE_ARTS)),
             {'name': 'lantern', 'type': 'procedural', 'data': self._sprite(_LANTERN_ART)},
             {'name': 'miner', 'type': 'procedural', 'data': self._sprite(_MINER_ART)},
             {'name': 'dynamite', 'type': 'procedural', 'data': self._sprite(_DYN_ART)},
@@ -2064,22 +2159,24 @@ class HeroRenderer(JAXGameRenderer):
         # needs when its thread is at full stretch.
         #
         # The kinds do not have the same NUMBER of poses either, not just the
-        # same rate: the ROM's spider swaps between two, and its bat runs a
+        # same rate: the ROM's spider swaps between two, its bat runs a
         # four-pose wing cycle (CHARACTERS.md), so a bat animated over two
-        # poses skips half its flap. CREATURE_POSES says how many of the four
-        # slots below are real; the rest repeat so the gather is still a
-        # fixed-size array.
+        # poses skips half its flap, and a snake has one bitmap per pixel of
+        # stretch per head flutter (_snake_art). CREATURE_POSES says how many
+        # of the slots below are real; the rest repeat so the gather is still
+        # a fixed-size array.
         def _cycle(*names):
             frames = [self.SHAPE_MASKS[n] for n in names]
-            return jnp.stack([frames[i % len(frames)] for i in range(4)])
+            return jnp.stack([frames[i % len(frames)]
+                              for i in range(_SNAKE_POSES)])
 
         self.CREATURE_FRAMES = jnp.stack([
             _cycle("spider", "spider2"),
             _cycle("bat", "bat2", "bat3", "bat4"),
             _cycle("magma"),
-            _cycle("snake", "snake2", "snake3", "snake4"),
+            _cycle(*(f"snake{i}" for i in range(_SNAKE_POSES))),
         ])
-        self.CREATURE_POSES = jnp.array([2, 4, 1, 4], dtype=jnp.int32)
+        self.CREATURE_POSES = jnp.array([2, 4, 1, _SNAKE_POSES], dtype=jnp.int32)
         self.BLACK_ID = jnp.asarray(self.COLOR_TO_ID[(0, 0, 0)])
         # room backgrounds as colour-id masks, same dtype as the raster they
         # are slotted into: decode each RLE screen to palette INDICES (via an
@@ -2291,11 +2388,18 @@ class HeroRenderer(JAXGameRenderer):
         # creatures: bob/patrol per creature; sprite selected by kind and by
         # its own pose cycle. Neither the rate nor the number of poses is
         # shared - a spider swaps between two poses every 8 frames and a bat
-        # flaps through four every 4 (CHARACTERS.md).
+        # flaps through four every 4 (CHARACTERS.md). A SNAKE does not run a
+        # pose cycle at all: its bitmap is how far out of the rock it is on
+        # this frame, so it reads its stretch clock instead of SPIDER_HOLD
+        # and draws nothing at all while it is pulled in.
         kind = c.SPIDER_KIND[lvl]
         sx, sy = _creature_pos(c, lvl, state.step_counter)
-        anim_frame = ((state.step_counter // c.SPIDER_HOLD[lvl])
-                      % self.CREATURE_POSES[kind])
+        snake_frame = _snake_pose(_snake_length(state.step_counter),
+                                  _snake_head_down(state.step_counter))
+        anim_frame = jnp.where(
+            kind == 3, snake_frame,
+            (state.step_counter // c.SPIDER_HOLD[lvl])
+            % self.CREATURE_POSES[kind])
         sp_room = c.SPIDER_ROOM[lvl]
         for i in range(c.num_spiders):
             raster = maybe(state.spider_alive[i] & (sp_room[i] == room),
