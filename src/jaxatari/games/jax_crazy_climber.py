@@ -1013,7 +1013,6 @@ class JaxCrazyClimber(JaxEnvironment[CrazyClimberState, CrazyClimberObservation,
         @partial(jax.jit)
         def move_upwards(s: PlayerMoveState) -> PlayerMoveState:
             # is_up_move_possible = (jax.lax.abs(s.side_step) <= 3) & (s.main_state != PlayerStableStates.REACHING)
-            on_top_of_tower = state.climbed_floors >= CrazyClimberConstants.HELICOPTER_SPAWN_HEIGHT
             transitioning_states = (((s.main_state != PlayerStableStates.PULL_UP) & (s.sub_step == 4)) |
                                     ((s.main_state == PlayerStableStates.PULL_UP) & (s.sub_step == 9)))
             next_state_on_transition = jnp.array([PlayerStableStates.NEUTRAL, PlayerStableStates.HALF_PULL_UP, PlayerStableStates.PULL_UP])[(s.main_state + 1) % 3]
@@ -1115,6 +1114,8 @@ class JaxCrazyClimber(JaxEnvironment[CrazyClimberState, CrazyClimberObservation,
 
             window_x = jnp.array([0, 0, 0, 1, 1, 2, 2, 3, 3, 4, 4])[state.player_move_state.pos_x]
             can_move_left &= state.tower_state.windows[10 - hand_offset, window_x, 0] != 6
+            is_reaching = state.player_move_state.main_state == PlayerStableStates.REACHING
+            can_move_left = can_move_left & (~is_reaching)
             return can_move_left
         
         def can_move_right(state: CrazyClimberState) -> bool:
@@ -1133,6 +1134,8 @@ class JaxCrazyClimber(JaxEnvironment[CrazyClimberState, CrazyClimberObservation,
 
             window_x = jnp.array([1, 1, 2, 2, 3, 3, 4, 4, 5, 5, 5])[state.player_move_state.pos_x]
             can_move_right &= state.tower_state.windows[10 - hand_offset, window_x, 0] != 6
+            is_reaching = state.player_move_state.main_state == PlayerStableStates.REACHING
+            can_move_right = can_move_right & (~is_reaching)
             return can_move_right
         
         def can_move_up(state: CrazyClimberState) -> bool:
@@ -1165,6 +1168,7 @@ class JaxCrazyClimber(JaxEnvironment[CrazyClimberState, CrazyClimberObservation,
         is_falling = player_move_state.falling_count > 0
         is_flying_away = (state.helicopter_state.fly_away_step > 0) | (state.helicopter_state.fly_away_state != HeliFlyAwayStates.NORMAL)
         movement_locked = jnp.logical_or(is_falling, is_flying_away)
+        on_top_of_tower = state.climbed_floors >= CrazyClimberConstants.HELICOPTER_SPAWN_HEIGHT
 
         falling_conds = jnp.array([
             (~left_hand_safe) & (~right_hand_safe),
@@ -1180,7 +1184,7 @@ class JaxCrazyClimber(JaxEnvironment[CrazyClimberState, CrazyClimberObservation,
         can_move_up = can_move_up(state)
         delta_x = jnp.where(((~can_move_left) & left) | ((~can_move_right) & right), 0, 1)
 
-        should_fall = jnp.any(falling_conds) | player_move_state.should_fall
+        should_fall = (jnp.any(falling_conds) | player_move_state.should_fall) & (~on_top_of_tower)
         pause = state.level_state.pause_game
         action_state_cases = [
             should_fall & (~movement_locked) & (~state.level_state.pause_game),
@@ -1475,9 +1479,9 @@ class JaxCrazyClimber(JaxEnvironment[CrazyClimberState, CrazyClimberObservation,
     def _climbed_floors_step(self, state: CrazyClimberState) -> CrazyClimberState:
         climbed_triggered = (state.player_move_state.main_state == PlayerStableStates.NEUTRAL) & state.reached_apex
         next_climbed_floors = jnp.where(
-            state.tower_state.is_falling,
-            0,
-            jnp.where(climbed_triggered, state.climbed_floors + 1, state.climbed_floors),
+            climbed_triggered,
+            state.climbed_floors + 1,
+            state.climbed_floors
         )
 
         return state.replace(climbed_floors=next_climbed_floors)
