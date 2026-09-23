@@ -539,12 +539,12 @@ def test_levels_4_to_16_data_present():
         for b in blobs:
             assert HL.decode_bg(b, pal).shape == (142, 160, 3)
     # Every level's way down starts with the room-0 central pillar. Levels
-    # 1-7 have been rebuilt from the ROM and state it on the band grid (rows
+    # 1-8 have been rebuilt from the ROM and state it on the band grid (rows
     # 16-98, the ceiling and middle cells a stick takes together); levels
-    # 8-16 still carry the older y=19 authoring until their turn comes.
-    for lv in range(7):
+    # 9-16 still carry the older y=19 authoring until their turn comes.
+    for lv in range(8):
         assert (0, 60, 16, 8, 83, 1) in HL.DESTRUCTIBLE[lv], f"level {lv + 1}"
-    for lv in range(7, 16):
+    for lv in range(8, 16):
         assert (0, 60, 19, 8, 80, 1) in HL.DESTRUCTIBLE[lv]
     for lv in range(16):
         assert HL.MINER_POS[lv][0] < HL.ROOMS_PER_LEVEL[lv]
@@ -792,11 +792,16 @@ def test_levels_7_to_10_miners_on_the_measured_ledges():
     """The deep-level miners sit at the classic side positions (measured by
     RAM-teleport room scans): L7 R11, L8 R13, L9 R15, L10 R15."""
     from jaxatari.games import hero_levels as HL
-    # level 7's is the ROM capture's, from a real entry into room 11 rather
-    # than a RAM teleport: x 128, one pixel left of what the teleport scan
-    # reported, and where the recorded playthrough draws him.
+    # Levels 7 and 8 are the ROM capture's, from a real chained entry into the
+    # last room rather than a RAM teleport, and both moved: L7 to x 128, one
+    # pixel left of the teleport scan's 129 and where the recorded playthrough
+    # draws him; L8 to x 25, two right of its 23. Level 8's was re-measured on
+    # 2026-09-23 with the hero parked at the far right of room 13, clear of
+    # him - his sprite runs rows 86-97 from column 25, pink face at x 26-27.
+    # The teleport scan is the method CORRECTIONS.md discredits, so where the
+    # two disagree the chained entry wins.
     assert HL.MINER_POS[6] == (11, 128, 86)
-    assert HL.MINER_POS[7] == (13, 23, 86)
+    assert HL.MINER_POS[7] == (13, 25, 86)
     assert HL.MINER_POS[8] == (15, 129, 86)
     assert HL.MINER_POS[9] == (15, 23, 86)
 

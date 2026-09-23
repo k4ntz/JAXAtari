@@ -101,12 +101,48 @@ def test_ten_pixels_of_clearance_is_safe_and_eight_is_not(env, gap, survives):
 
 # --- magma ------------------------------------------------------------------
 def _magma_slot(env, level, room):
+    """A kind-2 magma slot in that room whose blast reaches no breakable rock.
+
+    Magma used to be carried as a creature of kind 2, and the levels that
+    still are - 9 to 13 - are the ones no ROM regeneration has reached yet. A
+    regenerated level carries its magma as MAGMA rects instead, and the cells
+    a stick can take are in DESTRUCTIBLE like any other pillar, so these two
+    tests have to run against a level that still has the old form. Level 8 was
+    that level until it was regenerated on 2026-09-23.
+
+    The slot is chosen rather than taken first: the test measures the score a
+    blast pays for MAGMA ALONE, so a slot with a breakable wall inside the
+    same blast box would add 75 that did not come from the magma. Level 9
+    room 1 has three magma slots and only the middle one is clear.
+    """
     c = env.consts
     hits = np.flatnonzero((np.asarray(c.SPIDER_KIND[level]) == 2) &
                           (np.asarray(c.SPIDER_ROOM[level]) == room) &
                           np.asarray(c.SPIDER_VALID[level]))
-    assert hits.size, f"no magma in level {level + 1} room {room}"
-    return int(hits[0])
+    assert hits.size, (
+        f"no magma of kind 2 in level {level + 1} room {room}. If this level "
+        f"has just been regenerated from the ROM, its magma is now in MAGMA "
+        f"and DESTRUCTIBLE - point these tests at a level that still carries "
+        f"the old form, or rewrite them against the rect tables.")
+    _, s = env.reset()
+    s = s.replace(level=jnp.int32(level), room=jnp.int32(room))
+    px, py = (np.asarray(v) for v in env._spider_pos(s))
+    d_room, d_x, d_y, d_w, d_h, d_solid = (np.asarray(v) for v in env._dwall_rects(s))
+    dw = np.asarray(c.DESTRUCT[level])
+    for slot in hits:
+        mx, my = int(px[slot]), int(py[slot])
+        r = c.explosion_radius
+        ey, eh = my - r, 2 * r + c.dyn_height
+        reach = c.blast_reach + 1
+        ex, ew = mx + 2 - reach, c.player_width + 2 * reach
+        clash = (d_solid & (dw[:, 5] > 0) & (d_room == room) &
+                 (ex < d_x + d_w) & (d_x < ex + ew) &
+                 (ey < d_y + d_h) & (d_y < ey + eh))
+        if not clash.any():
+            return int(slot)
+    raise AssertionError(
+        f"every magma slot in level {level + 1} room {room} has breakable "
+        f"rock inside its blast box, so no score delta there is magma alone")
 
 
 def test_dynamite_destroys_magma_for_the_same_points_as_rock(env):
@@ -114,12 +150,18 @@ def test_dynamite_destroys_magma_for_the_same_points_as_rock(env):
     ordinary rock, for 75 points. (On level 9 room 0 blasting the red pillar
     is the only way down, so this cannot be a no-op.)"""
     c = env.consts
-    # level 8 room 1: one lone magma block, no destructible rock in reach,
-    # so every point of the delta has to come from the magma itself
-    lvl, room = 7, 1
+    # level 9 room 1: a magma block with no destructible rock inside its
+    # blast box, so every point of the delta has to come from the magma
+    # itself. (Level 8 was used here until it was regenerated from the ROM
+    # and stopped carrying magma as a creature at all.)
+    lvl, room = 8, 1
     slot = _magma_slot(env, lvl, room)
     _, s = env.reset()
-    s = s.replace(level=jnp.int32(lvl), room=jnp.int32(room))
+    # reset() leaves LEVEL 1's roster in spider_alive, so every slot past its
+    # first is already dead and a magma block here would read as "blasted"
+    # before a stick was anywhere near it. Put this level's roster in.
+    s = s.replace(level=jnp.int32(lvl), room=jnp.int32(room),
+                  spider_alive=c.SPIDER_VALID[lvl])
     mx, my = (int(np.asarray(v)[slot]) for v in env._spider_pos(s))
     s = s.replace(player_x=jnp.int32(mx + 40), player_y=jnp.int32(75),
                   dyn_active=jnp.bool_(True), dyn_fuse=jnp.int32(1),
@@ -140,10 +182,12 @@ def test_dynamite_destroys_magma_for_the_same_points_as_rock(env):
 def test_the_laser_does_not_remove_magma(env):
     """The laser kills creatures; it does not cut rock and it does not touch
     magma (measured)."""
-    lvl, room = 7, 1
+    lvl, room = 8, 1
     slot = _magma_slot(env, lvl, room)
     _, s = env.reset()
-    s = s.replace(level=jnp.int32(lvl), room=jnp.int32(room))
+    # see the note in the dynamite test: reset() hands back level 1's roster
+    s = s.replace(level=jnp.int32(lvl), room=jnp.int32(room),
+                  spider_alive=env.consts.SPIDER_VALID[lvl])
     mx, my = (int(np.asarray(v)[slot]) for v in env._spider_pos(s))
     s = s.replace(player_x=jnp.int32(max(8, mx - 20)),
                   player_y=jnp.int32(my - 6), facing=jnp.int32(1))
