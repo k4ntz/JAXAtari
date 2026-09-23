@@ -292,14 +292,24 @@ def test_the_nine_creatures_are_where_the_census_put_them():
 
     The bat's x is the CENTRE of its sweep, so it is the measured left column
     plus the half-travel: it is drawn over x 64-86.
+
+    The untethered spider (kind 4) is the ROM's OTHER spider: no thread, seven
+    rows of warm body on their own, flipping between two poses. It was drawn
+    with a hanging spider's thread until its sprite was read off the ROM
+    (level_images/tools/creature_atlas.py, 2026-09-23). Its second pose is
+    drawn two rows below its first, so its measured BOX is 9 px taller than
+    the sprite while the creature itself travels 7 - the art carries the
+    other two.
     """
-    assert HL.SPIDERS[L - 1] == [(1, 124, 70, 0, 0), (2, 120, 65, 0, 0),
+    assert HL.SPIDERS[L - 1] == [(1, 124, 70, 0, 0), (2, 120, 65, 0, 4),
                                  (3, 24, 109, 0, 0), (3, 112, 72, 0, 3),
                                  (4, 75, 64, 11, 1), (5, 108, 70, 0, 0),
-                                 (6, 80, 104, 0, 0), (6, 132, 70, 0, 0),
+                                 (6, 80, 104, 0, 4), (6, 132, 70, 0, 0),
                                  (7, 88, 72, 0, 3)]
     kinds = [k for *_r, k in HL.SPIDERS[L - 1]]
-    assert kinds.count(0) == 6 and kinds.count(1) == 1 and kinds.count(3) == 2
+    assert (kinds.count(0), kinds.count(4),
+            kinds.count(1), kinds.count(3)) == (4, 2, 1, 2), (
+        "four hanging spiders, two untethered, one bat and two snakes")
 
 
 def test_the_two_snakes_are_snakes_and_not_spiders(env):
@@ -508,7 +518,7 @@ def test_the_snakes_poses_are_the_bitmaps_the_rom_draws(env):
 def test_still_creatures_are_still_and_only_the_bat_patrols(env):
     """Measured off the ROM with the hero parked out of the picture, 480
     frames of each room. Whether a creature moves is a property of the room:
-    four of this level's six spiders never move at all, two bob 9 px over 64
+    four of this level's six spiders never move at all, two bob 7 px over 64
     frames, and only the bat sweeps sideways - 22 px over 184 frames, on a
     different clock from its own 64-frame bob."""
     c = env.consts
@@ -531,7 +541,8 @@ def test_still_creatures_are_still_and_only_the_bat_patrols(env):
     for i in (1, 6):                    # the two bobbing spiders
         sx, sy = HL.SPIDERS[L - 1][i][1], HL.SPIDERS[L - 1][i][2]
         assert seen[i][0] == {sx}, "a bobbing spider never moves sideways"
-        assert (min(seen[i][1]), max(seen[i][1])) == (sy, sy + 9), "9 px of bob"
+        assert (min(seen[i][1]), max(seen[i][1])) == (sy, sy + 7), \
+            "7 px of bob; the untethered spider's art carries two more"
         assert int(c.SPIDER_BOB_HALF[L - 1, i]) == 32, "over 64 frames"
 
     xs, ys = seen[4]                    # the bat

@@ -640,6 +640,9 @@ class HeroConstants(AutoDerivedConstants):
     # Measured on level 4 rooms 3 and 7, anchored at x 112/88, rows 72-78.
     snake_height: int = struct.field(pytree_node=False, default=7)
     spider_body_top: int = struct.field(pytree_node=False, default=6)
+    # The untethered spider (kind 4) is seven rows of body, and its second
+    # pose is drawn two rows lower, so the box it is ever inside is ten.
+    free_spider_height: int = struct.field(pytree_node=False, default=10)
     # Archetype fallbacks, used only for a creature nobody has measured yet.
     # A measured creature carries its own amplitude, period and pose hold in
     # SPIDER_BOB / SPIDER_BOB_HALF / SPIDER_HOLD (HL.CREATURE_MOTION), which
@@ -1251,11 +1254,16 @@ class JaxHero(JaxEnvironment[HeroState, HeroObservation, HeroInfo, HeroConstants
         # 0 px wide and there is nothing there to shoot, blast or walk into.
         is_bat = c.SPIDER_KIND[lvl] == 1
         is_snake = c.SPIDER_KIND[lvl] == 3
-        top_aligned = is_bat | is_snake
+        # kind 4, the untethered spider, has no thread over it either, so it
+        # is body from its own top row down like the bat and the snake.
+        is_free = c.SPIDER_KIND[lvl] == 4
+        top_aligned = is_bat | is_snake | is_free
         body_y = jnp.where(top_aligned, sp_y, sp_y + c.spider_body_top)
         body_h = jnp.where(is_snake, c.snake_height,
                            jnp.where(is_bat, c.bat_height,
-                                     c.spider_height - c.spider_body_top))
+                                     jnp.where(is_free, c.free_spider_height,
+                                               c.spider_height
+                                               - c.spider_body_top)))
         body_w = jnp.where(is_snake, _snake_length(state.step_counter),
                            c.spider_width)
         # a 0-wide box overlaps nothing, which _aabb's strict inequalities do
@@ -1534,11 +1542,15 @@ class JaxHero(JaxEnvironment[HeroState, HeroObservation, HeroInfo, HeroConstants
         # a snake is only as WIDE as the part of it that is out of the rock
         obs_is_bat = c.SPIDER_KIND[lvl] == 1
         obs_is_snake = c.SPIDER_KIND[lvl] == 3
-        obs_y = jnp.where(obs_is_bat | obs_is_snake, sp_y,
+        obs_is_free = c.SPIDER_KIND[lvl] == 4
+        obs_y = jnp.where(obs_is_bat | obs_is_snake | obs_is_free, sp_y,
                           sp_y + c.spider_body_top)
         obs_h = jnp.where(obs_is_snake, c.snake_height,
                           jnp.where(obs_is_bat, c.bat_height,
-                                    c.spider_height - c.spider_body_top))
+                                    jnp.where(obs_is_free,
+                                              c.free_spider_height,
+                                              c.spider_height
+                                              - c.spider_body_top)))
         obs_w = jnp.where(obs_is_snake, _snake_length(state.step_counter),
                           c.spider_width)
         spiders = ObjectObservation.create(
@@ -1654,7 +1666,8 @@ _ART_PALETTE = {
     'r': (200, 72, 72),       # helmet highlight
     'B': (84, 138, 210),      # suit blue
     'W': (214, 214, 214),     # legs / dynamite stick / digits (white)
-    'S': (170, 170, 170),     # spider thread / miner girder (silver)
+    'S': (170, 170, 170),     # spider thread / miner girder / bat wing
+    'T': (192, 192, 192),     # the bat's brightest wing row (#c0c0c0)
     '1': (223, 183, 85),      # spider body gradient (measured warm ramp)
     '2': (210, 164, 74),
     '3': (195, 144, 61),
@@ -1797,73 +1810,126 @@ _SPIDER_ART2 = [
     "5.....5",
 ]
 
-# Bat (levels 4-6 guard critter): silver X wings, warm body (measured crop).
-# Bat: the ROM's own bitmap (CHARACTERS.md), captured off level 3's three
-# bats. 11 rows throughout, 5 px wide with the wings closed and 7 with them
-# spread, and FOUR poses in the cycle, not two - closed, straight, mid,
-# spread - each held 4 frames. Row 0 is the top of the bat, so the y in
-# HL.SPIDERS, which is the top row the ROM draws it on, is where it lands.
-# The art this replaces was a different shape on a canvas with four blank
-# rows above it, which drew every bat in the game 4 px below its own row.
+# Bat: the ROM's own bitmap, read pixel for pixel off level 7 room 5 and
+# level 6 rooms 1 and 3 (tools/creature_atlas.py, 2026-09-23). 11 rows
+# throughout, 5 px wide with the wings closed and 7 with them spread, and
+# FOUR poses in the cycle - closed, straight, mid, spread - each held about
+# 4 frames. Row 0 is the top of the bat, so the y in HL.SPIDERS, which is the
+# top row the ROM draws it on, is where it lands.
+#
+# IT IS NOT ONE FLAT COLOUR. The ROM paints it in six shades laid out by row
+# and MIRRORED about the body: #8e8e8e #aaaaaa #c0c0c0 for the wings, then
+# #c3903d #b47a30 #a26221 for the body, then back out again. Drawing the
+# whole bat in one grey - which is what this art did - loses the warm body
+# CHARACTERS.md describes ("an orange body with grey wings above and below
+# it") and makes every bat in the game a flat slab.
 #
 # The first three poses are 5 px wide and the spread one is 7; they are all
 # centred on the same body column, so the narrow ones are padded out to the
 # 7 px canvas the other creatures share and the x in HL.SPIDERS is the
 # canvas's left edge, which is the leftmost column the ROM ever paints.
-_BAT_ART = [
-    "...N...",
-    "..NNN..",
-    "..N.N..",
-    "..N.N..",
-    "..NNN..",
-    ".NNNNN.",
-    "..NNN..",
-    "..N.N..",
-    "..N.N..",
-    "..NNN..",
-    "...N...",
+_BAT_ART = [                 # closed
+    "...M...",
+    "..SSS..",
+    "..T.T..",
+    "..3.3..",
+    "..444..",
+    ".55555.",
+    "..444..",
+    "..3.3..",
+    "..T.T..",
+    "..SSS..",
+    "...M...",
     ".......",
 ]
-_BAT_ART2 = [
-    "..N.N..",
-    "..N.N..",
-    "..N.N..",
-    "..N.N..",
-    "..NNN..",
-    ".NNNNN.",
-    "..NNN..",
-    "..N.N..",
-    "..N.N..",
-    "..N.N..",
-    "..N.N..",
+_BAT_ART2 = [                # straight
+    "..M.M..",
+    "..S.S..",
+    "..T.T..",
+    "..3.3..",
+    "..444..",
+    ".55555.",
+    "..444..",
+    "..3.3..",
+    "..T.T..",
+    "..S.S..",
+    "..M.M..",
     ".......",
 ]
-_BAT_ART3 = [
-    ".N...N.",
-    ".NN.NN.",
-    "..N.N..",
-    "..N.N..",
-    "..NNN..",
-    ".NNNNN.",
-    "..NNN..",
-    "..N.N..",
-    "..N.N..",
-    ".NN.NN.",
-    ".N...N.",
+_BAT_ART3 = [                # mid
+    ".M...M.",
+    ".SS.SS.",
+    "..T.T..",
+    "..3.3..",
+    "..444..",
+    ".55555.",
+    "..444..",
+    "..3.3..",
+    "..T.T..",
+    ".SS.SS.",
+    ".M...M.",
     ".......",
 ]
-_BAT_ART4 = [
-    "N.....N",
-    "NN...NN",
-    ".NN.NN.",
-    "..N.N..",
-    "..NNN..",
-    ".NNNNN.",
-    "..NNN..",
-    "..N.N..",
-    ".NN.NN.",
-    "NN...NN",
-    "N.....N",
+_BAT_ART4 = [                # spread
+    "M.....M",
+    "SS...SS",
+    ".TT.TT.",
+    "..3.3..",
+    "..444..",
+    ".55555.",
+    "..444..",
+    "..3.3..",
+    ".TT.TT.",
+    "SS...SS",
+    "M.....M",
+    ".......",
+]
+
+# The UNTETHERED spider (kind 4). The same warm body as the hanging one and
+# no thread at all: it floats in mid-corridor and flips between two poses,
+# legs spread below the body and legs gathered above it. Read off the ROM at
+# level 6 rooms 1, 5 and 7 and level 7 room 11 (tools/creature_atlas.py,
+# 2026-09-23); levels 2, 3 and 4 carry it too.
+#
+# It is the creature CHARACTERS.md's per-room tables cannot name: the census
+# tells a spider from a bat by whether a 1 px thread is drawn above the body,
+# so with no thread it called this one a "Bat" where it sits still (level 7
+# room 6) and a "Spider" where it bobs (level 6 rooms 1, 5, 7) - the same
+# seven pixels wide of the same sprite, twice. It is neither: the bat is
+# eleven rows of grey-and-orange wing and the hanging spider is a five row
+# body under six rows of silver, and this is seven rows of body on its own.
+#
+# The two poses are NOT drawn on the same row. Pose 1 sits exactly TWO rows
+# below pose 0 for the same position of the creature, which is why its
+# measured box is 17 rows tall for a sprite that is never more than 8 - so
+# the offset is baked into the canvas here and HL.CREATURE_MOTION carries the
+# travel WITHOUT it (box height minus canvas height).
+_SPIDER_FREE_ART = [         # legs up and out, body below
+    "2.....2",
+    "2.2.2.2",
+    "33.3.33",
+    "444.444",
+    "4444444",
+    ".44444.",
+    "...4...",
+    ".......",
+    ".......",
+    ".......",
+    ".......",
+    ".......",
+]
+_SPIDER_FREE_ART2 = [        # body up, legs gathered below - two rows lower
+    ".......",
+    ".......",
+    "..3.3..",
+    "...4...",
+    "..444..",
+    ".44444.",
+    "44.4.44",
+    "33...33",
+    "2.....2",
+    ".3...3.",
+    ".......",
     ".......",
 ]
 
@@ -2134,6 +2200,8 @@ class HeroRenderer(JAXGameRenderer):
             {'name': 'player_walk1', 'type': 'procedural', 'data': self._sprite(_PLAYER_WALK1)},
             {'name': 'spider', 'type': 'procedural', 'data': self._sprite(_SPIDER_ART)},
             {'name': 'spider2', 'type': 'procedural', 'data': self._sprite(_SPIDER_ART2)},
+            {'name': 'spiderfree', 'type': 'procedural', 'data': self._sprite(_SPIDER_FREE_ART)},
+            {'name': 'spiderfree2', 'type': 'procedural', 'data': self._sprite(_SPIDER_FREE_ART2)},
             {'name': 'bat', 'type': 'procedural', 'data': self._sprite(_BAT_ART)},
             {'name': 'bat2', 'type': 'procedural', 'data': self._sprite(_BAT_ART2)},
             {'name': 'bat3', 'type': 'procedural', 'data': self._sprite(_BAT_ART3)},
@@ -2224,8 +2292,10 @@ class HeroRenderer(JAXGameRenderer):
             _cycle("bat", "bat2", "bat3", "bat4"),
             _cycle("magma"),
             _cycle(*(f"snake{i}" for i in range(_SNAKE_POSES))),
+            _cycle("spiderfree", "spiderfree2"),
         ])
-        self.CREATURE_POSES = jnp.array([2, 4, 1, _SNAKE_POSES], dtype=jnp.int32)
+        self.CREATURE_POSES = jnp.array([2, 4, 1, _SNAKE_POSES, 2],
+                                        dtype=jnp.int32)
         self.BLACK_ID = jnp.asarray(self.COLOR_TO_ID[(0, 0, 0)])
         # room backgrounds as colour-id masks, same dtype as the raster they
         # are slotted into: decode each RLE screen to palette INDICES (via an

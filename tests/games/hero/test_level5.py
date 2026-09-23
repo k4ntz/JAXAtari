@@ -341,13 +341,27 @@ def test_the_four_lanterns_hang_in_the_ceilings_of_rooms_1_3_5_and_6():
 
 def test_the_seven_creatures_are_where_the_rom_draws_them():
     """Four bats, two still spiders and a snake. A bat's x is the CENTRE of
-    its sweep, so it is the measured left column plus the half-travel."""
+    its sweep, so it is the measured left column plus the half-travel.
+
+    The untethered spider (kind 4) is the ROM's OTHER spider: no thread, seven
+    rows of warm body on their own, flipping between two poses. It was drawn
+    with a hanging spider's thread until its sprite was read off the ROM
+    (level_images/tools/creature_atlas.py, 2026-09-23). Its second pose is
+    drawn two rows below its first, so its measured BOX is 9 px taller than
+    the sprite while the creature itself travels 7 - the art carries the
+    other two.
+
+    Room 6's is one of those, and a STILL one: the ROM draws it as a single
+    bitmap for 140 consecutive frames.
+    """
     assert HL.SPIDERS[L - 1] == [(1, 31, 64, 11, 1), (2, 76, 71, 0, 0),
                                  (2, 103, 104, 11, 1), (4, 31, 64, 11, 1),
-                                 (4, 128, 111, 0, 3), (6, 112, 111, 0, 0),
+                                 (4, 128, 111, 0, 3), (6, 112, 111, 0, 4),
                                  (7, 87, 65, 11, 1)]
     kinds = [k for *_r, k in HL.SPIDERS[L - 1]]
-    assert kinds.count(0) == 2 and kinds.count(1) == 4 and kinds.count(3) == 1
+    assert (kinds.count(0), kinds.count(4),
+            kinds.count(1), kinds.count(3)) == (1, 1, 4, 1), (
+        "one hanging spider, one untethered, four bats and a snake")
 
 
 def test_no_creature_of_this_level_falls_back_to_an_archetype():

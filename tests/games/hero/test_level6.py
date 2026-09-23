@@ -343,7 +343,13 @@ def test_every_entity_in_characters_md_is_present():
     got = [(r, "lantern", x, y) for r, x, y in HL.LANTERNS[L - 1]]
     got.append(("miner",) and (HL.MINER_POS[L - 1][0], "miner",
                                HL.MINER_POS[L - 1][1], HL.MINER_POS[L - 1][2]))
-    kinds = {0: "spider", 1: "bat"}
+    # CHARACTERS.md calls both of the ROM's spiders a "Spider" in this level,
+    # and it is right to: kind 0 is the one that hangs under a thread and
+    # kind 4 the one that floats without one, and they are the same animal as
+    # far as the table is concerned. (In level 7 the census loses track of
+    # that and calls a still kind 4 a "Bat", which is what made this
+    # distinction worth measuring - see test_level7.)
+    kinds = {0: "spider", 1: "bat", 4: "spider"}
     for room, x, y, patrol, kind in HL.SPIDERS[L - 1]:
         got.append((room, kinds[kind], x - patrol, y))
 
@@ -380,17 +386,26 @@ def test_the_miner_is_at_the_bottom_left_of_room_9():
 
 
 # --- the clocks that are not shared -----------------------------------------
-def test_the_bobbing_spiders_bob_on_72_frames_not_the_bats_64():
-    """CHARACTERS.md puts the spider at 70/72 and the bat at 184/64. A short
-    capture window quantises the one onto the other; these three come from the
-    census, which watches 420 frames."""
+def test_the_three_bobbing_spiders_are_the_untethered_kind_on_64_frames():
+    """Rooms 1, 5 and 7 each hold one, and all three are kind 4 - the spider
+    with no thread, seven rows of warm body flipping between two poses.
+
+    THE CYCLE IS 64 FRAMES, not the 72 this used to assert on the census's
+    word. Measured directly on level 6 room 1 with the hero parked out of the
+    picture: over 400 consecutive frames the whole (pose, position) sequence
+    repeats exactly every 64, as two 32-frame halves, and never at 72. The
+    census's 70/72 comes from autocorrelating the centre of a
+    frame-difference blob, and that blob's box wanders because the two poses
+    are different heights and are drawn two rows apart.
+    """
     bobbing = [(slot, HL.CREATURE_MOTION[(L, slot)])
                for slot, c in enumerate(HL.SPIDERS[L - 1])
-               if c[4] == 0 and HL.CREATURE_MOTION[(L, slot)][0] > 0]
+               if c[4] == 4 and HL.CREATURE_MOTION[(L, slot)][0] > 0]
     assert [s for s, _m in bobbing] == [1, 6, 8]
-    for _slot, (travel, half, _hold) in bobbing:
-        assert travel == 9, "a bobbing spider travels 9 px"
-        assert 2 * half == 72, "and does it on 72 frames, not the bat's 64"
+    for _slot, (travel, half, hold) in bobbing:
+        assert travel == 7, "it moves 7 px; its art carries the other two"
+        assert 2 * half == 64, "over 64 frames, not the census's 72"
+        assert hold == 8, "and holds each of its two poses for 8 frames"
     # and they are the spiders of rooms 1, 5 and 7
     assert [HL.SPIDERS[L - 1][s][0] for s, _m in bobbing] == [1, 5, 7]
 
@@ -412,10 +427,17 @@ def test_the_bats_patrol_22_px_on_184_frames_and_hold_a_wing_pose_4():
         "the bob and the patrol must not share a clock"
 
 
-def test_the_still_creatures_are_drawn_as_one_sprite():
-    """"33 of 44 bats and 39 of 50 spiders are completely still" - and a still
-    creature is drawn as ONE bitmap, not as a pose cycle nobody stopped. Six
-    of level 6's eleven are still, and each carries a sprite count of 1."""
+def test_a_creature_that_does_not_travel_may_still_animate():
+    """Six of the eleven never move a pixel. Only TWO of those six are drawn
+    as a single bitmap.
+
+    This is the distinction the census cannot make and this test used to get
+    wrong. "Still" was taken from the census's `distinct_sprites`, which
+    reports 1 for creatures that plainly alternate two bitmaps every seven or
+    eight frames, so four spiders that swap their legs on the spot were pinned
+    to one pose. Counted over the capture's own 480 frames, rooms 2 and 6 draw
+    ONE bitmap for the whole window and rooms 3, 5, 7 and 9 draw two.
+    """
     still = [slot for slot, c in enumerate(HL.SPIDERS[L - 1])
              if HL.CREATURE_MOTION[(L, slot)][0] == 0]
     assert still == [2, 4, 5, 7, 9, 10]
@@ -423,8 +445,12 @@ def test_the_still_creatures_are_drawn_as_one_sprite():
         travel, half, _hold = HL.CREATURE_MOTION[(L, slot)]
         assert (travel, half) == (0, 0), "a still creature does not travel"
         assert (L, slot) not in HL.CREATURE_PATROL, "and does not sweep"
-        assert HL.CREATURE_SPRITES[(L, slot)] == 1, \
-            "and is drawn as a single sprite"
+    frozen = [s for s in still if HL.CREATURE_SPRITES.get((L, s)) == 1]
+    assert frozen == [2, 7], "rooms 2 and 6 draw one bitmap all window"
+    assert [HL.SPIDERS[L - 1][s][0] for s in frozen] == [2, 6]
+    for slot in set(still) - set(frozen):
+        assert (L, slot) not in HL.CREATURE_SPRITES, \
+            "the other four keep both of their poses"
 
 
 def test_the_moving_creatures_keep_their_kinds_full_cycle():

@@ -220,20 +220,33 @@ def test_the_miner_stands_where_the_rom_puts_him(env):
 
 def test_all_four_creatures_are_spiders_where_the_census_put_them():
     """CHARACTERS.md level 2: four spiders and no bat. The superseded data
-    called the two bobbing ones bats, and had every y a pixel or two out."""
-    assert HL.SPIDERS[1] == [(1, 60, 70, 0, 0), (2, 56, 65, 0, 0),
-                             (2, 80, 109, 0, 0), (3, 108, 65, 0, 0)]
-    assert all(kind == 0 for *_rest, kind in HL.SPIDERS[1])
+    called the two bobbing ones bats, and had every y a pixel or two out.
+
+    They are not all the SAME spider, though. The ROM draws two forms and the
+    difference is plain in the pixels: the two still ones hang under six rows
+    of #aaaaaa thread (kind 0), and the two bobbing ones have no thread at all
+    - seven rows of warm body on their own, flipping between two poses
+    (kind 4). Measured with level_images/tools/creature_atlas.py, which
+    records every bitmap of every sprite with the colour of every pixel.
+    """
+    assert HL.SPIDERS[1] == [(1, 60, 70, 0, 0), (2, 56, 65, 0, 4),
+                             (2, 80, 109, 0, 0), (3, 108, 65, 0, 4)]
+    assert [kind for *_rest, kind in HL.SPIDERS[1]] == [0, 4, 0, 4]
     assert all(patrol == 0 for *_r, patrol, _k in HL.SPIDERS[1]), \
         "measured over 400 frames: not one of them moves sideways"
 
 
 def test_two_spiders_hang_still_and_two_bob_nine_pixels(env):
     """Measured off the ROM with the hero parked out of the picture, 400
-    frames of each room: the two in rooms 2 and 3 that bob fall 9 px and
-    climb back over exactly 64 frames (five consecutive 64-frame gaps
-    between the bottoms of the bob), and hold each of their two bitmaps for
-    8 frames. The other two never leave their row.
+    frames of each room: the two in rooms 2 and 3 that bob move over a 9 px
+    span and come back over exactly 64 frames, and hold each of their two
+    bitmaps for 8 frames. The other two never leave their row.
+
+    SEVEN of those nine pixels are the creature moving and TWO are the art:
+    the untethered spider's second pose is drawn two rows below its first, so
+    the box it is ever inside is 17 rows tall for a sprite that is never more
+    than 8. The engine carries the offset in the bitmap and the travel here,
+    which is why this says 7 where the box says 9.
 
     Note this is NOT what CHARACTERS.md says for the bobbing pair - it
     reports 4.0 x 9.0 px at 70/72 frames over 17 sprites. That measurement
@@ -243,9 +256,9 @@ def test_two_spiders_hang_still_and_two_bob_nine_pixels(env):
     """
     c = env.consts
     assert HL.CREATURE_MOTION[(2, 0)] == (0, 0, 8)
-    assert HL.CREATURE_MOTION[(2, 1)] == (9, 32, 8)
+    assert HL.CREATURE_MOTION[(2, 1)] == (7, 32, 8)
     assert HL.CREATURE_MOTION[(2, 2)] == (0, 0, 8)
-    assert HL.CREATURE_MOTION[(2, 3)] == (9, 32, 8)
+    assert HL.CREATURE_MOTION[(2, 3)] == (7, 32, 8)
     _, s = env.reset()
     s = s.replace(level=np.int32(1))      # reset() starts on level 1's roster
     seen = [(set(), set()) for _ in range(4)]
@@ -259,7 +272,8 @@ def test_two_spiders_hang_still_and_two_bob_nine_pixels(env):
     for i in (1, 3):
         xs, ys = seen[i]
         assert len(xs) == 1, "it never moves sideways"
-        assert (min(ys), max(ys)) == (65, 74), "9 px of bob, starting at its top"
+        assert (min(ys), max(ys)) == (65, 72), \
+            "7 px of bob from its top row; the art carries the other two"
     assert int(c.SPIDER_BOB_HALF[1, 1]) == 32, "a 64-frame cycle"
     assert all(int(c.SPIDER_HOLD[1, i]) == 8 for i in range(4))
 

@@ -218,7 +218,9 @@ def check_creatures_are_sane(level):
     is not allowed to fall back to it.
     """
     for slot, (room, x, y, patrol, kind) in enumerate(HL.SPIDERS[level - 1]):
-        assert kind in (0, 1, 3), f"level {level}: unexpected creature kind {kind}"
+        # 0 hanging spider, 1 bat, 3 wall snake, 4 untethered spider
+        assert kind in (0, 1, 3, 4), \
+            f"level {level}: unexpected creature kind {kind}"
         assert patrol >= 0
         assert 0 <= room < HL.ROOMS_PER_LEVEL[level - 1]
         assert (level, slot) in HL.CREATURE_MOTION, (

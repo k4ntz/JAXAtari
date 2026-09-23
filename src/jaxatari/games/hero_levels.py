@@ -618,8 +618,11 @@ MINER_POS = [
 ]
 
 # Creatures and magma: per level, list of (room, sprite_x, sprite_y,
-# patrol_halfwidth, kind). kind 0 = spider (bobs on its silver thread),
-# kind 1 = bat (X-wing, small bob, patrols horizontally), kind 3 = wall snake
+# patrol_halfwidth, kind). kind 0 = HANGING spider (a 5 row body under six
+# rows of silver thread), kind 4 = UNTETHERED spider (the same warm body,
+# seven rows of it, no thread at all - it floats in mid corridor and flips
+# between two poses), kind 1 = bat (eleven rows of grey wing around an orange
+# body, small bob, patrols horizontally), kind 3 = wall snake
 # (head in a wall's side, wiggles +-2, laser-immune; measured L4),
 # kind 2 = MAGMA, a red block of the cave rather than a creature: static,
 # lethal on contact, immune to the laser, but destroyed by a stick of
@@ -640,7 +643,7 @@ SPIDERS = [
     # of another and nothing is paid for twice. Room 0's pillar has to
     # go - the floor hole is on its far side. Room 3 is the miner's and
     # has no hole and nothing interior to blast.
-    [(1, 60, 70, 0, 0), (2, 56, 65, 0, 0), (2, 80, 109, 0, 0), (3, 108, 65, 0, 0)],
+    [(1, 60, 70, 0, 0), (2, 56, 65, 0, 4), (2, 80, 109, 0, 0), (3, 108, 65, 0, 4)],
     # level 3: 6 rooms, blue, regenerated from the ROM 2026-09-22.
     # Three blastable walls, one each in rooms 0, 3 and 4, and no shared
     # one: those three rooms each draw a corridor of their own. (Rooms 1
@@ -648,18 +651,18 @@ SPIDERS = [
     # pillar.) Only room 0's has to go - its floor hole is on the far side
     # of it. Room 3 has a hole either side of its pillar, and room 4's
     # hole is on the side room 3's left hole drops him.
-    [(1, 44, 70, 0, 0), (1, 79, 103, 11, 1), (2, 48, 70, 0, 0), (3, 40, 109, 0, 0), (3, 104, 65, 0, 0), (4, 75, 64, 11, 1), (5, 52, 64, 11, 1)],
+    [(1, 44, 70, 0, 0), (1, 79, 103, 11, 1), (2, 48, 70, 0, 0), (3, 40, 109, 0, 0), (3, 104, 65, 0, 4), (4, 75, 64, 11, 1), (5, 52, 64, 11, 1)],
     # level 4: 8 rooms, grey. One blast: room 0's pillar (room 4's twin). Rooms 1/5/6 and room 7 carry their own pillars.
-    [(1, 124, 70, 0, 0), (2, 120, 65, 0, 0), (3, 24, 109, 0, 0), (3, 112, 72, 0, 3), (4, 75, 64, 11, 1), (5, 108, 70, 0, 0), (6, 80, 104, 0, 0), (6, 132, 70, 0, 0), (7, 88, 72, 0, 3)],
+    [(1, 124, 70, 0, 0), (2, 120, 65, 0, 4), (3, 24, 109, 0, 0), (3, 112, 72, 0, 3), (4, 75, 64, 11, 1), (5, 108, 70, 0, 0), (6, 80, 104, 0, 4), (6, 132, 70, 0, 0), (7, 88, 72, 0, 3)],
     # level 5: 8 rooms, brown, regenerated from the ROM 2026-09-22.
     # Magma in rooms 1, 3, 5 and 6 (the earlier reference had it in
     # room 1 only - the rest was read off the video as plain rock).
     # One blast, room 0's pillar. Room 1 is sealed floor to ceiling and
     # is left through the open LEFT edge of its corridor, not by
     # blasting its floor; see SIDE_EXITS.
-    [(1, 31, 64, 11, 1), (2, 76, 71, 0, 0), (2, 103, 104, 11, 1), (4, 31, 64, 11, 1), (4, 128, 111, 0, 3), (6, 112, 111, 0, 0), (7, 87, 65, 11, 1)],
-    [(1, 35, 103, 11, 1), (1, 96, 65, 0, 0), (2, 80, 109, 0, 0), (3, 43, 64, 11, 1), (3, 96, 109, 0, 0), (5, 60, 109, 0, 0), (5, 112, 65, 0, 0), (6, 24, 109, 0, 0), (7, 64, 65, 0, 0), (7, 104, 109, 0, 0), (9, 53, 70, 0, 0)],
-    [(1, 52, 70, 0, 0), (3, 48, 72, 0, 3), (5, 60, 70, 0, 0), (5, 123, 103, 11, 1), (6, 24, 111, 0, 0), (7, 28, 72, 0, 3), (7, 80, 109, 0, 0), (9, 76, 70, 0, 0), (10, 72, 109, 0, 0), (11, 76, 65, 0, 0)],
+    [(1, 31, 64, 11, 1), (2, 76, 71, 0, 0), (2, 103, 104, 11, 1), (4, 31, 64, 11, 1), (4, 128, 111, 0, 3), (6, 112, 111, 0, 4), (7, 87, 65, 11, 1)],
+    [(1, 35, 103, 11, 1), (1, 96, 65, 0, 4), (2, 80, 109, 0, 0), (3, 43, 64, 11, 1), (3, 96, 109, 0, 0), (5, 60, 109, 0, 0), (5, 112, 65, 0, 4), (6, 24, 109, 0, 0), (7, 64, 65, 0, 4), (7, 104, 109, 0, 0), (9, 53, 70, 0, 0)],
+    [(1, 52, 70, 0, 0), (3, 48, 72, 0, 3), (5, 60, 70, 0, 0), (5, 123, 103, 11, 1), (6, 24, 111, 0, 4), (7, 28, 72, 0, 3), (7, 80, 109, 0, 0), (9, 76, 70, 0, 0), (10, 72, 109, 0, 0), (11, 76, 65, 0, 4)],
     [(1, 80, 110, 0, 2), (3, 54, 68, 0, 2), (5, 54, 81, 0, 2)],
     [(1, 57, 74, 0, 2), (1, 28, 68, 0, 2), (1, 124, 110, 0, 2), (10, 9, 74, 0, 2)],
     [(1, 77, 68, 0, 1), (1, 49, 67, 4, 1), (3, 44, 64, 0, 1), (6, 66, 67, 0, 2), (7, 103, 93, 0, 2), (8, 34, 35, 0, 1), (8, 140, 37, 0, 2), (8, 34, 111, 0, 1), (8, 140, 110, 0, 2), (9, 141, 36, 0, 2)],
@@ -695,23 +698,23 @@ SPIDERS = [
 CREATURE_MOTION = {
     (1, 0): (0, 0, 8),
     (2, 0): (0, 0, 8),
-    (2, 1): (9, 32, 8),
+    (2, 1): (7, 32, 8),
     (2, 2): (0, 0, 8),
-    (2, 3): (9, 32, 8),
+    (2, 3): (7, 32, 8),
     (3, 0): (0, 0, 8),
     (3, 1): (7, 32, 4),
     (3, 2): (0, 0, 8),
     (3, 3): (0, 0, 8),
-    (3, 4): (9, 32, 8),
+    (3, 4): (7, 32, 8),
     (3, 5): (7, 32, 4),
     (3, 6): (7, 32, 4),
     (4, 0): (0, 0, 8),
-    (4, 1): (9, 32, 8),
+    (4, 1): (7, 32, 8),
     (4, 2): (0, 0, 8),
     (4, 3): (0, 0, 4),
     (4, 4): (7, 32, 4),
     (4, 5): (0, 0, 8),
-    (4, 6): (9, 32, 8),
+    (4, 6): (7, 32, 8),
     (4, 7): (0, 0, 8),
     (4, 8): (0, 0, 4),
     (5, 0): (7, 32, 4),
@@ -722,14 +725,14 @@ CREATURE_MOTION = {
     (5, 5): (0, 0, 480),
     (5, 6): (7, 32, 4),
     (6, 0): (7, 32, 4),
-    (6, 1): (9, 36, 8),
+    (6, 1): (7, 32, 8),
     (6, 2): (0, 0, 480),
     (6, 3): (7, 32, 4),
     (6, 4): (0, 0, 8),
     (6, 5): (0, 0, 8),
-    (6, 6): (9, 36, 8),
+    (6, 6): (7, 32, 8),
     (6, 7): (0, 0, 480),
-    (6, 8): (9, 36, 8),
+    (6, 8): (7, 32, 8),
     (6, 9): (0, 0, 8),
     (6, 10): (0, 0, 8),
     (7, 0): (0, 0, 8),
@@ -741,7 +744,7 @@ CREATURE_MOTION = {
     (7, 6): (0, 0, 8),
     (7, 7): (0, 0, 8),
     (7, 8): (0, 0, 480),
-    (7, 9): (9, 32, 8),
+    (7, 9): (7, 32, 8),
 }
 
 # How long a SIDEWAYS sweep takes, for the creatures that have one. Keyed the
@@ -787,17 +790,10 @@ CREATURE_PATROL = {
 # table. A slot with no row here keeps its kind's full cycle, which is what
 # every level was authored against.
 CREATURE_SPRITES = {
+    (5, 5): 1,
     (6, 2): 1,
-    (6, 4): 1,
-    (6, 5): 1,
     (6, 7): 1,
-    (6, 9): 1,
-    (6, 10): 1,
-    (7, 0): 1,
-    (7, 2): 1,
     (7, 4): 1,
-    (7, 6): 1,
-    (7, 7): 1,
     (7, 8): 1,
 }
 

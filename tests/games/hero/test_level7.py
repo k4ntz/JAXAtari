@@ -155,9 +155,12 @@ CHARACTERS_MD = [
 ]
 
 # The one row of CHARACTERS_MD whose KIND the capture contradicts, kept here
-# rather than quietly changed. See test_room_6s_creature_is_shipped_as_a_
-# spider_not_a_bat for the evidence.
-KIND_OVERRIDDEN = {(6, 24, 111): ("bat", "spider")}
+# rather than quietly changed. The census calls the still creature at
+# (24, 111) a BAT; the ROM draws it as the UNTETHERED SPIDER, the same seven
+# pixels of the same sprite it draws at (76, 65) two rooms further down and in
+# three rooms of level 6 - where the census calls the same thing a Spider.
+# See test_room_6s_creature_is_the_untethered_spider for the evidence.
+KIND_OVERRIDDEN = {(6, 24, 111): ("bat", "spider_free")}
 
 
 @pytest.fixture(scope="module")
@@ -487,7 +490,7 @@ def test_every_entity_in_characters_md_is_present():
     got = [(r, "lantern", x, y) for r, x, y in HL.LANTERNS[L - 1]]
     got.append((HL.MINER_POS[L - 1][0], "miner",
                 HL.MINER_POS[L - 1][1], HL.MINER_POS[L - 1][2]))
-    kinds = {0: "spider", 1: "bat", 3: "snake"}
+    kinds = {0: "spider", 1: "bat", 3: "snake", 4: "spider_free"}
     for room, x, y, patrol, kind in HL.SPIDERS[L - 1]:
         got.append((room, kinds[kind], x - patrol, y))
 
@@ -545,27 +548,63 @@ def test_the_miner_is_at_the_bottom_right_of_room_11():
     assert BANDS[11]["B"][(128 - 8) // 4] == ".", "he stands in open corridor"
 
 
-def test_room_6s_creature_is_shipped_as_a_spider_not_a_bat():
+def test_room_6s_creature_is_the_untethered_spider():
     """The one row where this level does not follow CHARACTERS.md's label.
 
     The census calls the still creature at (24, 111) a BAT. It tells a bat
     from a spider by whether a 1 px thread is drawn above the body, and this
-    one has none. Everything else says spider, and the ROM outranks the
-    census (the reference's own order of authority puts hero_extract first):
+    one has none - so it falls through to "bat" by elimination. Read off the
+    ROM it is neither of the two things the census can name:
 
-      * CHARACTERS.md's own Bat entry says a bat is "11 px tall throughout"
-        with grey wings above and below. The capture of this sprite is SEVEN
-        rows and is painted only in the level's rock ramp - no grey at all -
-        while level 7's real bat, the patrolling one in room 5, comes back as
-        11 rows in every pose with three greys in it.
-      * Its bitmap is CHARACTERS.md's own spider "legs down" body.
-      * Room 11's creature draws the same bitmaps and bobs 9 px, which is the
-        spider's amplitude; a bat bobs 7.
+      * A BAT is eleven rows in every pose, and the ROM paints it in six
+        shades laid out by row and mirrored about the body - #8e8e8e #aaaaaa
+        #c0c0c0 wings around a #c3903d #b47a30 #a26221 body. Level 7's real
+        bat, the patrolling one in room 5, comes back exactly like that.
+      * A HANGING SPIDER is a five row body under six rows of #aaaaaa thread.
+      * THIS is seven rows of warm body with no grey in it at all, and the
+        ROM draws the identical seven pixels at (76, 65) in room 11 and in
+        three rooms of level 6 - where the census calls the same sprite a
+        Spider. It is its own form, kind 4.
+
+    Measured with level_images/tools/creature_atlas.py over levels 1-7, which
+    records every bitmap of every sprite with the colour of every pixel, and
+    confirmed by watching this one for 900 consecutive frames: one bitmap, no
+    movement.
     """
-    assert (6, 24, 111, 0, 0) in HL.SPIDERS[L - 1], "kind 0 = spider"
-    assert KIND_OVERRIDDEN[(6, 24, 111)] == ("bat", "spider")
+    assert (6, 24, 111, 0, 4) in HL.SPIDERS[L - 1], "kind 4 = untethered"
+    assert KIND_OVERRIDDEN[(6, 24, 111)] == ("bat", "spider_free")
     bats = [c for c in HL.SPIDERS[L - 1] if c[4] == 1]
     assert bats == [(5, 123, 103, 11, 1)], "level 7 ships exactly one bat"
+    free = [c for c in HL.SPIDERS[L - 1] if c[4] == 4]
+    assert free == [(6, 24, 111, 0, 4), (11, 76, 65, 0, 4)], \
+        "and two untethered spiders, the still one and room 11's"
+
+
+def test_the_bat_is_painted_in_the_roms_six_shades_not_one_flat_grey(env):
+    """CHARACTERS.md: "an orange body with grey wings above and below it".
+
+    The art used to be one flat #6f6f6f for the whole bat, which is a colour
+    the ROM never paints a creature in. Read off level 7 room 5, every pose is
+    laid out by row and mirrored about the middle: #8e8e8e #aaaaaa #c0c0c0
+    for the wings, then #c3903d #b47a30 #a26221 for the body, then back out.
+    """
+    import jax.numpy as jnp
+    from jaxatari.games.jax_hero import HeroRenderer
+    renderer = HeroRenderer(env.consts)
+    c = env.consts
+    _, s = env.reset()
+    s = s.replace(level=jnp.int32(L - 1), room=jnp.int32(5),
+                  player_x=jnp.int32(-40), player_y=jnp.int32(-40),
+                  step_counter=jnp.int32(46),      # the centre of the sweep
+                  spider_alive=c.SPIDER_VALID[L - 1])
+    frame = np.asarray(renderer.render(s))[:142, :, :3]
+    band = frame[103:114, 112:135].reshape(-1, 3)
+    inked = {tuple(int(v) for v in px) for px in band if tuple(px) != (0, 0, 0)}
+    wings = {(142, 142, 142), (170, 170, 170), (192, 192, 192)}
+    body = {(195, 144, 61), (180, 122, 48), (162, 98, 33)}
+    assert wings <= inked, "all three wing greys are drawn"
+    assert body <= inked, "and all three body shades"
+    assert (111, 111, 111) not in inked, "and not the flat grey it used to be"
 
 
 # --- the clocks that are not shared -----------------------------------------
@@ -600,10 +639,17 @@ def test_the_two_snakes_are_anchored_and_run_the_engines_own_clock():
             "a snake's head comes out of the rock on its LEFT"
 
 
-def test_the_still_creatures_are_drawn_as_one_sprite():
-    """"33 of 44 bats and 39 of 50 spiders are completely still" - and a still
-    creature is drawn as ONE bitmap, not as a pose cycle nobody stopped. Six
-    of level 7's ten are still, and each carries a sprite count of 1."""
+def test_a_creature_that_does_not_travel_may_still_animate():
+    """Six of the ten never move a pixel. Only TWO of those six are drawn as
+    a single bitmap.
+
+    This is the distinction the census cannot make. "Still" used to be taken
+    from its `distinct_sprites`, which reports 1 for creatures that plainly
+    alternate two bitmaps every seven or eight frames, so four spiders that
+    swap their legs on the spot were pinned to one pose. Counted over the
+    capture's own 480 frames, room 6's untethered spider and room 10's hanging
+    one draw ONE bitmap for the whole window; rooms 1, 5, 7 and 9 draw two.
+    """
     still = [slot for slot, c in enumerate(HL.SPIDERS[L - 1])
              if c[4] != 3 and HL.CREATURE_MOTION[(L, slot)][0] == 0]
     assert still == [0, 2, 4, 6, 7, 8]
@@ -611,8 +657,12 @@ def test_the_still_creatures_are_drawn_as_one_sprite():
         travel, half, _hold = HL.CREATURE_MOTION[(L, slot)]
         assert (travel, half) == (0, 0), "a still creature does not travel"
         assert (L, slot) not in HL.CREATURE_PATROL, "and does not sweep"
-        assert HL.CREATURE_SPRITES[(L, slot)] == 1, \
-            "and is drawn as a single sprite"
+    frozen = [s for s in still if HL.CREATURE_SPRITES.get((L, s)) == 1]
+    assert frozen == [4, 8], "rooms 6 and 10 draw one bitmap all window"
+    assert [HL.SPIDERS[L - 1][s][0] for s in frozen] == [6, 10]
+    for slot in set(still) - set(frozen):
+        assert (L, slot) not in HL.CREATURE_SPRITES, \
+            "the other four keep both of their poses"
 
 
 def test_the_moving_creatures_keep_their_kinds_full_cycle():
@@ -626,29 +676,37 @@ def test_the_moving_creatures_keep_their_kinds_full_cycle():
 
 
 def test_room_11s_bobbing_creature_carries_the_captures_own_numbers():
-    """It bobs 9 px - the spider's amplitude - on the 64 frames the capture
-    measured. This is the ONE clock on the level that the census could not
-    confirm, because room 11 has never been censused; every other bobbing
-    spider in the game is put at 72 by the longer scan, and if room 11 is ever
-    censused this is the number to re-check."""
+    """It moves 7 px on a 64-frame cycle and holds each of its two poses for
+    8 frames - the same numbers every untethered spider in the game carries,
+    in levels 2, 3, 4 and 6 as well.
+
+    Room 11 has never been censused, so nothing outside the ROM confirms it.
+    It does not need to: the identical sprite in level 6 room 1 was watched
+    for 400 consecutive frames and its whole (pose, position) sequence repeats
+    exactly every 64.
+    """
     travel, half, hold = HL.CREATURE_MOTION[(L, 9)]
-    assert (travel, 2 * half, hold) == (9, 64, 8)
+    assert (travel, 2 * half, hold) == (7, 64, 8)
     assert (L, 9) not in HL.CREATURE_SPRITES
-    assert HL.SPIDERS[L - 1][9] == (11, 76, 65, 0, 0)
+    assert HL.SPIDERS[L - 1][9] == (11, 76, 65, 0, 4)
+    for lvl, slot in ((2, 1), (2, 3), (3, 4), (4, 1), (4, 6),
+                      (6, 1), (6, 6), (6, 8)):
+        assert HL.CREATURE_MOTION[(lvl, slot)] == (7, 32, 8),             f"level {lvl} slot {slot} is the same creature on the same clock"
 
 
 def test_the_renderer_holds_a_still_creature_on_one_sprite(env):
-    """The table is only half of it - the engine has to read it. Slot 0 is a
-    still spider; its drawn pose must be the same on every frame, while the
-    bat in slot 3 must cycle."""
+    """The table is only half of it - the engine has to read it. Slot 4 is
+    the frozen untethered spider of room 6; its drawn pose must be the same on
+    every frame, while the bat in slot 3 must cycle."""
     c = env.consts
     lvl = L - 1
-    assert int(c.SPIDER_POSES[lvl, 0]) == 1, "the still spider is pinned"
+    assert int(c.SPIDER_POSES[lvl, 4]) == 1, "the frozen one is pinned"
     assert int(c.SPIDER_POSES[lvl, 3]) == 0, "the bat keeps its kind's cycle"
-    hold = int(c.SPIDER_HOLD[lvl, 0])
-    frames = {(step // hold) % max(1, int(c.SPIDER_POSES[lvl, 0]))
+    assert int(c.SPIDER_POSES[lvl, 0]) == 0,         "and a still creature that DOES swap its legs keeps both poses"
+    hold = int(c.SPIDER_HOLD[lvl, 4])
+    frames = {(step // hold) % max(1, int(c.SPIDER_POSES[lvl, 4]))
               for step in range(600)}
-    assert frames == {0}, "a still creature never changes sprite"
+    assert frames == {0}, "a frozen creature never changes sprite"
 
 
 def test_a_still_creature_never_moves_and_a_bobbing_one_does(env):

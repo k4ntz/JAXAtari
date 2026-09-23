@@ -245,13 +245,22 @@ def test_the_seven_creatures_are_where_the_census_put_them():
 
     A bat's x here is the CENTRE of its sweep, so it is the measured left
     column plus the half-travel: room 1's bat is drawn over x 68-90.
+
+    The untethered spider (kind 4) is the ROM's OTHER spider: no thread, seven
+    rows of warm body on their own, flipping between two poses. It was drawn
+    with a hanging spider's thread until its sprite was read off the ROM
+    (level_images/tools/creature_atlas.py, 2026-09-23). Its second pose is
+    drawn two rows below its first, so its measured BOX is 9 px taller than
+    the sprite while the creature itself travels 7 - the art carries the
+    other two.
     """
     assert HL.SPIDERS[2] == [(1, 44, 70, 0, 0), (1, 79, 103, 11, 1),
                              (2, 48, 70, 0, 0), (3, 40, 109, 0, 0),
-                             (3, 104, 65, 0, 0), (4, 75, 64, 11, 1),
+                             (3, 104, 65, 0, 4), (4, 75, 64, 11, 1),
                              (5, 52, 64, 11, 1)]
     kinds = [k for *_r, k in HL.SPIDERS[2]]
-    assert kinds.count(0) == 4 and kinds.count(1) == 3
+    assert (kinds.count(0), kinds.count(4), kinds.count(1)) == (3, 1, 3), \
+        "three hanging spiders, one untethered and three bats"
     assert 3 not in kinds, "the census found no snake in this level"
 
 
@@ -260,8 +269,9 @@ def test_still_creatures_are_still_and_the_three_bats_patrol(env):
     frames of each room.
 
     Four of the seven never move sideways and three of those never move at
-    all; the fourth (room 3, x 104) falls 9 px and climbs back over exactly
-    64 frames, the same bob level 2's two have. The three bats sweep 22 px
+    all; the fourth (room 3, x 104) is an untethered spider that moves 7 px
+    and comes back over exactly 64 frames, the same bob level 2's two have.
+    The three bats sweep 22 px
     and bob 7, and the two cycles are NOT the same length: 184 frames
     sideways against 64 up and down. A creature driven by one period for
     both would trace a diagonal the ROM never draws.
@@ -269,7 +279,7 @@ def test_still_creatures_are_still_and_the_three_bats_patrol(env):
     c = env.consts
     assert HL.CREATURE_MOTION[(3, 0)] == (0, 0, 8)
     assert HL.CREATURE_MOTION[(3, 1)] == (7, 32, 4)
-    assert HL.CREATURE_MOTION[(3, 4)] == (9, 32, 8)
+    assert HL.CREATURE_MOTION[(3, 4)] == (7, 32, 8)
     # this level's rows only: every level that is rebuilt adds its own, and
     # a whole-dict equality here would fail on somebody else's measurement
     assert {k: v for k, v in HL.CREATURE_PATROL.items()
@@ -288,7 +298,7 @@ def test_still_creatures_are_still_and_the_three_bats_patrol(env):
         room, sx, sy, _p, _k = HL.SPIDERS[2][i]
         assert seen[i] == ({sx}, {sy}), f"creature {i} hangs dead still"
     assert seen[4][0] == {104}, "the bobbing spider never moves sideways"
-    assert (min(seen[4][1]), max(seen[4][1])) == (65, 74), "9 px of bob"
+    assert (min(seen[4][1]), max(seen[4][1])) == (65, 72), "7 px of bob"
 
     for i in (1, 5, 6):
         xs, ys = seen[i]
