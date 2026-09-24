@@ -245,7 +245,8 @@ class DemonAttackConstants(AutoDerivedConstants):
     DEMON_INITIAL_TELEPORT: int = struct.field(pytree_node=False, default=2)
     DEMON_INITIAL_TELEPORT_TIMER: int = struct.field(pytree_node=False, default=10)
     DEMON_MIN_VERTICAL_DISTANCE: int = struct.field(pytree_node=False, default=12)
-    DEMON_TRACK_OFFSET: int = struct.field(pytree_node=False, default=4)
+    DEMON_TRACK_OFFSET: int = struct.field(pytree_node=False, default=0)
+    DEMON_TRACK_OVERLAP: int = struct.field(pytree_node=False, default=6)
     MAX_ROM_WAVES: int = struct.field(pytree_node=False, default=84) # completing wave 84 freezes into a blank screen
     FREEZE_AFTER_MAX_ROM_WAVES: bool = struct.field(pytree_node=False, default=False)
     BLANK_SCREEN_COLOR: Tuple[int, int, int] = struct.field(pytree_node=False, default=(0, 0, 0))
@@ -1214,7 +1215,7 @@ class JaxDemonAttack(JaxEnvironment[DemonAttackState, DemonAttackObservation, De
             camps_left,
             player_left - demon_right,
             demon_left - player_right,
-        )
+        ) + self.consts.DEMON_TRACK_OVERLAP
         inside_border = jnp.abs(edge_gap) <= self.consts.DEMON_TRACK_OFFSET
         hover_direction = jnp.where(
             edge_gap <= 0,
@@ -1223,8 +1224,8 @@ class JaxDemonAttack(JaxEnvironment[DemonAttackState, DemonAttackObservation, De
         )
         target_x = jnp.where(
             camps_left,
-            state.player_x - demon_width - self.consts.DEMON_TRACK_OFFSET,
-            state.player_x + self.consts.PLAYER_SIZE[1] + self.consts.DEMON_TRACK_OFFSET,
+            state.player_x - demon_width - self.consts.DEMON_TRACK_OFFSET + self.consts.DEMON_TRACK_OVERLAP,
+            state.player_x + self.consts.PLAYER_SIZE[1] + self.consts.DEMON_TRACK_OFFSET - self.consts.DEMON_TRACK_OVERLAP,
         )
         tracking_direction = jnp.where(
             jnp.logical_and(can_track, jnp.logical_not(inside_border)),
