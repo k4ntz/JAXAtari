@@ -343,12 +343,12 @@ class PacmanConstants(struct.PyTreeNode):
     )
 
     # Sprite sizes used by object-centric observations
-    PACMAN_WIDTH: int = struct.field(pytree_node=False, default=10)
-    PACMAN_HEIGHT: int = struct.field(pytree_node=False, default=10)
-    GHOST_WIDTH: int = struct.field(pytree_node=False, default=9)
-    GHOST_HEIGHT: int = struct.field(pytree_node=False, default=10)
+    PACMAN_WIDTH: int = struct.field(pytree_node=False, default=7)
+    PACMAN_HEIGHT: int = struct.field(pytree_node=False, default=14)
+    GHOST_WIDTH: int = struct.field(pytree_node=False, default=8)
+    GHOST_HEIGHT: int = struct.field(pytree_node=False, default=16)
     FRUIT_WIDTH: int = struct.field(pytree_node=False, default=8)
-    FRUIT_HEIGHT: int = struct.field(pytree_node=False, default=10)
+    FRUIT_HEIGHT: int = struct.field(pytree_node=False, default=11)
     POWER_PELLET_WIDTH: int = struct.field(pytree_node=False, default=4)
     POWER_PELLET_HEIGHT: int = struct.field(pytree_node=False, default=10)
 
