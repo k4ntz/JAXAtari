@@ -149,11 +149,11 @@ def _magma_slot(env, level, room):
     """A kind-2 magma slot in that room whose blast reaches no breakable rock.
 
     Magma used to be carried as a creature of kind 2, and the levels that
-    still are - 11 to 13 - are the ones no ROM regeneration has reached yet. A
+    still are - 12 and 13 - are the ones no ROM regeneration has reached yet. A
     regenerated level carries its magma as MAGMA rects instead, and the cells
     a stick can take are in DESTRUCTIBLE like any other pillar, so these two
     tests have to run against a level that still has the old form. Levels 8,
-    9 and 10 were that level until they were regenerated on 2026-09-23/24.
+    9, 10 and 11 were that level until they were regenerated on 2026-09-23/24.
 
     The slot is chosen rather than taken first: the test measures the score a
     blast pays for MAGMA ALONE, so a slot with a breakable wall inside the
@@ -194,11 +194,11 @@ def test_dynamite_destroys_magma_for_the_same_points_as_rock(env):
     ordinary rock, for 75 points. (On level 9 room 0 blasting the red pillar
     is the only way down, so this cannot be a no-op.)"""
     c = env.consts
-    # level 11 room 8: a magma block with no destructible rock inside its
+    # level 12 room 1: a magma block with no destructible rock inside its
     # blast box, so every point of the delta has to come from the magma
-    # itself. (Levels 8, 9 and 10 were used here until they were regenerated
-    # from the ROM and stopped carrying magma as a creature at all.)
-    lvl, room = 10, 8
+    # itself. (Levels 8, 9, 10 and 11 were used here until they were
+    # regenerated from the ROM and stopped carrying magma as a creature.)
+    lvl, room = 11, 1
     slot = _magma_slot(env, lvl, room)
     _, s = env.reset()
     # reset() leaves LEVEL 1's roster in spider_alive, so every slot past its
@@ -226,7 +226,7 @@ def test_dynamite_destroys_magma_for_the_same_points_as_rock(env):
 def test_the_laser_does_not_remove_magma(env):
     """The laser kills creatures; it does not cut rock and it does not touch
     magma (measured)."""
-    lvl, room = 10, 8
+    lvl, room = 11, 1
     slot = _magma_slot(env, lvl, room)
     _, s = env.reset()
     # see the note in the dynamite test: reset() hands back level 1's roster
