@@ -55,8 +55,7 @@ def test_wall_stamps_blank_exactly_the_wall_when_blasted(env):
             assert (palette[stamps[li, di][opaque]] == 0).all()      # black
 
 
-def test_flare_stamps_are_the_two_tone_flame_rectangles(env):
-    r, c = env.renderer, env.consts
+def _check_flare_stamps(r, c, lv):
     palette = np.asarray(r.PALETTE)
     stamps = np.asarray(r.FLARE_STAMPS)
     transparent = r.jr.TRANSPARENT_ID
@@ -66,11 +65,11 @@ def test_flare_stamps_are_the_two_tone_flame_rectangles(env):
     for li in range(c.num_levels):
         for fi in range(c.num_flares):
             opaque = stamps[li, fi] != transparent
-            if not _LV["fl_valid"][li, fi]:
+            if not lv["fl_valid"][li, fi]:
                 assert not opaque.any()
                 continue
             seen_valid = True
-            _, _, _, w, h, _, _ = (int(v) for v in _LV["fl"][li, fi])
+            _, _, _, w, h, _, _ = (int(v) for v in lv["fl"][li, fi])
             expected_rgb = np.zeros(opaque.shape + (3,), np.uint8)
             expected_rgb[:h, :w] = (252, 232, 120)
             expected_rgb[:h, 1:max(2, w - 1)] = (184, 50, 50)
@@ -78,7 +77,24 @@ def test_flare_stamps_are_the_two_tone_flame_rectangles(env):
             footprint[:h, :w] = True
             assert np.array_equal(opaque, footprint), f"level {li + 1} flare {fi} footprint"
             assert np.array_equal(palette[stamps[li, fi]][footprint], expected_rgb[footprint])
-    assert seen_valid                                             # levels 7-10 have flares
+    return seen_valid
+
+
+def test_flare_stamps_are_the_two_tone_flame_rectangles(env, monkeypatch):
+    """No level carries a flare any more (level 13's four, the last, went with
+    its ROM regeneration), so the shipped renderer bakes none - and one
+    synthetic flare, put into the level arrays before a renderer is built,
+    comes out as the two-tone flame rectangle."""
+    from jaxatari.games import jax_hero as JH
+    assert not _check_flare_stamps(env.renderer, env.consts, _LV)
+    fl = np.array(_LV["fl"], copy=True)
+    valid = np.array(_LV["fl_valid"], copy=True)
+    fl[12, 0] = (14, 80, 80, 6, 9, 64, 20)
+    valid[12, 0] = True
+    monkeypatch.setitem(JH._LV, "fl", fl)
+    monkeypatch.setitem(JH._LV, "fl_valid", valid)
+    r = JH.HeroRenderer(env.consts)
+    assert _check_flare_stamps(r, env.consts, JH._LV)
 
 
 def test_the_hero_animates_at_the_three_rates_the_rom_uses(env):

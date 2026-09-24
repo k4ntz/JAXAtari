@@ -539,12 +539,12 @@ def test_levels_4_to_16_data_present():
         for b in blobs:
             assert HL.decode_bg(b, pal).shape == (142, 160, 3)
     # Every level's way down starts with the room-0 central pillar. Levels
-    # 1-12 have been rebuilt from the ROM and state it on the band grid (rows
+    # 1-13 have been rebuilt from the ROM and state it on the band grid (rows
     # 16-98, the ceiling and middle cells a stick takes together); levels
-    # 13-16 still carry the older y=19 authoring until their turn comes.
-    for lv in range(12):
+    # 14-16 still carry the older y=19 authoring until their turn comes.
+    for lv in range(13):
         assert (0, 60, 16, 8, 83, 1) in HL.DESTRUCTIBLE[lv], f"level {lv + 1}"
-    for lv in range(12, 16):
+    for lv in range(13, 16):
         assert (0, 60, 19, 8, 80, 1) in HL.DESTRUCTIBLE[lv]
     for lv in range(16):
         assert HL.MINER_POS[lv][0] < HL.ROOMS_PER_LEVEL[lv]
@@ -581,42 +581,54 @@ def test_bat_killed_by_laser():
     assert int(state.score) - score0 == c.creature_points
 
 
-def test_magma_sprite_is_laser_proof_and_deadly():
-    """Levels 6-16 still carry their magma as kind-2 rows in SPIDERS, from
-    the earlier capture pass: a static red block that the laser cannot touch
-    and that kills the hero on contact.
+def test_magma_is_laser_proof_and_deadly():
+    """Magma is cave that burns: a laser held on it never melts it, and
+    touching it costs a life.
 
-    Levels 1-5 were rebuilt from the ROM and model magma as what it is -
-    cave, from the '%' cells of the band strings - so they have no kind-2
-    rows left. See tests/games/test_hero_level5.py for that model.
+    Every level is now carried the way the ROM draws it - magma as MAGMA
+    rects from the '%' cells of the band strings, solid because it is in the
+    wall rects. Level 13 was the last to carry it as kind-2 rows in SPIDERS
+    (the stand-in of the earlier capture pass); since its regeneration no
+    level has one, so this checks the rect model on level 13 room 1's
+    two-cell magma pillar at cells 6-7 (x 32-39), with open corridor on both
+    sides of it.
     """
     env = _env()
     c = env.consts
+    lvl, room = 12, 1
+    assert not any(row[4] == 2 for lv in range(HL.NUM_LEVELS)
+                   for row in HL.SPIDERS[lv]), "no kind-2 stand-in is left"
+    assert (room, 32, 60, 8, 39) in HL.MAGMA[lvl]
+    cells = (6, 7)                                    # x 32-39
+    assert not np.asarray(c.MELTABLE[lvl, room, 1])[list(cells)].any()
     _, state = env.reset()
-    lvl, slot = next((lv, i) for lv in range(HL.NUM_LEVELS)
-                     for i, row in enumerate(HL.SPIDERS[lv]) if row[4] == 2)
-    assert lvl >= 5, "levels 1-5 no longer use the kind-2 stand-in"
-    room, mx, my, _patrol, _kind = HL.SPIDERS[lvl][slot]
     base = state.replace(level=jnp.int32(lvl), room=jnp.int32(room),
                          spider_alive=c.SPIDER_VALID[lvl],
                          invuln_timer=jnp.int32(0))
 
-    # the beam does nothing to it, however long it is held
-    s = base.replace(player_x=jnp.int32(mx - 24), player_y=jnp.int32(my - 4),
-                     facing=jnp.int32(1))
-    for _ in range(60):
+    # The beam does nothing to it, however long it is held: well past the
+    # 256 frames a rock column takes. x 42 leaves 2 px of air to the pillar.
+    stand = dict(player_x=jnp.int32(42), player_y=jnp.int32(75),
+                 player_vy=jnp.float32(0.0))
+    # (creatures cleared: the engine's bolt reaches room 1's hanging spider
+    # at x 20, beyond the pillar, and would score 50)
+    s = base.replace(facing=jnp.int32(-1),
+                     spider_alive=jnp.zeros_like(base.spider_alive), **stand)
+    score0 = int(s.score)
+    for _ in range(c.laser_burn_frames + 40):
         _, s, _, _, _ = env.step(s, FIRE)
-        s = s.replace(player_x=jnp.int32(mx - 24), player_y=jnp.int32(my - 4),
-                      player_vy=jnp.float32(0.0))
-    assert bool(s.spider_alive[slot]), "magma survives the beam"
+        s = s.replace(**stand)
+    assert int(s.lives) == c.starting_lives
+    assert not np.asarray(s.melted[room])[list(cells)].any(), "magma survives the beam"
+    assert int(s.score) == score0
 
-    # and touching it costs a life
-    s = base.replace(player_x=jnp.int32(mx), player_y=jnp.int32(my))
-    live_x, live_y = env._spider_pos(s)
-    s = s.replace(player_x=jnp.int32(int(live_x[slot])),
-                  player_y=jnp.int32(int(live_y[slot]) + c.spider_body_top - 2))
-    _, s, _, _, _ = env.step(s, NOOP)
+    # and touching it costs a life - against its right face, where the lethal
+    # box (the rect grown by a pixel) reaches x 40
+    _, s, _, _, _ = env.step(base.replace(player_x=jnp.int32(40),
+                                          player_y=jnp.int32(75)), NOOP)
     assert int(s.lives) == c.starting_lives - 1
+    _, s, _, _, _ = env.step(base.replace(**stand), NOOP)
+    assert int(s.lives) == c.starting_lives, "2 px of air is safe"
 
 
 def test_lantern_touch_darkens_room_until_next_level():
@@ -766,25 +778,34 @@ def test_water_strip_kills_when_stood_in():
 def test_flare_kills_only_while_its_cycle_is_on():
     """The flare mechanism: deadly during the on-window, harmless while off.
 
-    Checked on level 13, which still carries the authored rows (levels 9, 10,
-    11 and 12 lost theirs when they were regenerated from the ROM - the
-    level-10, 11 and 12 captures of 2026-09-24 find no periodic eruption either). Level 7's three
-    went when it was regenerated - they were invented on top of the superseded
-    reference, and the ROM capture finds no periodic eruption in room 6 or
-    along room 10's water line. The mechanism is kept and tested because
-    levels 9-13 still use it; the next level to be rebuilt will most likely
-    empty its rows too.
+    No level carries a flare row any more. Every one the module held was
+    authored on top of the superseded reference, and each went when its level
+    was regenerated from the ROM - level 13's four, the last of them, on
+    2026-09-24 - because no capture finds a periodic eruption anywhere. The
+    mechanism is still in the engine, so it is checked with ONE synthetic
+    flare put into the constants: level 13 room 14, whose corridor is open
+    wall to wall and has no magma. Its creatures are cleared (its bat sweeps
+    through the flare's x), so nothing but the flare can kill him there.
     """
-    env = _env()
-    c = env.consts
     from jaxatari.games import hero_levels as HL
-    lvl = 12
-    rm, fx, fy, fw, fh, period, duty = HL.FLARES[lvl][0]
+    assert all(HL.FLARES[lv] == [] for lv in range(HL.NUM_LEVELS))
+    lvl, rm = 12, 14
+    assert HL.MAGMA[lvl] and not any(m[0] == rm for m in HL.MAGMA[lvl])
+    fx, fy, fw, fh, period, duty = 80, 80, 8, 8, 64, 20
+    c0 = _env().consts
+    fl = np.zeros(np.asarray(c0.FLARES_T).shape, np.int32)
+    fl[lvl, 0] = (rm, fx, fy, fw, fh, period, duty)
+    valid = np.zeros(np.asarray(c0.FLARES_VALID).shape, bool)
+    valid[lvl, 0] = True
+    env = JaxHero(consts=c0.replace(FLARES_T=jnp.asarray(fl),
+                                    FLARES_VALID=jnp.asarray(valid)))
+    c = env.consts
     _, state = env.reset()
     base = state.replace(level=jnp.int32(lvl), room=jnp.int32(rm),
                          player_x=jnp.int32(fx + 1),
                          player_y=jnp.int32(fy - c.player_height + fh - 1),
-                         spider_alive=c.SPIDER_VALID[lvl])
+                         spider_alive=jnp.zeros_like(state.spider_alive),
+                         invuln_timer=jnp.int32(0))
     on = base.replace(step_counter=jnp.int32(0))          # cycle on
     _, s, _, _, _ = env.step(on, NOOP)
     assert int(s.lives) == c.starting_lives - 1
@@ -811,6 +832,7 @@ def test_levels_7_to_10_miners_on_the_measured_ledges():
     assert HL.MINER_POS[9] == (15, 25, 86)   # ROM capture, 2026-09-24
     assert HL.MINER_POS[10] == (15, 128, 86)  # ROM capture, 2026-09-24
     assert HL.MINER_POS[11] == (15, 25, 86)   # ROM capture, 2026-09-24
+    assert HL.MINER_POS[12] == (15, 25, 86)   # ROM capture, 2026-09-24
 
 
 def test_render_shape_and_jit():
