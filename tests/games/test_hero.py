@@ -539,12 +539,12 @@ def test_levels_4_to_16_data_present():
         for b in blobs:
             assert HL.decode_bg(b, pal).shape == (142, 160, 3)
     # Every level's way down starts with the room-0 central pillar. Levels
-    # 1-11 have been rebuilt from the ROM and state it on the band grid (rows
+    # 1-12 have been rebuilt from the ROM and state it on the band grid (rows
     # 16-98, the ceiling and middle cells a stick takes together); levels
-    # 12-16 still carry the older y=19 authoring until their turn comes.
-    for lv in range(11):
+    # 13-16 still carry the older y=19 authoring until their turn comes.
+    for lv in range(12):
         assert (0, 60, 16, 8, 83, 1) in HL.DESTRUCTIBLE[lv], f"level {lv + 1}"
-    for lv in range(11, 16):
+    for lv in range(12, 16):
         assert (0, 60, 19, 8, 80, 1) in HL.DESTRUCTIBLE[lv]
     for lv in range(16):
         assert HL.MINER_POS[lv][0] < HL.ROOMS_PER_LEVEL[lv]
@@ -766,9 +766,9 @@ def test_water_strip_kills_when_stood_in():
 def test_flare_kills_only_while_its_cycle_is_on():
     """The flare mechanism: deadly during the on-window, harmless while off.
 
-    Checked on level 12, which still carries the authored rows (levels 9, 10
-    and 11 lost theirs when they were regenerated from the ROM - the level-10
-    and level-11 captures of 2026-09-24 find no periodic eruption either). Level 7's three
+    Checked on level 13, which still carries the authored rows (levels 9, 10,
+    11 and 12 lost theirs when they were regenerated from the ROM - the
+    level-10, 11 and 12 captures of 2026-09-24 find no periodic eruption either). Level 7's three
     went when it was regenerated - they were invented on top of the superseded
     reference, and the ROM capture finds no periodic eruption in room 6 or
     along room 10's water line. The mechanism is kept and tested because
@@ -778,7 +778,7 @@ def test_flare_kills_only_while_its_cycle_is_on():
     env = _env()
     c = env.consts
     from jaxatari.games import hero_levels as HL
-    lvl = 11
+    lvl = 12
     rm, fx, fy, fw, fh, period, duty = HL.FLARES[lvl][0]
     _, state = env.reset()
     base = state.replace(level=jnp.int32(lvl), room=jnp.int32(rm),
@@ -810,6 +810,7 @@ def test_levels_7_to_10_miners_on_the_measured_ledges():
     assert HL.MINER_POS[8] == (15, 128, 86)   # ROM capture, 2026-09-23
     assert HL.MINER_POS[9] == (15, 25, 86)   # ROM capture, 2026-09-24
     assert HL.MINER_POS[10] == (15, 128, 86)  # ROM capture, 2026-09-24
+    assert HL.MINER_POS[11] == (15, 25, 86)   # ROM capture, 2026-09-24
 
 
 def test_render_shape_and_jit():

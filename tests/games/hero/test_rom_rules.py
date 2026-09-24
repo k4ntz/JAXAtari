@@ -149,11 +149,11 @@ def _magma_slot(env, level, room):
     """A kind-2 magma slot in that room whose blast reaches no breakable rock.
 
     Magma used to be carried as a creature of kind 2, and the levels that
-    still are - 12 and 13 - are the ones no ROM regeneration has reached yet. A
+    still are - 13 only - are the ones no ROM regeneration has reached yet. A
     regenerated level carries its magma as MAGMA rects instead, and the cells
     a stick can take are in DESTRUCTIBLE like any other pillar, so these two
     tests have to run against a level that still has the old form. Levels 8,
-    9, 10 and 11 were that level until they were regenerated on 2026-09-23/24.
+    9, 10, 11 and 12 were that level until they were regenerated on 2026-09-23/24.
 
     The slot is chosen rather than taken first: the test measures the score a
     blast pays for MAGMA ALONE, so a slot with a breakable wall inside the
@@ -194,11 +194,11 @@ def test_dynamite_destroys_magma_for_the_same_points_as_rock(env):
     ordinary rock, for 75 points. (On level 9 room 0 blasting the red pillar
     is the only way down, so this cannot be a no-op.)"""
     c = env.consts
-    # level 12 room 1: a magma block with no destructible rock inside its
+    # level 13 room 1: a magma block with no destructible rock inside its
     # blast box, so every point of the delta has to come from the magma
-    # itself. (Levels 8, 9, 10 and 11 were used here until they were
+    # itself. (Levels 8, 9, 10, 11 and 12 were used here until they were
     # regenerated from the ROM and stopped carrying magma as a creature.)
-    lvl, room = 11, 1
+    lvl, room = 12, 1
     slot = _magma_slot(env, lvl, room)
     _, s = env.reset()
     # reset() leaves LEVEL 1's roster in spider_alive, so every slot past its
@@ -216,17 +216,20 @@ def test_dynamite_destroys_magma_for_the_same_points_as_rock(env):
     assert bool(alive0[slot])
     _, s, _, _, _ = env.step(s, NOOP)
     assert not bool(s.spider_alive[slot]), "the blast must take the magma"
-    assert int((alive0 & ~np.asarray(s.spider_alive)).sum()) == 1
+    # Level 13 room 1 carries two magma blocks a few px apart, so one stick
+    # takes both. Every slot it takes must be magma, and each pays once.
+    taken = alive0 & ~np.asarray(s.spider_alive)
+    assert (np.asarray(c.SPIDER_KIND[lvl])[taken] == 2).all(), "only magma"
     assert (np.asarray(s.wall_stage) == stage0).all(), "no rock in reach"
-    # magma pays the WALL rate, not the creature rate
+    # magma pays the WALL rate, not the creature rate, per block
     assert c.wall_points == 75 and c.creature_points == 50
-    assert int(s.score) - score0 == c.wall_points
+    assert int(s.score) - score0 == c.wall_points * int(taken.sum())
 
 
 def test_the_laser_does_not_remove_magma(env):
     """The laser kills creatures; it does not cut rock and it does not touch
     magma (measured)."""
-    lvl, room = 11, 1
+    lvl, room = 12, 1
     slot = _magma_slot(env, lvl, room)
     _, s = env.reset()
     # see the note in the dynamite test: reset() hands back level 1's roster
@@ -448,3 +451,137 @@ def test_every_level_has_meltable_walls_and_keeps_its_edges(env):
                     run = c.num_cells - int(np.argmin(row[::-1]))
                     assert not melt[lvl, room, band, run:].any(), \
                         f"L{lvl+1} r{room} b{band}: right edge run is meltable"
+
+
+# --- the raft ---------------------------------------------------------------
+# Measured on the ROM 2026-09-24 (level_images CHARACTERS.md, "Raft"): a
+# yellow 8x2 platform on the liquid of level 10 room 13, level 11 room 12 and
+# level 12 room 14, which the recorded playthroughs ride under each room's
+# magma wall.
+RAFT_ROOMS = {10: (13, 124), 11: (12, 28), 12: (14, 124)}
+
+
+def test_the_rafts_are_the_three_measured_ones():
+    assert HL.RAFT_ENDS == (28, 124)
+    assert (HL.RAFT_Y, HL.RAFT_W, HL.RAFT_H) == (136, 8, 2)
+    got = {lv + 1: tuple(r[0]) for lv, r in enumerate(HL.RAFTS) if r}
+    # levels 17-20 alias 13-16, which have none
+    assert got == RAFT_ROOMS
+
+
+@pytest.mark.parametrize("level", sorted(RAFT_ROOMS))
+def test_the_raft_is_not_painted_into_the_background(level):
+    room, _x = RAFT_ROOMS[level]
+    img = np.asarray(HL.decode_bg(getattr(HL, f"BG_RLE_L{level}")[room],
+                                  getattr(HL, f"PALETTE_L{level}")))
+    yellow = (img[136:142] == np.array(HL.RAFT_COLOUR)).all(axis=-1)
+    assert not yellow.any(), "the engine draws the raft; the capture's copy must go"
+
+
+def _on_the_raft(env, level, x_off=0):
+    """The hero just above the waiting raft, every creature gone (level 12
+    room 14's hanging spider sits in its path and kills him - on the ROM too)."""
+    c = env.consts
+    room, start = RAFT_ROOMS[level]
+    _, s = env.reset()
+    s = s.replace(level=jnp.int32(level - 1), room=jnp.int32(room),
+                  raft_x=jnp.int32(start),
+                  raft_dir=jnp.int32(-1 if start == c.raft_max_x else 1),
+                  player_x=jnp.int32(start + c.raft_ride_dx + x_off),
+                  player_y=jnp.int32(c.raft_y - c.player_height - 6),
+                  spider_alive=jnp.zeros_like(s.spider_alive), has_moved=jnp.bool_(True))
+    for _ in range(10):                      # fall the last few pixels
+        _, s, _, _, _ = env.step(s, NOOP)
+    return s
+
+
+@pytest.mark.parametrize("level", sorted(RAFT_ROOMS))
+def test_standing_on_the_raft_it_carries_him_one_px_a_frame(env, level):
+    c = env.consts
+    _room, start = RAFT_ROOMS[level]
+    s = _on_the_raft(env, level)
+    assert int(s.player_y) == c.raft_y - c.player_height
+    assert int(s.lives) == c.starting_lives, "the raft keeps him off the liquid"
+    x0 = int(s.raft_x)
+    step = -1 if start == c.raft_max_x else 1
+    for k in range(1, 21):
+        _, s, _, _, _ = env.step(s, NOOP)
+        assert int(s.raft_x) == x0 + step * k
+        assert int(s.player_x) == int(s.raft_x) + c.raft_ride_dx
+    assert int(s.lives) == c.starting_lives
+
+
+def test_the_raft_turns_at_each_end_holding_two_frames(env):
+    c = env.consts
+    s = _on_the_raft(env, 12)
+    xs = []
+    for _ in range(2 * (c.raft_max_x - c.raft_min_x) + 10):
+        _, s, _, _, _ = env.step(s, NOOP)
+        xs.append(int(s.raft_x))
+    assert min(xs) == c.raft_min_x and max(xs) == c.raft_max_x
+    i = xs.index(c.raft_min_x)
+    assert xs[i - 1:i + 3] == [29, 28, 28, 29], "measured: ...29, 28, 28, 29..."
+    assert int(s.lives) == c.starting_lives
+
+
+def test_his_own_left_and_right_do_not_move_him_along_it(env):
+    c = env.consts
+    s = _on_the_raft(env, 12)
+    x0 = int(s.raft_x)
+    for a in (RIGHT, LEFT, RIGHT):
+        for _ in range(10):
+            _, s, _, _, _ = env.step(s, a)
+            assert int(s.player_x) == int(s.raft_x) + c.raft_ride_dx
+    assert int(s.raft_x) == x0 - 30, "it kept its own course, left"
+
+
+def test_off_the_raft_the_liquid_kills(env):
+    c = env.consts
+    s = _on_the_raft(env, 12, x_off=-8)            # measured: 8 px off misses it
+    for _ in range(5):
+        _, s, _, _, _ = env.step(s, NOOP)
+    assert int(s.lives) == c.starting_lives - 1
+
+
+def test_the_raft_stops_the_frame_he_lifts_off(env):
+    c = env.consts
+    s = _on_the_raft(env, 12)
+    for _ in range(10):
+        _, s, _, _, _ = env.step(s, NOOP)
+    for _ in range(60):
+        _, s, _, _, _ = env.step(s, UP)
+        if int(s.player_y) < c.raft_y - c.player_height:
+            break
+    parked = int(s.raft_x)
+    for _ in range(30):
+        _, s, _, _, _ = env.step(s, UP)
+    assert int(s.raft_x) == parked
+
+
+@pytest.mark.parametrize("from_room, key, end", [(13, LEFT, 124), (15, RIGHT, 28)])
+def test_entering_the_room_puts_it_at_the_end_he_comes_in_from(env, from_room, key, end):
+    """Level 12: room 13's left edge leads down into room 14's right side,
+    room 15's right edge back up into its left side."""
+    c = env.consts
+    _, s = env.reset()
+    x = 8 if key == LEFT else c.screen_width - 8 - c.player_width
+    s = s.replace(level=jnp.int32(11), room=jnp.int32(from_room),
+                  raft_x=jnp.int32(76), raft_dir=jnp.int32(1),
+                  player_x=jnp.int32(x), player_y=jnp.int32(70),
+                  spider_alive=jnp.zeros_like(s.spider_alive), has_moved=jnp.bool_(True))
+    _, s, _, _, _ = env.step(s, key)
+    assert int(s.room) == 14
+    assert int(s.raft_x) == end
+    assert int(s.raft_dir) == (-1 if end == 124 else 1)
+
+
+def test_the_renderer_draws_the_raft_where_it_is(env):
+    c = env.consts
+    s = _on_the_raft(env, 12)
+    for _ in range(40):
+        _, s, _, _, _ = env.step(s, NOOP)
+    img = np.asarray(env.render(s))
+    x = int(s.raft_x)
+    band = (img[136:138] == np.array(c.raft_color, np.uint8)).all(axis=-1)
+    cols = np.nonzero(band.all(axis=0))[0]
+    assert cols.min() == x and cols.max() == x + 7

@@ -327,8 +327,15 @@ def _build_level_arrays():
     side_r = np.zeros((nL, _MAX_ROOMS), bool)
     side_l_d = np.zeros((nL, _MAX_ROOMS), np.int32)
     side_r_d = np.zeros((nL, _MAX_ROOMS), np.int32)
+    # Rafts: one per level at most (HL.RAFTS). raft_room -1 = no raft.
+    raft_room = np.full((nL,), -1, np.int32)
+    raft_start = np.full((nL,), HL.RAFT_ENDS[1], np.int32)
     for li in range(nL):
         rooms_n[li] = _ROOMS[li]
+        assert len(HL.RAFTS[li]) <= 1, "the engine carries one raft per level"
+        for (rm, x) in HL.RAFTS[li]:
+            assert x in HL.RAFT_ENDS, "a raft waits at one of its two ends"
+            raft_room[li], raft_start[li] = rm, x
         for (rm, side, delta) in HL.SIDE_EXITS[li]:
             if side < 0:
                 side_l[li, rm], side_l_d[li, rm] = True, delta
@@ -479,7 +486,8 @@ def _build_level_arrays():
                 lan=lan, lan_valid=lan_valid, de=de, de_valid=de_valid,
                 fl=fl, fl_valid=fl_valid, mg=mg, mg_valid=mg_valid,
                 side_l=side_l, side_r=side_r,
-                side_l_d=side_l_d, side_r_d=side_r_d)
+                side_l_d=side_l_d, side_r_d=side_r_d,
+                raft_room=raft_room, raft_start=raft_start)
 
 
 _LV = _build_level_arrays()
@@ -700,6 +708,27 @@ class HeroConstants(AutoDerivedConstants):
         default_factory=lambda: jnp.array(_LV["side_l_d"], dtype=jnp.int32))
     SIDE_EXIT_RIGHT_DELTA: jnp.ndarray = struct.field(pytree_node=False,
         default_factory=lambda: jnp.array(_LV["side_r_d"], dtype=jnp.int32))
+    # The raft (HL.RAFTS): the room it floats in (-1 = none) and the end the
+    # level's first entry into that room finds it at. It patrols
+    # raft_min_x..raft_max_x at raft_speed px/frame while the hero rides it,
+    # turning round with a one-frame hold (so each end is drawn 2 frames).
+    RAFT_ROOM: jnp.ndarray = struct.field(pytree_node=False,
+        default_factory=lambda: jnp.array(_LV["raft_room"], dtype=jnp.int32))
+    RAFT_START: jnp.ndarray = struct.field(pytree_node=False,
+        default_factory=lambda: jnp.array(_LV["raft_start"], dtype=jnp.int32))
+    raft_min_x: int = struct.field(pytree_node=False, default=HL.RAFT_ENDS[0])
+    raft_max_x: int = struct.field(pytree_node=False, default=HL.RAFT_ENDS[1])
+    raft_y: int = struct.field(pytree_node=False, default=HL.RAFT_Y)
+    raft_width: int = struct.field(pytree_node=False, default=HL.RAFT_W)
+    raft_height: int = struct.field(pytree_node=False, default=HL.RAFT_H)
+    raft_speed: int = struct.field(pytree_node=False, default=1)
+    # he rides at raft x + raft_ride_dx, and lands on it from within
+    # raft_catch px of that spot (measured: 4 px off he rides, 8 px off he
+    # drops into the liquid)
+    raft_ride_dx: int = struct.field(pytree_node=False, default=1)
+    raft_catch: int = struct.field(pytree_node=False, default=4)
+    raft_color: Tuple[int, int, int] = struct.field(pytree_node=False,
+                                                     default=HL.RAFT_COLOUR)
     ROOM_WALLS: jnp.ndarray = struct.field(pytree_node=False,
         default_factory=lambda: jnp.array(_LV["walls"], dtype=jnp.int32))
     ROOM_WALL_VALID: jnp.ndarray = struct.field(pytree_node=False,
@@ -875,6 +904,8 @@ class HeroState:
     miner_rescued: chex.Array
     level_complete: chex.Array
     banner_timer: chex.Array      # frames of "LEVEL: n" left over the score
+    raft_x: chex.Array            # the level's raft, left edge (HL.RAFTS)
+    raft_dir: chex.Array          # -1 / +1: the way it goes when next ridden
     step_counter: chex.Array
     game_over: chex.Array
     rng_key: chex.PRNGKey
@@ -973,6 +1004,8 @@ class JaxHero(JaxEnvironment[HeroState, HeroObservation, HeroInfo, HeroConstants
             miner_rescued=jnp.array(False, dtype=jnp.bool_),
             level_complete=jnp.array(False, dtype=jnp.bool_),
             banner_timer=jnp.array(c.level_banner_frames, dtype=jnp.int32),
+            raft_x=c.RAFT_START[0],
+            raft_dir=jnp.where(c.RAFT_START[0] >= c.raft_max_x, -1, 1).astype(jnp.int32),
             step_counter=jnp.array(0, dtype=jnp.int32),
             game_over=jnp.array(False, dtype=jnp.bool_),
             rng_key=key,
@@ -1098,6 +1131,26 @@ class JaxHero(JaxEnvironment[HeroState, HeroObservation, HeroInfo, HeroConstants
         new_y = jnp.where(y_blocked, state.player_y, cand_y).astype(jnp.int32)
         new_vy = jnp.where(y_blocked, 0.0, new_vy).astype(jnp.float32)
 
+        # --- the raft (HL.RAFTS, measured on the ROM 2026-09-24) ---
+        # It floats on the liquid and waits until the hero stands on it; then
+        # it carries him at 1 px/frame between its two ends whatever he
+        # presses (his LEFT/RIGHT does not move him along it, he rides at raft
+        # x + 1), turns round with a one-frame hold, and stops the frame he
+        # lifts off. Standing on it is standing on the liquid's surface row,
+        # within raft_catch px of the riding spot.
+        ride_y = c.raft_y - c.player_height
+        raft_here = c.RAFT_ROOM[lvl] == state.room
+        ride_spot = state.raft_x + c.raft_ride_dx
+        riding = (raft_here & (state.player_y == ride_y) & (new_y >= ride_y) &
+                  (jnp.abs(state.player_x - ride_spot) <= c.raft_catch))
+        raft_next = state.raft_x + state.raft_dir * c.raft_speed
+        raft_turn = (raft_next < c.raft_min_x) | (raft_next > c.raft_max_x)
+        raft_x = jnp.where(riding & ~raft_turn, raft_next,
+                           state.raft_x).astype(jnp.int32)
+        raft_dir = jnp.where(riding & raft_turn, -state.raft_dir,
+                             state.raft_dir).astype(jnp.int32)
+        new_x = jnp.where(riding, raft_x + c.raft_ride_dx, new_x).astype(jnp.int32)
+
         # --- room flips (measured screen-flip model) ---
         n_rooms = c.LEVEL_ROOMS[lvl]
         flip_down = (new_y > c.flip_bottom_y) & (state.room < n_rooms - 1)
@@ -1139,10 +1192,21 @@ class JaxHero(JaxEnvironment[HeroState, HeroObservation, HeroInfo, HeroConstants
         new_x = jnp.where(side_l, c.side_enter_left_x,
                           jnp.where(side_r, c.side_enter_right_x,
                                     new_x)).astype(jnp.int32)
+        # Entering the raft's room puts the raft at the end he comes in from
+        # (measured: in by the right edge it waits at x 124, in by the left
+        # at x 28), heading for the other one.
+        into_raft = took_side & (new_room == c.RAFT_ROOM[lvl])
+        raft_x = jnp.where(into_raft & side_l, c.raft_max_x,
+                           jnp.where(into_raft & side_r, c.raft_min_x,
+                                     raft_x)).astype(jnp.int32)
+        raft_dir = jnp.where(into_raft & side_l, -1,
+                             jnp.where(into_raft & side_r, 1,
+                                       raft_dir)).astype(jnp.int32)
 
         moved_input = up | left | right | down
         has_moved = state.has_moved | moved_input
-        moved_h = new_x != state.player_x
+        # carried on the raft he stands still on it; he is not walking
+        moved_h = (new_x != state.player_x) & (~riding)
         walk_timer = jnp.where(moved_h, state.walk_timer + 1, 0).astype(jnp.int32)
 
         # --- laser: a bolt that flies, relaunched while fire is held ---
@@ -1346,7 +1410,10 @@ class JaxHero(JaxEnvironment[HeroState, HeroObservation, HeroInfo, HeroConstants
         # and for the same reason: standing on a rect leaves his feet on the
         # row above its top, which does not overlap the rect itself.
         de = c.DEADLY_R[lvl]
-        died_deadly = ((state.invuln_timer <= 0) &
+        # ... except where the raft is under him.
+        on_raft = ((c.RAFT_ROOM[lvl] == new_room) & (new_y == ride_y) &
+                   (jnp.abs(new_x - (raft_x + c.raft_ride_dx)) <= c.raft_catch))
+        died_deadly = ((state.invuln_timer <= 0) & (~on_raft) &
                        jnp.any(c.DEADLY_VALID[lvl] & (de[:, 0] == new_room) &
                                self._aabb(new_x, new_y, c.player_width,
                                           c.player_height, de[:, 1] - 1,
@@ -1480,6 +1547,13 @@ class JaxHero(JaxEnvironment[HeroState, HeroObservation, HeroInfo, HeroConstants
             advance, c.level_banner_frames,
             jnp.maximum(0, state.banner_timer - 1)).astype(jnp.int32)
         final_miner_rescued = jnp.where(advance, False, state.miner_rescued | touch_miner)
+        # a new level starts with its own raft where it waits; a death leaves
+        # the raft where it is (measured)
+        next_raft = c.RAFT_START[next_lvl]
+        final_raft_x = jnp.where(advance, next_raft, raft_x).astype(jnp.int32)
+        final_raft_dir = jnp.where(
+            advance, jnp.where(next_raft >= c.raft_max_x, -1, 1),
+            raft_dir).astype(jnp.int32)
         level_complete = state.level_complete | finish
 
         game_over = state.game_over | (died & (new_lives <= 0))
@@ -1516,6 +1590,8 @@ class JaxHero(JaxEnvironment[HeroState, HeroObservation, HeroInfo, HeroConstants
             miner_rescued=final_miner_rescued,
             level_complete=level_complete,
             banner_timer=final_banner,
+            raft_x=final_raft_x,
+            raft_dir=final_raft_dir,
             step_counter=new_step,
             game_over=game_over,
             rng_key=state.rng_key,
@@ -2244,6 +2320,8 @@ class HeroRenderer(JAXGameRenderer):
             {'name': 'explosion', 'type': 'procedural', 'data': self._build_explosion(c.explosion_radius)},
             {'name': 'laser_bolt', 'type': 'procedural',
              'data': self._solid(c.laser_height, c.laser_bolt_length, c.laser_color)},
+            {'name': 'raft', 'type': 'procedural',
+             'data': self._solid(c.raft_height, c.raft_width, c.raft_color)},
             {'name': 'power_unit', 'type': 'procedural', 'data': self._solid(c.power_bar_height, 1, c.power_color)},
             {'name': 'power_spent_unit', 'type': 'procedural', 'data': self._solid(c.power_bar_height, 1, c.power_spent_color)},
             {'name': 'life_icon', 'type': 'procedural', 'data': self._sprite(_LIFE_ICON_ART)},
@@ -2578,6 +2656,11 @@ class HeroRenderer(JAXGameRenderer):
             raster = maybe(c.FLARES_VALID[lvl, i] & fl_on[i] &
                            (flr[i, 0] == room),
                            flr[i, 1], flr[i, 2], self.FLARE_STAMPS[lvl, i], raster)
+
+        # the raft, where it is now (the capture's copy is taken out of the
+        # background by the generator, HL.RAFTS)
+        raster = maybe(c.RAFT_ROOM[lvl] == room, state.raft_x, c.raft_y,
+                       self.SHAPE_MASKS["raft"], raster)
 
         # dynamite + explosion flash
         dyn_here = state.dyn_room == room
