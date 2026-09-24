@@ -568,6 +568,22 @@ class HeroConstants(AutoDerivedConstants):
     # is what the game uses, dyn_fuse_rom is what the console does.
     dyn_width: int = struct.field(pytree_node=False, default=3)   # ROM bitmap
     dyn_height: int = struct.field(pytree_node=False, default=10)  # 3x10
+    # WHERE THE STICK IS DRAWN. The ROM drops it under the MIDDLE of the
+    # hero, at his feet, and it is the same whichever way he faces - measured
+    # 2026-09-24 (level 1 room 0, planted facing right at RAM x 52: suit
+    # columns 53-58, stick 55-57; facing left at x 16: suit 17-22, stick
+    # 19-21), and the recorded playthrough agrees (level_02 frames 11-15 and
+    # 26: the fuse sits under the middle of his body, and stays there as he
+    # walks away). That is player_x + 2 .. player_x + 4.
+    #
+    # state.dyn_x is NOT that column. It stays player_x - 2 at the moment of
+    # planting because the blast boxes in step() are measured from it (the
+    # 5 px destruction reach and the 10 px safe distance - see blast_reach
+    # and blast_safe_gap, and the gap tests in tests/games/hero/
+    # test_rom_rules.py). Moving dyn_x itself would silently change which
+    # walls break and when the hero dies. Only the picture, the explosion
+    # flash and the observation use dyn_x + dyn_draw_dx.
+    dyn_draw_dx: int = struct.field(pytree_node=False, default=4)
     dyn_fuse_playable: int = struct.field(pytree_node=False, default=60)
     dyn_fuse_rom: int = struct.field(pytree_node=False, default=34)
     explosion_frames: int = struct.field(pytree_node=False, default=4)
@@ -1571,7 +1587,7 @@ class JaxHero(JaxEnvironment[HeroState, HeroObservation, HeroInfo, HeroConstants
         )
 
         dynamite = ObjectObservation.create(
-            x=state.dyn_x, y=state.dyn_y,
+            x=state.dyn_x + c.dyn_draw_dx, y=state.dyn_y,     # where it is drawn
             width=jnp.array(c.dyn_width, jnp.int32),
             height=jnp.array(c.dyn_height, jnp.int32),
             active=((state.dyn_active | (state.explosion_timer > 0)) &
@@ -2175,6 +2191,18 @@ class HeroRenderer(JAXGameRenderer):
     with dynamic sprites and the measured HUD on top. Rooms are static
     screens; state.room selects which background is shown (screen-flip)."""
 
+    # Whether the hero stands on rock decides his pose. The renderer asks the
+    # game's own collision code - the very test step() plants dynamite with -
+    # instead of keeping a second copy that could drift from it. These read
+    # nothing but self.consts and the state.
+    _aabb = staticmethod(JaxHero._aabb)
+    _dwall_rects = JaxHero._dwall_rects
+    _grid_hit = JaxHero._grid_hit
+    _hits_wall = JaxHero._hits_wall
+
+    def _player_on_ground(self, state):
+        return self._hits_wall(state, state.player_x, state.player_y + 2)
+
     def __init__(self, consts: HeroConstants = None, config: render_utils.RendererConfig = None):
         self.consts = consts or HeroConstants()
         super().__init__(self.consts)
@@ -2271,6 +2299,11 @@ class HeroRenderer(JAXGameRenderer):
         ])
         self.PLAYER_ROTOR_POSES = 3
         self.PLAYER_WALK_FRAME0 = 3
+        # Standing on rock is ONE still picture: the rotor does not turn on
+        # the ground, not even while UP spins the thrust up (measured on the
+        # ROM, CHARACTERS.md "Roderick Hero / Animation"). The medium rotor
+        # is the one the ROM's standing bitmap carries (3 px wide).
+        self.PLAYER_STAND_FRAME = 1
         # sprite per (kind, animation frame): 0 spider, 1 bat, 2 magma,
         # 3 snake - all on the same 7x12 canvas, the height the ROM's spider
         # needs when its thread is at full stretch.
@@ -2548,21 +2581,26 @@ class HeroRenderer(JAXGameRenderer):
 
         # dynamite + explosion flash
         dyn_here = state.dyn_room == room
-        raster = maybe(state.dyn_active & dyn_here, state.dyn_x, state.dyn_y,
+        # drawn under the middle of the hero, not at dyn_x (see dyn_draw_dx)
+        stick_x = state.dyn_x + c.dyn_draw_dx
+        raster = maybe(state.dyn_active & dyn_here, stick_x, state.dyn_y,
                        self.SHAPE_MASKS["dynamite"], raster)
         raster = maybe((state.explosion_timer > 0) & dyn_here,
-                       state.dyn_x - c.explosion_radius, state.dyn_y - c.explosion_radius,
+                       stick_x - c.explosion_radius, state.dyn_y - c.explosion_radius,
                        self.SHAPE_MASKS["explosion"], raster)
 
-        # player: standing and hovering cycle the three rotor poses one frame
+        # player: hovering and flying cycle the three rotor poses one frame
         # each; walking holds each of its two strides for four frames
-        # (CHARACTERS.md - the states do not share a rate). Hovering through
-        # the thrust spin-up counts as airborne.
+        # (CHARACTERS.md - the states do not share a rate). Standing on the
+        # ground is one still picture, below.
         airborne = (jnp.abs(state.player_vy) > 0.5) | (state.thrust_timer > 0)
         rotor_frame = state.step_counter % self.PLAYER_ROTOR_POSES
         walk_frame = self.PLAYER_WALK_FRAME0 + (state.walk_timer // 4) % 2
         frame = jnp.where(airborne | (state.walk_timer <= 0),
                           rotor_frame, walk_frame)
+        # ...except standing on the ground, which never spins the rotor
+        frame = jnp.where(self._player_on_ground(state) & (state.walk_timer <= 0),
+                          self.PLAYER_STAND_FRAME, frame)
         # the 9-px sprite is drawn centred over the 6-px collision box
         sprite_dx = (self.PLAYER_FRAMES.shape[2] - c.player_width) // 2
         raster = self.jr.render_at_clipped(

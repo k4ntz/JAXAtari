@@ -78,6 +78,51 @@ def test_a_stick_needs_solid_ground(env):
     assert int(air.player_y) > int(fall.player_y), "DOWN must sink faster"
 
 
+@pytest.mark.parametrize("facing, walk_away", [(1, LEFT), (-1, RIGHT), (1, RIGHT), (-1, LEFT)])
+def test_the_stick_lands_under_the_middle_of_the_hero_whichever_way_he_faces(
+        env, facing, walk_away):
+    """Measured on the ROM 2026-09-24 and in the recorded playthrough: the
+    stick goes down under the MIDDLE of the hero, at his feet - not in front
+    of him and not behind him - and it is the same facing right or left:
+
+        facing right at RAM x 52   suit columns 53-58   stick 55-57
+        facing left  at RAM x 16   suit columns 17-22   stick 19-21
+        level_02 frame 11          suit 53-58, fuse under 56; frames 12-15 he
+                                   walks away and the stick stays put
+
+    It used to be drawn 2 px LEFT of the hero whichever way he faced. That
+    was a drawing bug only, and the fix must stay one: state.dyn_x is the
+    anchor the measured blast boxes are built on, so it must not move with
+    the picture (see HeroConstants.dyn_draw_dx).
+    """
+    c = env.consts
+    _, s = env.reset()
+    px = 33
+    s = s.replace(player_x=jnp.int32(px), player_y=jnp.int32(75),
+                  facing=jnp.int32(facing))
+    _, s, _, _, _ = env.step(s, DOWN)
+    assert bool(s.dyn_active), "a stick must go down on solid ground"
+
+    # the physics anchor did not move: the blast is still measured from here
+    assert int(s.dyn_x) == px - 2
+    # the observation reports the stick where it is drawn
+    obs = env._get_observation(s)
+    assert int(obs.dynamite.x) == px + 2
+
+    # walk clear (either way) and read the stick off the screen
+    for _ in range(20):
+        _, s, _, _, _ = env.step(s, walk_away)
+    assert bool(s.dyn_active), "the fuse must still be burning"
+    img = np.asarray(env.render(s)).astype(int)
+    rows = img[int(s.dyn_y):int(s.dyn_y) + c.dyn_height]
+    stick = (np.all(rows == (184, 50, 50), axis=-1) |
+             np.all(rows == (232, 232, 74), axis=-1))
+    cols = sorted(set(np.nonzero(stick)[1].tolist()))
+    assert cols == [px + 2, px + 3, px + 4], (
+        f"the stick is drawn at columns {cols}; the ROM puts it under the "
+        f"middle of a hero standing at x {px}, columns {px + 2}-{px + 4}")
+
+
 @pytest.mark.parametrize("gap, breaks", [(0, True), (5, True), (6, False), (9, False)])
 def test_blast_reaches_five_pixels_of_clear_air(env, gap, breaks):
     """Measured: a wall up to 5 px from the hero's own edge comes down; at
@@ -104,16 +149,15 @@ def _magma_slot(env, level, room):
     """A kind-2 magma slot in that room whose blast reaches no breakable rock.
 
     Magma used to be carried as a creature of kind 2, and the levels that
-    still are - 9 to 13 - are the ones no ROM regeneration has reached yet. A
+    still are - 11 to 13 - are the ones no ROM regeneration has reached yet. A
     regenerated level carries its magma as MAGMA rects instead, and the cells
     a stick can take are in DESTRUCTIBLE like any other pillar, so these two
-    tests have to run against a level that still has the old form. Level 8 was
-    that level until it was regenerated on 2026-09-23.
+    tests have to run against a level that still has the old form. Levels 8,
+    9 and 10 were that level until they were regenerated on 2026-09-23/24.
 
     The slot is chosen rather than taken first: the test measures the score a
     blast pays for MAGMA ALONE, so a slot with a breakable wall inside the
-    same blast box would add 75 that did not come from the magma. Level 9
-    room 1 has three magma slots and only the middle one is clear.
+    same blast box would add 75 that did not come from the magma.
     """
     c = env.consts
     hits = np.flatnonzero((np.asarray(c.SPIDER_KIND[level]) == 2) &
@@ -150,11 +194,11 @@ def test_dynamite_destroys_magma_for_the_same_points_as_rock(env):
     ordinary rock, for 75 points. (On level 9 room 0 blasting the red pillar
     is the only way down, so this cannot be a no-op.)"""
     c = env.consts
-    # level 9 room 1: a magma block with no destructible rock inside its
+    # level 11 room 8: a magma block with no destructible rock inside its
     # blast box, so every point of the delta has to come from the magma
-    # itself. (Level 8 was used here until it was regenerated from the ROM
-    # and stopped carrying magma as a creature at all.)
-    lvl, room = 8, 1
+    # itself. (Levels 8, 9 and 10 were used here until they were regenerated
+    # from the ROM and stopped carrying magma as a creature at all.)
+    lvl, room = 10, 8
     slot = _magma_slot(env, lvl, room)
     _, s = env.reset()
     # reset() leaves LEVEL 1's roster in spider_alive, so every slot past its
@@ -182,7 +226,7 @@ def test_dynamite_destroys_magma_for_the_same_points_as_rock(env):
 def test_the_laser_does_not_remove_magma(env):
     """The laser kills creatures; it does not cut rock and it does not touch
     magma (measured)."""
-    lvl, room = 8, 1
+    lvl, room = 10, 8
     slot = _magma_slot(env, lvl, room)
     _, s = env.reset()
     # see the note in the dynamite test: reset() hands back level 1's roster

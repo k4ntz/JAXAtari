@@ -82,11 +82,12 @@ def test_flare_stamps_are_the_two_tone_flame_rectangles(env):
 
 
 def test_the_hero_animates_at_the_three_rates_the_rom_uses(env):
-    """CHARACTERS.md, "Roderick Hero / Animation": standing cycles three
-    rotor poses at ONE frame each, hovering does the same, and walking runs
-    its stride at FOUR frames a pose. One rate for all three would be wrong
-    for all three, which is what this pins down.
+    """CHARACTERS.md, "Roderick Hero / Animation": standing on rock is ONE
+    still picture - the rotor does not turn on the ground, not even while UP
+    spins the thrust up. Off the ground the rotor cycles three poses at ONE
+    frame each, and walking runs its stride at FOUR frames a pose.
     """
+    import jax
     import jax.numpy as jnp
     r = env.renderer
     assert r.PLAYER_FRAMES.shape[0] == 5           # 3 rotor + 2 stride
@@ -96,20 +97,44 @@ def test_the_hero_animates_at_the_three_rates_the_rom_uses(env):
         airborne = (jnp.abs(state.player_vy) > 0.5) | (state.thrust_timer > 0)
         rotor = state.step_counter % r.PLAYER_ROTOR_POSES
         walk = r.PLAYER_WALK_FRAME0 + (state.walk_timer // 4) % 2
-        return int(jnp.where(airborne | (state.walk_timer <= 0), rotor, walk))
+        frame = jnp.where(airborne | (state.walk_timer <= 0), rotor, walk)
+        return int(jnp.where(r._player_on_ground(state) & (state.walk_timer <= 0),
+                             r.PLAYER_STAND_FRAME, frame))
 
-    _, s = env.reset()
+    # stand him on the floor: a fresh reset, left to settle
+    _, s = env.reset(jax.random.PRNGKey(0))
+    for _ in range(150):
+        _, s, _, _, _ = env.step(s, 0)
+    assert bool(r._player_on_ground(s)), "the test hero must be on rock"
     still = s.replace(player_vy=jnp.float32(0.0), thrust_timer=jnp.int32(0),
                       walk_timer=jnp.int32(0))
     standing = [frame_of(still.replace(step_counter=jnp.int32(t)))
                 for t in range(9)]
-    assert standing == [0, 1, 2, 0, 1, 2, 0, 1, 2], \
-        "three rotor poses, a new one every single frame"
+    assert standing == [r.PLAYER_STAND_FRAME] * 9, "one still picture"
+    spinning = [frame_of(still.replace(step_counter=jnp.int32(t),
+                                       thrust_timer=jnp.int32(t + 1)))
+                for t in range(9)]
+    assert spinning == [r.PLAYER_STAND_FRAME] * 9,         "the rotor does not turn on the ground while UP spins it up"
 
-    flying = still.replace(player_vy=jnp.float32(-1.0))
+    # off the rock the rotor spins, hovering or flying
+    air = still.replace(player_y=still.player_y - 20)
+    assert not bool(r._player_on_ground(air))
+    assert [frame_of(air.replace(step_counter=jnp.int32(t)))
+            for t in range(6)] == [0, 1, 2, 0, 1, 2], "hovering spins the rotor"
+    flying = air.replace(player_vy=jnp.float32(-1.0))
     assert [frame_of(flying.replace(step_counter=jnp.int32(t)))
-            for t in range(6)] == [0, 1, 2, 0, 1, 2], \
-        "the rotor spins at the same one-frame rate in the air"
+            for t in range(6)] == [0, 1, 2, 0, 1, 2],         "the rotor spins at the same one-frame rate in the air"
+
+    # and the renderer really draws it still: his rotor rows are the same
+    # pixels frame after frame while he stands
+    render = jax.jit(env.render)
+    y, x = int(still.player_y), int(still.player_x)
+
+    def rotor_rows(t):
+        img = np.asarray(render(still.replace(step_counter=jnp.int32(t))))
+        return img[y:y + 3, max(0, x - 2):x + 8]
+
+    assert all(np.array_equal(rotor_rows(0), rotor_rows(t)) for t in (1, 2, 5))
 
     walking = [frame_of(still.replace(walk_timer=jnp.int32(t)))
                for t in range(1, 17)]
