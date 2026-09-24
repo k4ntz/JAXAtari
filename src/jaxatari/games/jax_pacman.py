@@ -414,7 +414,7 @@ class PacmanObservation:
     ghosts: ObjectObservation  # n=4; visual_id=ghost index, state=GhostMode
     fruit: ObjectObservation  # visual_id=fruit type; active while spawned
     power_pellets: ObjectObservation  # n=4
-    pellets: chex.Array  # dense occupancy grid
+    pellets: ObjectObservation  # n=144, index = grid_x * 8 + grid_y; active while not eaten
 
 @struct.dataclass
 class PacmanInfo:
@@ -1147,19 +1147,28 @@ class JaxPacman(JaxEnvironment[PacmanState, PacmanObservation, PacmanInfo, Pacma
     @staticmethod
     @partial(jax.jit, static_argnums=(1,))
     def _observation_from_state(state: PacmanState, consts: PacmanConstants) -> PacmanObservation:
+        screen_y_table = PacmanRenderer.GAMEPLAY_Y_TO_SCREEN
+
+        def to_screen_y(gameplay_y):
+            y = gameplay_y.astype(jnp.int32)
+            return screen_y_table[jnp.clip(y, 0, screen_y_table.shape[0] - 1)]
+
+        player_pos = state.player.position.astype(jnp.int32)
         player_orientation = _action_orientation(state.player.action)
         player = ObjectObservation.create(
-            x=jnp.clip(state.player.position[0], 0, consts.WIDTH).astype(jnp.int32),
-            y=jnp.clip(state.player.position[1], 0, consts.HEIGHT).astype(jnp.int32),
+            x=player_pos[0] + 4,
+            y=to_screen_y(player_pos[1]) - 1,
             width=jnp.array(consts.PACMAN_WIDTH, dtype=jnp.int32),
             height=jnp.array(consts.PACMAN_HEIGHT, dtype=jnp.int32),
+            active=((state.player.tunnel_timer == 0) & (player_pos[1] < 189)).astype(jnp.int32),
             orientation=player_orientation,
         )
 
+        ghost_pos = state.ghosts.positions.astype(jnp.int32)
         ghost_orientation = _action_orientation(state.ghosts.actions)
         ghosts = ObjectObservation.create(
-            x=jnp.clip(state.ghosts.positions[:, 0], 0, consts.WIDTH).astype(jnp.int32),
-            y=jnp.clip(state.ghosts.positions[:, 1], 0, consts.HEIGHT).astype(jnp.int32),
+            x=ghost_pos[:, 0] + 3,
+            y=to_screen_y(ghost_pos[:, 1]) - 2,
             width=jnp.full((4,), consts.GHOST_WIDTH, dtype=jnp.int32),
             height=jnp.full((4,), consts.GHOST_HEIGHT, dtype=jnp.int32),
             visual_id=jnp.arange(4, dtype=jnp.int32),
@@ -1167,10 +1176,11 @@ class JaxPacman(JaxEnvironment[PacmanState, PacmanObservation, PacmanInfo, Pacma
             orientation=ghost_orientation,
         )
 
+        fruit_pos = state.fruit.position.astype(jnp.int32)
         fruit_orientation = _action_orientation(state.fruit.action)
         fruit = ObjectObservation.create(
-            x=jnp.clip(state.fruit.position[0], 0, consts.WIDTH).astype(jnp.int32),
-            y=jnp.clip(state.fruit.position[1], 0, consts.HEIGHT).astype(jnp.int32),
+            x=fruit_pos[0],
+            y=to_screen_y(fruit_pos[1]) - 1,
             width=jnp.array(consts.FRUIT_WIDTH, dtype=jnp.int32),
             height=jnp.array(consts.FRUIT_HEIGHT, dtype=jnp.int32),
             active=state.fruit.spawned.astype(jnp.int32),
@@ -1178,15 +1188,30 @@ class JaxPacman(JaxEnvironment[PacmanState, PacmanObservation, PacmanInfo, Pacma
             orientation=fruit_orientation,
         )
 
-        power_pellet_tiles = jnp.asarray(consts.POWER_PELLET_TILES)
-        power_x = (power_pellet_tiles[:, 0] * PacmanMaze.TILE_SCALE + 4).astype(jnp.int32)
-        power_y = (power_pellet_tiles[:, 1] * PacmanMaze.TILE_SCALE + 7).astype(jnp.int32)
+        power_xy = jnp.asarray(consts.POWER_PELLET_RENDER_XY, dtype=jnp.int32)
         power_pellets = ObjectObservation.create(
-            x=jnp.clip(power_x, 0, consts.WIDTH),
-            y=jnp.clip(power_y, 0, consts.HEIGHT),
+            x=power_xy[:, 0],
+            y=power_xy[:, 1],
             width=jnp.full((4,), consts.POWER_PELLET_WIDTH, dtype=jnp.int32),
             height=jnp.full((4,), consts.POWER_PELLET_HEIGHT, dtype=jnp.int32),
             active=state.level.power_pellets.astype(jnp.int32),
+        )
+
+        grid_w, grid_h = state.level.pellets.shape
+        grid_x, grid_y = jnp.meshgrid(jnp.arange(grid_w), jnp.arange(grid_h), indexing="ij")
+        pellet_x = grid_x * 8 + 8
+        pellet_x = jnp.where(pellet_x > 74, pellet_x + 4, pellet_x)
+        odd_row = (grid_y % 2) == 1
+        pellet_x = jnp.where(~odd_row & (pellet_x > 60) & (pellet_x < 76), pellet_x + 4, pellet_x)
+        pellet_x = jnp.where(~odd_row & (pellet_x > 76) & (pellet_x < 100), pellet_x - 4, pellet_x)
+        pellet_y = grid_y * 22 + 32
+        n_pellets = grid_w * grid_h
+        pellets = ObjectObservation.create(
+            x=pellet_x.reshape(-1).astype(jnp.int32),
+            y=pellet_y.reshape(-1).astype(jnp.int32),
+            width=jnp.full((n_pellets,), 4, dtype=jnp.int32),
+            height=jnp.full((n_pellets,), 2, dtype=jnp.int32),
+            active=state.level.pellets.reshape(-1).astype(jnp.int32),
         )
 
         return PacmanObservation(
@@ -1194,7 +1219,7 @@ class JaxPacman(JaxEnvironment[PacmanState, PacmanObservation, PacmanInfo, Pacma
             ghosts=ghosts,
             fruit=fruit,
             power_pellets=power_pellets,
-            pellets=state.level.pellets.astype(jnp.int32),
+            pellets=pellets,
         )
 
     @staticmethod
@@ -1221,7 +1246,7 @@ class JaxPacman(JaxEnvironment[PacmanState, PacmanObservation, PacmanInfo, Pacma
             "ghosts": spaces.get_object_space(n=4, screen_size=screen_size),
             "fruit": spaces.get_object_space(n=None, screen_size=screen_size),
             "power_pellets": spaces.get_object_space(n=4, screen_size=screen_size),
-            "pellets": spaces.Box(low=0, high=1, shape=(18, 8), dtype=jnp.int32),
+            "pellets": spaces.get_object_space(n=PacmanMaze.BASE_PELLETS.size, screen_size=screen_size),
         })
 
     def image_space(self) -> spaces.Box:
