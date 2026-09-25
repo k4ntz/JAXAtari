@@ -160,6 +160,23 @@ _MAX_LANTERNS = max(1, max(len(l) for l in HL.LANTERNS))
 _MAX_DEADLY = max(1, max(len(d) for d in HL.DEADLY))
 _MAX_FLARES = max(1, max(len(f) for f in HL.FLARES))
 _MAX_MAGMA = max(1, max(len(m) for m in HL.MAGMA))
+_MAX_MOUTHS = max(1, max(len(m) for m in HL.MAGMA_MOUTHS))
+_MOUTH_Y, _MOUTH_H = 60, 39          # a mouth is corridor magma: rows 60-98
+
+
+def _mouth_closed(c, lvl, room_timer):
+    """(num_mouths,) cells of magma drawn over EACH side of each mouth's gap.
+
+    A triangle wave on the frames since the room was entered: one more cell
+    per side every `step` frames until the gap is shut, then one fewer, n =
+    w / 4 steps to the cycle (HL.MAGMA_MOUTHS). Level 14 room 5: 2, 3, 4, 3,
+    2, 1, 0, 1 cells on 8-frame steps from its entry frame, measured.
+    """
+    mo = c.MOUTHS_T[lvl]
+    n = jnp.maximum(1, mo[:, 2] // 4)
+    half = n // 2
+    k = ((room_timer + mo[:, 4]) // jnp.maximum(1, mo[:, 3])) % n
+    return half - jnp.abs(k - half)
 
 
 def _bolt_pos(c, px, py, facing, laser_timer):
@@ -218,14 +235,22 @@ _SNAKE_REACH = 7                    # pixels at full stretch
 _SNAKE_POSES = 1 + 2 * _SNAKE_REACH  # pose 0 is "inside the rock"
 
 
-def _snake_length(step):
+def _snake_length(step, frames_per_px=_SNAKE_STEP):
     """How many pixels of snake are out of the rock on a given frame (0..7).
 
     This is the creature's whole extent: the box the engine collides with
     and the sprite the renderer draws are both this many pixels wide, so a
     snake that is pulled in cannot be touched, shot or drawn.
+
+    `frames_per_px` is the snake's own stretch rate (its SPIDER_HOLD, from
+    HL.CREATURE_MOTION). Levels 1-9 stretch a pixel every 4 frames, a 64-frame
+    cycle; level 14's snakes every 2, the same cycle in 32 frames (measured
+    on the ROM 2026-09-25, as levels 10 and 12 also draw them). The head
+    flutter does NOT speed up with it: it flips every 8 frames on every level
+    measured, so _snake_head_down keeps the plain frame count.
     """
-    k = (step % _SNAKE_CYCLE) // _SNAKE_STEP          # 0..15, a pixel each
+    t = step * _SNAKE_STEP // jnp.maximum(1, frames_per_px)
+    k = (t % _SNAKE_CYCLE) // _SNAKE_STEP             # 0..15, a pixel each
     out = jnp.minimum(jnp.maximum(k - 1, 0), _SNAKE_REACH)
     return jnp.where(k < 10, out, 16 - k).astype(jnp.int32)
 
@@ -318,6 +343,9 @@ def _build_level_arrays():
     nMg = _MAX_MAGMA
     mg = np.zeros((nL, nMg, 5), np.int32)         # room, x, y, w, h
     mg_valid = np.zeros((nL, nMg), bool)
+    nMo = _MAX_MOUTHS
+    mo = np.zeros((nL, nMo, 5), np.int32)         # room, x, w, step, shift
+    mo_valid = np.zeros((nL, nMo), bool)
     # Side exits: per (level, room), whether that room's corridor is open at
     # the left / right edge of the screen, and which way along the chain that
     # edge goes. The direction is data because it is not the same on every
@@ -385,6 +413,10 @@ def _build_level_arrays():
         for gi, (rm, x, y, w, h) in enumerate(HL.MAGMA[li]):
             mg[li, gi] = (rm, x, y, w, h)
             mg_valid[li, gi] = True
+        for gi, (rm, x, w, step, shift) in enumerate(HL.MAGMA_MOUTHS[li]):
+            assert w % 8 == 0 and step > 0, "a mouth closes a cell from each side"
+            mo[li, gi] = (rm, x, w, step, shift)
+            mo_valid[li, gi] = True
         for gi, group in enumerate(HL.SHARED_WALLS[li], start=1):
             for k, slot in enumerate(group):
                 assert slot < len(HL.DESTRUCTIBLE[li]), "shared-wall slot out of range"
@@ -485,6 +517,7 @@ def _build_level_arrays():
                 dw_group=dw_group, dw_scores=dw_scores,
                 lan=lan, lan_valid=lan_valid, de=de, de_valid=de_valid,
                 fl=fl, fl_valid=fl_valid, mg=mg, mg_valid=mg_valid,
+                mo=mo, mo_valid=mo_valid,
                 side_l=side_l, side_r=side_r,
                 side_l_d=side_l_d, side_r_d=side_r_d,
                 raft_room=raft_room, raft_start=raft_start)
@@ -794,6 +827,16 @@ class HeroConstants(AutoDerivedConstants):
         default_factory=lambda: jnp.array(_LV["mg"], dtype=jnp.int32))
     MAGMA_VALID: jnp.ndarray = struct.field(pytree_node=False,
         default_factory=lambda: jnp.array(_LV["mg_valid"], dtype=jnp.bool_))
+    # Magma mouths (HL.MAGMA_MOUTHS): (room, gap x, gap w, step, shift). The
+    # magma on each side of the gap grows over it one cell every `step`
+    # frames and draws back again, timed from room entry (state.room_timer),
+    # and burns like magma; after a death in the room it stays open for the
+    # rest of the visit (state.mouth_open). See _mouth_closed.
+    num_mouths: int = struct.field(pytree_node=False, default=_MAX_MOUTHS)
+    MOUTHS_T: jnp.ndarray = struct.field(pytree_node=False,
+        default_factory=lambda: jnp.array(_LV["mo"], dtype=jnp.int32))
+    MOUTHS_VALID: jnp.ndarray = struct.field(pytree_node=False,
+        default_factory=lambda: jnp.array(_LV["mo_valid"], dtype=jnp.bool_))
     # Destructible walls: (room, x, y, w, h, dynamite_ok) per slot. A dynamite
     # blast destroys a dyn_ok wall outright. The laser gets there too, but
     # slowly and column by column - see laser_burn_frames.
@@ -906,6 +949,8 @@ class HeroState:
     banner_timer: chex.Array      # frames of "LEVEL: n" left over the score
     raft_x: chex.Array            # the level's raft, left edge (HL.RAFTS)
     raft_dir: chex.Array          # -1 / +1: the way it goes when next ridden
+    room_timer: chex.Array        # frames since this room was entered (mouths)
+    mouth_open: chex.Array        # died in this room: its mouths stay open
     step_counter: chex.Array
     game_over: chex.Array
     rng_key: chex.PRNGKey
@@ -1006,6 +1051,8 @@ class JaxHero(JaxEnvironment[HeroState, HeroObservation, HeroInfo, HeroConstants
             banner_timer=jnp.array(c.level_banner_frames, dtype=jnp.int32),
             raft_x=c.RAFT_START[0],
             raft_dir=jnp.where(c.RAFT_START[0] >= c.raft_max_x, -1, 1).astype(jnp.int32),
+            room_timer=jnp.array(0, dtype=jnp.int32),
+            mouth_open=jnp.array(False, dtype=jnp.bool_),
             step_counter=jnp.array(0, dtype=jnp.int32),
             game_over=jnp.array(False, dtype=jnp.bool_),
             rng_key=key,
@@ -1344,7 +1391,8 @@ class JaxHero(JaxEnvironment[HeroState, HeroObservation, HeroInfo, HeroConstants
                                      jnp.where(is_free, c.free_spider_height,
                                                c.spider_height
                                                - c.spider_body_top)))
-        body_w = jnp.where(is_snake, _snake_length(state.step_counter),
+        body_w = jnp.where(is_snake, _snake_length(state.step_counter,
+                                                   c.SPIDER_HOLD[lvl]),
                            c.spider_width)
         # a 0-wide box overlaps nothing, which _aabb's strict inequalities do
         # not say on their own
@@ -1452,6 +1500,25 @@ class JaxHero(JaxEnvironment[HeroState, HeroObservation, HeroInfo, HeroConstants
                                          c.player_height, flr[:, 1], flr[:, 2],
                                          flr[:, 3], flr[:, 4])))
 
+        # --- magma mouths (HL.MAGMA_MOUTHS): the magma on each side of the
+        # gap, as far as it reaches over it on this frame, burns exactly like
+        # the magma rects above (grown by a pixel). The clock is the frame
+        # count since the room was entered; after a death in the room the
+        # mouth stays open until the hero leaves it (both measured). ---
+        entered = new_room != state.room
+        room_timer = jnp.where(entered, 0, state.room_timer + 1).astype(jnp.int32)
+        mouth_open = state.mouth_open & (~entered)
+        mo = c.MOUTHS_T[lvl]
+        mo_w = 4 * _mouth_closed(c, lvl, room_timer)             # px per side
+        mo_hit = (self._aabb(new_x, new_y, c.player_width, c.player_height,
+                             mo[:, 1] - 1, _MOUTH_Y - 1, mo_w + 2, _MOUTH_H + 2) |
+                  self._aabb(new_x, new_y, c.player_width, c.player_height,
+                             mo[:, 1] + mo[:, 2] - mo_w - 1, _MOUTH_Y - 1,
+                             mo_w + 2, _MOUTH_H + 2))
+        died_mouth = ((state.invuln_timer <= 0) & (~mouth_open) &
+                      jnp.any(c.MOUTHS_VALID[lvl] & (mo[:, 0] == new_room) &
+                              (mo_w > 0) & mo_hit))
+
         # --- power drain: measured, the gauge moves ONLY while the hero
         # walks or hovers. Standing perfectly still costs nothing (3,000
         # idle frames were measured against an unmoved gauge). ---
@@ -1488,7 +1555,7 @@ class JaxHero(JaxEnvironment[HeroState, HeroObservation, HeroInfo, HeroConstants
 
         # --- death / lives / respawn (top of the CURRENT room, measured) ---
         died = (died_blast | died_spider | died_power | died_deadly |
-                died_flare | died_magma) & (~touch_miner)
+                died_flare | died_magma | died_mouth) & (~touch_miner)
         new_lives = jnp.clip(state.lives - died.astype(jnp.int32) + extra_lives,
                              0, c.max_lives).astype(jnp.int32)
         respawned = died & (new_lives > 0)
@@ -1554,6 +1621,11 @@ class JaxHero(JaxEnvironment[HeroState, HeroObservation, HeroInfo, HeroConstants
         final_raft_dir = jnp.where(
             advance, jnp.where(next_raft >= c.raft_max_x, -1, 1),
             raft_dir).astype(jnp.int32)
+        # a new room (or level) restarts the mouth clock and closes a mouth
+        # a death had left open; a death in the room opens it for the visit
+        changed = (final_room != state.room) | (next_lvl != lvl)
+        final_room_timer = jnp.where(changed, 0, room_timer).astype(jnp.int32)
+        final_mouth_open = jnp.where(changed, False, mouth_open | respawned)
         level_complete = state.level_complete | finish
 
         game_over = state.game_over | (died & (new_lives <= 0))
@@ -1592,6 +1664,8 @@ class JaxHero(JaxEnvironment[HeroState, HeroObservation, HeroInfo, HeroConstants
             banner_timer=final_banner,
             raft_x=final_raft_x,
             raft_dir=final_raft_dir,
+            room_timer=final_room_timer,
+            mouth_open=final_mouth_open,
             step_counter=new_step,
             game_over=game_over,
             rng_key=state.rng_key,
@@ -1643,7 +1717,9 @@ class JaxHero(JaxEnvironment[HeroState, HeroObservation, HeroInfo, HeroConstants
                                               c.free_spider_height,
                                               c.spider_height
                                               - c.spider_body_top)))
-        obs_w = jnp.where(obs_is_snake, _snake_length(state.step_counter),
+        obs_w = jnp.where(obs_is_snake,
+                          _snake_length(state.step_counter,
+                                        c.SPIDER_HOLD[state.level]),
                           c.spider_width)
         spiders = ObjectObservation.create(
             x=sp_x.astype(jnp.int32),
@@ -2586,6 +2662,24 @@ class HeroRenderer(JAXGameRenderer):
                          self.BGS_DARK[lvl, room], self.BGS[lvl, room])
         raster = jax.lax.dynamic_update_slice(raster, cave, (0, 0))
 
+        # magma mouths: the columns the magma covers on this frame are drawn
+        # with the room's own magma, copied from the '%' cell just left of the
+        # gap (so a dark room keeps its full red, as all magma does)
+        mo = c.MOUTHS_T[lvl]
+        mo_w = jnp.where(state.mouth_open, 0,
+                         4 * _mouth_closed(c, lvl, state.room_timer))
+        cols = jnp.arange(c.screen_width)
+        rows = jnp.arange(raster.shape[0])
+        band = (rows >= _MOUTH_Y) & (rows < _MOUTH_Y + _MOUTH_H)
+        for i in range(c.num_mouths):
+            gx, gw = mo[i, 1], mo[i, 2]
+            on = c.MOUTHS_VALID[lvl, i] & (mo[i, 0] == room)
+            covered = on & (((cols >= gx) & (cols < gx + mo_w[i])) |
+                            ((cols >= gx + gw - mo_w[i]) & (cols < gx + gw)))
+            src = jnp.clip(gx - 4 + (cols - gx) % 4, 0, c.screen_width - 1)
+            magma = jnp.take(raster, src, axis=1)
+            raster = jnp.where(band[:, None] & covered[None, :], magma, raster)
+
         def maybe(cond, x, y, mask, ras, flip=False):
             return jax.lax.cond(
                 cond,
@@ -2624,7 +2718,8 @@ class HeroRenderer(JAXGameRenderer):
         # and draws nothing at all while it is pulled in.
         kind = c.SPIDER_KIND[lvl]
         sx, sy = _creature_pos(c, lvl, state.step_counter)
-        snake_frame = _snake_pose(_snake_length(state.step_counter),
+        snake_frame = _snake_pose(_snake_length(state.step_counter,
+                                                c.SPIDER_HOLD[lvl]),
                                   _snake_head_down(state.step_counter))
         # How many poses this creature runs through is its own property, not
         # its kind's: the census counted the distinct sprites the ROM draws

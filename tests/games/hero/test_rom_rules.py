@@ -436,12 +436,15 @@ def test_every_level_has_meltable_walls_and_keeps_its_edges(env):
 # yellow 8x2 platform on the liquid of level 10 room 13, level 11 room 12 and
 # level 12 room 14, which the recorded playthroughs ride under each room's
 # magma wall.
-RAFT_ROOMS = {10: (13, 124), 11: (12, 28), 12: (14, 124), 13: (12, 124)}
+RAFT_ROOMS = {10: (13, 124), 11: (12, 28), 12: (14, 124), 13: (12, 124),
+              14: (12, 28)}
 
 
-def test_the_rafts_are_the_four_measured_ones():
+def test_the_rafts_are_the_five_measured_ones():
     """Level 13 room 12's raft was found by its ROM capture on 2026-09-24,
-    under a six-cell magma wall; the playthrough rides it (frames 198-208)."""
+    under a six-cell magma wall; the playthrough rides it (frames 198-208).
+    Level 14 room 12's, under the same wall, waits at the LEFT end: the level
+    descends right, so the hero comes in from the left."""
     assert HL.RAFT_ENDS == (28, 124)
     assert (HL.RAFT_Y, HL.RAFT_W, HL.RAFT_H) == (136, 8, 2)
     got = {lv + 1: tuple(r[0]) for lv, r in enumerate(HL.RAFTS[:16]) if r}

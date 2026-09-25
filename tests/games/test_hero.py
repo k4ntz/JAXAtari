@@ -539,12 +539,12 @@ def test_levels_4_to_16_data_present():
         for b in blobs:
             assert HL.decode_bg(b, pal).shape == (142, 160, 3)
     # Every level's way down starts with the room-0 central pillar. Levels
-    # 1-13 have been rebuilt from the ROM and state it on the band grid (rows
+    # 1-14 have been rebuilt from the ROM and state it on the band grid (rows
     # 16-98, the ceiling and middle cells a stick takes together); levels
-    # 14-16 still carry the older y=19 authoring until their turn comes.
-    for lv in range(13):
+    # 15-16 still carry the older y=19 authoring until their turn comes.
+    for lv in range(14):
         assert (0, 60, 16, 8, 83, 1) in HL.DESTRUCTIBLE[lv], f"level {lv + 1}"
-    for lv in range(13, 16):
+    for lv in range(14, 16):
         assert (0, 60, 19, 8, 80, 1) in HL.DESTRUCTIBLE[lv]
     for lv in range(16):
         assert HL.MINER_POS[lv][0] < HL.ROOMS_PER_LEVEL[lv]
