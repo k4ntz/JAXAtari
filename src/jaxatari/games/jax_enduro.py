@@ -10,7 +10,7 @@ import numpy as np
 from typing import Tuple, Optional, List, Dict, Any
 
 # jaxatari
-from jaxatari.environment import JaxEnvironment, JAXAtariAction as Action
+from jaxatari.environment import JaxEnvironment, JAXAtariAction as Action, ObjectObservation
 from jaxatari.renderers import JAXGameRenderer
 from jaxatari.rendering import jax_rendering_utils as render_utils
 from jaxatari.modification import AutoDerivedConstants
@@ -48,7 +48,8 @@ class EnduroGameState:
 
 @struct.dataclass
 class EnduroObservation:
-    enemy_positions: jnp.ndarray
+    player: ObjectObservation
+    enemies: ObjectObservation
     road_features: jnp.ndarray
 
 @struct.dataclass
@@ -1032,16 +1033,10 @@ class JaxEnduro(JaxEnvironment[EnduroGameState, EnduroObservation, EnduroInfo, E
         return spaces.Discrete(len(self.ACTION_SET))
 
     def observation_space(self) -> spaces.Space:
+        screen_size = (self.consts.screen_height, self.consts.screen_width)
         return spaces.Dict({
-            "enemy_positions": spaces.Box(
-                low=jnp.array([[-1.0, -1.0]] * 7, dtype=jnp.float32),
-                high=jnp.array(
-                    [[float(self.consts.screen_width), float(self.consts.screen_height)]] * 7,
-                    dtype=jnp.float32,
-                ),
-                shape=(7, 2),
-                dtype=jnp.float32,
-            ),
+            "player": spaces.get_object_space(n=None, screen_size=screen_size),
+            "enemies": spaces.get_object_space(n=7, screen_size=screen_size),
             "road_features": spaces.Box(
                 low=jnp.array([
                     -self.consts.track_max_top_x_offset,
@@ -1756,8 +1751,34 @@ class JaxEnduro(JaxEnvironment[EnduroGameState, EnduroObservation, EnduroInfo, E
             float(self.consts.screen_width),
         )
 
+        player = ObjectObservation.create(
+            x=state.player_x.astype(jnp.int32),
+            y=state.player_y.astype(jnp.int32),
+            width=jnp.array(self.consts.car_width_0, dtype=jnp.int32),
+            height=jnp.array(self.consts.car_height_0, dtype=jnp.int32),
+        )
+
+        opponents = state.visible_opponent_positions.astype(jnp.int32)
+        is_fog = state.weather_index == self.consts.fog_weather_index
+        enemy_active = (
+            (opponents[:, 0] != -1)
+            & (opponents[:, 1] < self.consts.game_window_height - self.renderer.opponent_bottom_cutoff)
+            & jnp.where(is_fog, opponents[:, 1] >= self.consts.fog_height, True)
+        )
+        enemy_x = jnp.where(enemy_active, opponents[:, 0], 0)
+        enemy_y = jnp.where(enemy_active, opponents[:, 1], 0)
+        enemies = ObjectObservation.create(
+            x=enemy_x,
+            y=enemy_y,
+            width=jnp.asarray(self.consts.car_widths, dtype=jnp.int32),
+            height=jnp.clip(self.consts.game_window_height - 1 - enemy_y, 0, self.consts.car_heights).astype(jnp.int32),
+            active=enemy_active.astype(jnp.int32),
+            visual_id=jnp.where(enemy_active, opponents[:, 2], 0),
+        )
+
         return EnduroObservation(
-            enemy_positions=state.visible_opponent_positions[:, :2].astype(jnp.float32),
+            player=player,
+            enemies=enemies,
             road_features=jnp.array(
                 [
                     state.track_top_x_curve_offset,
