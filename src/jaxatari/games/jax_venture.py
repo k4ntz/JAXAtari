@@ -500,6 +500,7 @@ class VentureObservation(struct.PyTreeNode):
     chest: ObjectObservation
     lasers: ObjectObservation
     chaser: ObjectObservation
+    projectile: ObjectObservation
 
 class VentureInfo(struct.PyTreeNode):
     """Auxiliary information about the game state."""
@@ -1551,133 +1552,119 @@ class JaxVenture(JaxEnvironment[GameState, VentureObservation, VentureInfo, Vent
         """Constructs an observation from the current game state."""
         w = self.consts.SCREEN_WIDTH
         h = self.consts.SCREEN_HEIGHT
+        r = self.renderer
 
-        def clip_xy(t):
-            return jnp.clip(jnp.round(t), -1, w).astype(jnp.int16)
+        player_dot_size = jnp.array([[1, 2], [1, 2]], dtype=jnp.int32)
+        player_detailed_size = jnp.array([6, 6], dtype=jnp.int32)
+        monster_size = jnp.array([
+            [[7, 10], [7, 10], [7, 10], [7, 10], [7, 10]],
+            [[7, 10], [7, 10], [7, 10], [7, 10], [7, 10]],
+        ], dtype=jnp.int32)
+        dead_monster_size = jnp.array([
+            [[7, 10], [7, 10], [7, 10], [7, 10], [7, 10]],
+            [[7, 10], [7, 10], [7, 10], [7, 10], [7, 10]],
+        ], dtype=jnp.int32)
+        chest_size = jnp.array([
+            [[7, 11], [7, 11], [7, 11], [7, 11]],
+            [[7, 11], [7, 11], [7, 11], [7, 11]],
+        ], dtype=jnp.int32)
+        chaser_size = jnp.array([5, 15], dtype=jnp.int32)
+        projectile_size = int(self.consts.PROJECTILE_RADIUS * 2)
 
-        def clip_xy_y(t):
-            return jnp.clip(jnp.round(t), -1, h).astype(jnp.int16)
+        def box(x, y, bw, bh, on, **kwargs):
+            x0 = jnp.clip(x, 0, w)
+            y0 = jnp.clip(y, 0, h)
+            x1 = jnp.clip(x + bw, 0, w)
+            y1 = jnp.clip(y + bh, 0, h)
+            visible = on & (x1 > x0) & (y1 > y0)
+            return ObjectObservation.create(
+                x=jnp.where(visible, x0, -1).astype(jnp.int16),
+                y=jnp.where(visible, y0, -1).astype(jnp.int16),
+                width=jnp.where(visible, x1 - x0, 0).astype(jnp.int16),
+                height=jnp.where(visible, y1 - y0, 0).astype(jnp.int16),
+                active=visible.astype(jnp.int8),
+                orientation=jnp.zeros(visible.shape, dtype=jnp.float32),
+                **kwargs,
+            )
 
-        def clip_wh_x(t):
-            return jnp.clip(jnp.round(t), 0, w).astype(jnp.int16)
-
-        def clip_wh_y(t):
-            return jnp.clip(jnp.round(t), 0, h).astype(jnp.int16)
-
-        is_in_room = state.current_level != 0
-
-        player_width = jnp.where(is_in_room, jnp.array(self.consts.PLAYER_DETAILED_RENDER_WIDTH, dtype=jnp.float32), jnp.array(self.consts.PLAYER_DOT_RENDER_WIDTH, dtype=jnp.float32))
-
-        player_height = jnp.where(is_in_room, jnp.array(self.consts.PLAYER_DETAILED_RENDER_HEIGHT, dtype=jnp.float32), jnp.array(self.consts.PLAYER_DOT_RENDER_HEIGHT, dtype=jnp.float32))
-
-        player = ObjectObservation.create(
-            x=clip_xy(state.player.x),
-            y=clip_xy_y(state.player.y),
-            width=clip_wh_x(player_width),
-            height=clip_wh_y(player_height),
-            active=jnp.array(1, dtype=jnp.int8),
-            orientation=jnp.array(0.0, dtype=jnp.float32),
-        )
-
-        monsters_x = jnp.where(state.monsters.active, state.monsters.x, -1)  # Move inactive monsters off-screen
-        monsters_y = jnp.where(state.monsters.active, state.monsters.y, -1)
-
-        monsters = ObjectObservation.create(
-            x=clip_xy(monsters_x),
-            y=clip_xy_y(monsters_y),
-            width=clip_wh_x(
-                jnp.full((self.consts.TOTAL_MONSTERS,), self.consts.MONSTER_RENDER_WIDTH, dtype=jnp.float32)
-            ),
-            height=clip_wh_y(
-                jnp.full((self.consts.TOTAL_MONSTERS,), self.consts.MONSTER_RENDER_HEIGHT, dtype=jnp.float32)
-            ),
-            active=state.monsters.active.astype(jnp.int8),
-            orientation=jnp.zeros((self.consts.TOTAL_MONSTERS,), dtype=jnp.float32),
-        )
-
-        # Portals (Walls)
         world_idx = state.world_level - 1
         level_idx = state.current_level
+        is_in_room = level_idx != 0
+
+        player_offset = jnp.where(is_in_room, r.player_detailed_offsets, r.player_dot_offsets)
+        player_wh = jnp.where(is_in_room, player_detailed_size, player_dot_size[world_idx])
+        player_xy = (jnp.array([state.player.x, state.player.y]) - player_offset).astype(jnp.int32)
+        player = box(player_xy[0], player_xy[1], player_wh[0], player_wh[1], jnp.array(True))
+
+        global_level = world_idx * 5 + level_idx
+        monster_idx = jnp.arange(self.consts.TOTAL_MONSTERS)
+        in_level = (monster_idx >= self.consts.LEVEL_OFFSETS[global_level]) & (monster_idx < self.consts.LEVEL_OFFSETS[global_level + 1])
+        monster_alive = in_level & state.monsters.active
+        monster_dead = in_level & (state.monsters.dead_for > 0)
+        monster_wh = jnp.where(monster_dead[:, None], dead_monster_size[world_idx, level_idx], monster_size[world_idx, level_idx])
+        monsters = box(
+            (state.monsters.x - r.monster_offsets[0]).astype(jnp.int32),
+            (state.monsters.y - r.monster_offsets[1]).astype(jnp.int32),
+            monster_wh[:, 0],
+            monster_wh[:, 1],
+            monster_alive | monster_dead,
+            state=monster_dead.astype(jnp.int16),
+        )
+
         portals_array = self.consts.JAX_TRANSITIONS[world_idx, level_idx]
-
-        # Determine effective active portals
-        portal_active = portals_array[..., 2] > 0 # active if exists
-        # Could also be more sophisticated, but this is also not visible in the image!
-
-        portals = ObjectObservation.create(
-            x=clip_xy(jnp.where(portal_active, portals_array[:, 0] + portals_array[:, 2] / 2, -1.0)),
-            y=clip_xy_y(jnp.where(portal_active, portals_array[:, 1] + portals_array[:, 3] / 2, -1.0)),
-            width=clip_wh_x(portals_array[:, 2]),
-            height=clip_wh_y(portals_array[:, 3]),
-            active=portal_active.astype(jnp.int8),
-            orientation=jnp.zeros((portals_array.shape[0],), dtype=jnp.float32),
+        portal_pad = jnp.where(is_in_room, ROOM_PORTAL_PADDING, 0.0)
+        portal_to = portals_array[:, 4].astype(jnp.int32)
+        portal_locked = (portal_to > 0) & ~state.chests_active[jnp.clip(portal_to - 1, 0, state.chests_active.shape[0] - 1)]
+        portals = box(
+            (portals_array[:, 0] + portal_pad).astype(jnp.int32),
+            (portals_array[:, 1] + portal_pad).astype(jnp.int32),
+            (portals_array[:, 2] - 2 * portal_pad).astype(jnp.int32),
+            (portals_array[:, 3] - 2 * portal_pad).astype(jnp.int32),
+            (portals_array[:, 2] > 0) & ~portal_locked,
         )
 
-        # Chests
-        chest_global_idx = world_idx * 5 + level_idx
-        chest_pos = self.consts.CHEST_POSITIONS[chest_global_idx]
-        room_idx = level_idx - 1
-        chest_active = (level_idx > 0) & state.chests_active[room_idx] & (state.collected_chest_in_current_visit != room_idx)
+        room_idx = jnp.maximum(level_idx - 1, 0)
+        chest_xy = (self.consts.CHEST_POSITIONS[global_level] - r.chest_offsets).astype(jnp.int32)
+        chest_wh = chest_size[world_idx, room_idx]
+        chest_active = is_in_room & state.chests_active[room_idx] & (state.collected_chest_in_current_visit != room_idx)
+        chest = box(chest_xy[0], chest_xy[1], chest_wh[0], chest_wh[1], chest_active)
 
-        chest = ObjectObservation.create(
-            x=clip_xy(jnp.where(chest_active, chest_pos[0], -1.0)),
-            y=clip_xy_y(jnp.where(chest_active, chest_pos[1], -1.0)),
-            width=clip_wh_x(jnp.array(self.consts.CHEST_WIDTH, dtype=jnp.float32)),
-            height=clip_wh_y(jnp.array(self.consts.CHEST_HEIGHT, dtype=jnp.float32)),
-            active=chest_active.astype(jnp.int8),
-            orientation=jnp.array(0.0, dtype=jnp.float32),
-        )
-
-        # Lasers
         is_laser_level = (level_idx == 1) & (state.world_level == 1)
         x_span_start, x_span_end, y_span_start, y_span_end = self.consts.LASER_ROOM_SPAN
-        room_w = x_span_end - x_span_start
-        room_h = y_span_end - y_span_start
-        thickness = self.consts.LASER_THICKNESS
-
-        # Four lasers: 2 vertical, 2 horizontal
-        lasers_x = jnp.array([
-            state.lasers.positions[0],
-            state.lasers.positions[1],
-            x_span_start + room_w / 2,
-            x_span_start + room_w / 2
-        ])
-        lasers_y = jnp.array([
-            y_span_start + room_h / 2,
-            y_span_start + room_h / 2,
-            state.lasers.positions[2],
-            state.lasers.positions[3]
-        ])
-        lasers_w = jnp.array([thickness, thickness, room_w, room_w])
-        lasers_h = jnp.array([room_h, room_h, thickness, thickness])
-
-        lasers = ObjectObservation.create(
-            x=clip_xy(jnp.where(is_laser_level, lasers_x, -1.0)),
-            y=clip_xy_y(jnp.where(is_laser_level, lasers_y, -1.0)),
-            width=clip_wh_x(lasers_w),
-            height=clip_wh_y(lasers_h),
-            active=jnp.where(is_laser_level, jnp.ones(4, dtype=jnp.int8), jnp.zeros(4, dtype=jnp.int8)),
-            orientation=jnp.zeros((4,), dtype=jnp.float32),
+        room_w = (x_span_end - x_span_start).astype(jnp.int32)
+        room_h = (y_span_end - y_span_start).astype(jnp.int32)
+        thickness = self.consts.LASER_THICKNESS.astype(jnp.int32)
+        laser_edge = (state.lasers.positions - self.consts.LASER_THICKNESS / 2).astype(jnp.int32)
+        span_x = x_span_start.astype(jnp.int32)
+        span_y = y_span_start.astype(jnp.int32)
+        lasers = box(
+            jnp.stack([laser_edge[0], laser_edge[1], span_x, span_x]),
+            jnp.stack([span_y, span_y, laser_edge[2], laser_edge[3]]),
+            jnp.stack([thickness, thickness, room_w, room_w]),
+            jnp.stack([room_h, room_h, thickness, thickness]),
+            is_laser_level,
         )
 
-        # Chaser
-        chaser = ObjectObservation.create(
-            x=clip_xy(jnp.where(state.chaser.active, state.chaser.x, -1.0)),
-            y=clip_xy_y(jnp.where(state.chaser.active, state.chaser.y, -1.0)),
-            width=clip_wh_x(jnp.array(self.consts.CHASER_RENDER_WIDTH, dtype=jnp.float32)),
-            height=clip_wh_y(jnp.array(self.consts.CHASER_RENDER_HEIGHT, dtype=jnp.float32)),
-            active=state.chaser.active.astype(jnp.int8),
-            orientation=jnp.array(0.0, dtype=jnp.float32),
+        chaser_xy = (jnp.array([state.chaser.x, state.chaser.y]) - r.chaser_offsets).astype(jnp.int32)
+        chaser = box(chaser_xy[0], chaser_xy[1], chaser_size[0], chaser_size[1], state.chaser.active)
+
+        projectile = box(
+            (state.projectile.x - self.consts.PROJECTILE_RADIUS).astype(jnp.int32),
+            (state.projectile.y - self.consts.PROJECTILE_RADIUS).astype(jnp.int32),
+            projectile_size,
+            projectile_size,
+            state.projectile.active,
         )
-        obs = VentureObservation(
+
+        return VentureObservation(
             player=player,
             monsters=monsters,
             portals=portals,
             chest=chest,
             lasers=lasers,
-            chaser=chaser
+            chaser=chaser,
+            projectile=projectile,
         )
-        return obs
 
     def _get_reward(self, previous_state: GameState, state: GameState) -> Array | ndarray[Any, dtype[Any]]:
         """
@@ -1719,6 +1706,7 @@ class JaxVenture(JaxEnvironment[GameState, VentureObservation, VentureInfo, Vent
             "chest": single_obj,
             "lasers": spaces.get_object_space(n=4, screen_size=screen_size, xy_low=-1.0),
             "chaser": single_obj,
+            "projectile": single_obj,
         })
 
     def image_space(self) -> spaces.Box:
