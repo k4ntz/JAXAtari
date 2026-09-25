@@ -175,13 +175,12 @@ class JaxFlagCapture(JaxEnvironment[FlagCaptureState, FlagCaptureObservation, Fl
         Returns:
             FlagCaptureObservation: The observation of the game state.
         """
-        # Calculate pixel coordinates from grid coordinates
         px = self.consts.FIELD_PADDING_LEFT + (state.player_x * self.consts.FIELD_WIDTH) + (state.player_x * self.consts.FIELD_GAP_X)
         py = self.consts.FIELD_PADDING_TOP + (state.player_y * self.consts.FIELD_HEIGHT) + (state.player_y * self.consts.FIELD_GAP_Y)
 
         player = ObjectObservation.create(
-            x=jnp.clip(px.astype(jnp.int32), 0, self.consts.WIDTH),
-            y=jnp.clip(py.astype(jnp.int32), 0, self.consts.HEIGHT),
+            x=px.astype(jnp.int32),
+            y=py.astype(jnp.int32),
             width=jnp.array(self.consts.FIELD_WIDTH, dtype=jnp.int32),
             height=jnp.array(self.consts.FIELD_HEIGHT, dtype=jnp.int32),
             orientation=jnp.array(0.0, dtype=jnp.float32),
