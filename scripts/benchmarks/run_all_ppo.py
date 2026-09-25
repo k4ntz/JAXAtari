@@ -6,20 +6,20 @@ from concurrent.futures import ThreadPoolExecutor
 
 # You can modify this list to include the exact environments you want to run.
 ATARI_15_ENVS = [
-    # "bankheist",
-    # "beamrider", # still missing pixel runs
-    # "enduro", 
-    # "freeway", "frostbite", 
-    # "kangaroo",
-    # "montezumarevenge",
-    # "phoenix", "pong", "qbert",
-    # "seaquest", "skiing",
-    # "tennis",
-    # "venture",
-    # "timepilot", "asteroids", "breakout", 
-    # "gravitar",
-    # "mspacman",
-    # "pong"
+     "bankheist",
+     "beamrider", # still missing pixel runs
+     "enduro", 
+     "freeway", "frostbite", 
+     "kangaroo",
+     "montezumarevenge",
+     "phoenix", "pong", "qbert",
+     "seaquest", "skiing",
+     "tennis",
+     "venture",
+     "timepilot", "asteroids", "breakout", 
+     "gravitar",
+     "mspacman",
+     "pong"
 ]
 
 ALL_ATARI_ENVS = [
@@ -82,8 +82,8 @@ ALL_ATARI_ENVS = [
 ]
 
 # Run on all or on subset?
-# ATARI_ENVS = ATARI_15_ENVS 
-ATARI_ENVS = ALL_ATARI_ENVS
+ATARI_ENVS = ATARI_15_ENVS 
+#ATARI_ENVS = ALL_ATARI_ENVS
 
 # Setting to control how often to rerun an exp (with different seeds)
 START_SEED = 3
@@ -92,8 +92,8 @@ N_SEEDS = 2
 WORKERS_PER_GPU = 1
 
 CONFIGS = [
-    "ppo_jaxatari_pixel_large",
-    "ppo_jaxatari_object_large",
+    "ppo_jaxatari_pixel",
+    "ppo_jaxatari_object",
 ]
 
 # game_specific_configs = {

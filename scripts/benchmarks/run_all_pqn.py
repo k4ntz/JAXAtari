@@ -5,7 +5,7 @@ import subprocess
 from concurrent.futures import ThreadPoolExecutor
 
 # You can modify this list to include the exact environments you want to run.
-ATARI_ENVS = [
+ATARI_15_ENVS = [
     "freeway", 
     "kangaroo",
     "montezumarevenge",
@@ -21,12 +21,77 @@ ATARI_ENVS = [
     "enduro", 
 ]
 
+ALL_ATARI_ENVS = [
+    "amidar",
+    "airraid",
+    "alien",
+    "asterix",
+    "asteroids",
+    "atlantis",
+    "bankheist",
+    "beamrider",
+    "berzerk",
+    "blackjack",
+    "breakout",
+    "casinoblackjack",
+    "casinofivestudpoker",
+    "casinopokersolitaire",
+    "centipede",
+    "choppercommand",
+    "donkeykong",
+    "enduro",
+    "fishingderby",
+    "flagcapture",
+    "freeway",
+    "frostbite",
+    "galaxian",
+    "gravitar",
+    "hangman",
+    "hauntedhouse",
+    "humancannonball",
+    "kangaroo",
+    "kingkong",
+    "klax",
+    "lasergates",
+    "namethisgame",
+    "phoenix",
+    "pong",
+    "qbert",
+    "riverraid",
+    "seaquest",
+    "sirlancelot",
+    "skiing",
+    "slotmachine",
+    "spaceinvaders",
+    "spacewar",
+    "surround",
+    "tennis",
+    "tetris",
+    "timepilot",
+    "tron",
+    "turmoil",
+    "venture",
+    "videocheckers",
+    "videocube",
+    "videopinball",
+    "wordzapper",
+    "mspacman",
+    "montezumarevenge",
+    "pacman",
+]
+
+ATARI_ENVS = ATARI_15_ENVS 
+# ATARI_ENVS = ALL_ATARI_ENVS 
+
+START_SEED = 4
 # Setting to control how often to rerun an exp (with different seeds)
-N_SEEDS = 5 
+N_SEEDS = 2 
 # Setting to control maximum concurrent processes per GPU
 WORKERS_PER_GPU = 1 # we already run three seeds per GPU/Env
 
 CONFIGS = [
+    # "pqn_jaxatari_pixel_optimal_scaling",
+    # "pqn_jaxatari_object_optimal_scaling",
     "pqn_jaxatari_pixel_repr",
     "pqn_jaxatari_object_repr",
 ]
@@ -85,7 +150,7 @@ def main():
     # Create a thread-safe queue and populate it with environments
     task_queue = queue.Queue()
     for env in ATARI_ENVS:
-        for seed in range(1, N_SEEDS + 1):
+        for seed in range(START_SEED, START_SEED + N_SEEDS):
             for alg_config in CONFIGS:
                 task_queue.put((env, seed, alg_config))
         

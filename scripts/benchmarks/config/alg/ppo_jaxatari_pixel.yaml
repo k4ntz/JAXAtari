@@ -1,4 +1,4 @@
-EXP_NAME: ppo_montezumachange
+EXP_NAME: ppo
 TRACK: True
 CAPTURE_VIDEO: True
 

@@ -191,12 +191,22 @@ def make_train(config):
     if train_mods is not None:
         train_mods_list = train_mods if isinstance(train_mods, list) else [train_mods]
 
-    has_train_mods = train_mods_list is not None
+    eval_mods = config.get("EVAL_MODS", None)
+    eval_mods_list = None
+    if eval_mods is not None:
+        eval_mods_list = eval_mods if isinstance(eval_mods, list) else [eval_mods]
+
+    has_mods = train_mods_list is not None or eval_mods_list is not None
 
     # Training env: base env or env with TRAIN_MODS.
+    print("train mods list:", train_mods_list)
     env = jaxatari.make(config["ENV_NAME"].lower(), mods=train_mods_list)
-    mod_env = env
+    print("eval mods list:", eval_mods_list)
+    mod_env = jaxatari.make(config["ENV_NAME"].lower(), mods=eval_mods_list)
+
     renderer = mod_env.renderer
+
+    # just for evaluation with mods 
 
     env = apply_wrappers(env, config)
     mod_env = apply_wrappers(mod_env, config)
@@ -440,7 +450,7 @@ def make_train(config):
                 )
                 metrics.update({f"test/{k}": v for k, v in test_metrics.items()})
 
-                if has_train_mods:
+                if has_mods:
                     rng, _rng = jax.random.split(rng)
                     mod_metrics = jax.lax.cond(
                         train_state.n_updates
@@ -536,7 +546,7 @@ def make_train(config):
         rng, _rng = jax.random.split(rng)
         test_metrics = get_test_metrics(train_state, False, _rng)
 
-        mod_metrics = get_test_metrics(train_state, True, _rng) if has_train_mods else {}
+        mod_metrics = get_test_metrics(train_state, True, _rng) if has_mods else {}
 
         rng, _rng = jax.random.split(rng)
         # expl_state = vmap_reset(config["NUM_ENVS"])(_rng)
