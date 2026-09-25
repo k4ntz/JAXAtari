@@ -1555,20 +1555,20 @@ class JaxVenture(JaxEnvironment[GameState, VentureObservation, VentureInfo, Vent
         r = self.renderer
 
         player_dot_size = jnp.array([[1, 2], [1, 2]], dtype=jnp.int32)
-        player_detailed_size = jnp.array([6, 6], dtype=jnp.int32)
+        player_detailed_size = jnp.array([8, 12], dtype=jnp.int32)
         monster_size = jnp.array([
-            [[7, 10], [7, 10], [7, 10], [7, 10], [7, 10]],
-            [[7, 10], [7, 10], [7, 10], [7, 10], [7, 10]],
+            [[5, 8], [5, 8], [8, 12], [8, 16], [8, 16]],
+            [[5, 8], [7, 16], [8, 16], [8, 14], [8, 14]],
         ], dtype=jnp.int32)
         dead_monster_size = jnp.array([
-            [[7, 10], [7, 10], [7, 10], [7, 10], [7, 10]],
-            [[7, 10], [7, 10], [7, 10], [7, 10], [7, 10]],
+            [[8, 16], [8, 16], [8, 16], [8, 16], [8, 16]],
+            [[8, 16], [8, 16], [8, 16], [8, 16], [8, 16]],
         ], dtype=jnp.int32)
         chest_size = jnp.array([
-            [[7, 11], [7, 11], [7, 11], [7, 11]],
-            [[7, 11], [7, 11], [7, 11], [7, 11]],
+            [[7, 12], [7, 14], [8, 12], [8, 16]],
+            [[8, 16], [8, 14], [8, 10], [8, 6]],
         ], dtype=jnp.int32)
-        chaser_size = jnp.array([5, 15], dtype=jnp.int32)
+        chaser_size = jnp.array([6, 16], dtype=jnp.int32)
         projectile_size = int(self.consts.PROJECTILE_RADIUS * 2)
 
         def box(x, y, bw, bh, on, **kwargs):
