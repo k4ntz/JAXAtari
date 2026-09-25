@@ -195,8 +195,7 @@ class SpaceInvadersObservation:
     enemy_bullets: ObjectObservation  # n=3
     ufo: ObjectObservation
     
-    # Dense features
-    barricade_health: chex.Array  # (3, 6, 8) grid of healths
+    barricades: ObjectObservation
     
     score_player: jnp.ndarray
     lives: jnp.ndarray
@@ -218,7 +217,6 @@ class JaxSpaceInvaders(JaxEnvironment[SpaceInvadersState, SpaceInvadersObservati
         consts = consts or SpaceInvadersConstants()
         super().__init__(consts)
         self.renderer = SpaceInvadersRenderer(self.consts)
-        self.obs_size = 3 * 4 + 1 + 1
         self.renderer = SpaceInvadersRenderer(consts)
 
     def render(self, state):
@@ -888,13 +886,9 @@ class JaxSpaceInvaders(JaxEnvironment[SpaceInvadersState, SpaceInvadersObservati
             "enemy_bullets": spaces.get_object_space(n=self.consts.MAX_ENEMY_BULLETS, screen_size=screen_size),
             "ufo": single_obj,
             
-            # Barricades are dense grids (health 0-6)
-            "barricade_health": spaces.Box(
-                low=0, 
-                high=self.consts.BARRICADE_HEALTH_INITIAL, 
-                shape=(3, self.consts.BARRICADE_GRID_SHAPE[0], self.consts.BARRICADE_GRID_SHAPE[1]), 
-                dtype=jnp.int32
-            ),
+            "barricades": spaces.get_object_space(
+                n=int(self.consts.BARRICADE_POS[0].shape[0] * self.consts.BARRICADE_GRID_SHAPE[0] * self.consts.BARRICADE_GRID_SHAPE[1]), 
+                screen_size=screen_size),
             
             "score_player": spaces.Box(low=0, high=999999, shape=(), dtype=jnp.int32),
             "lives": spaces.Box(low=0, high=99, shape=(), dtype=jnp.int32),
@@ -910,11 +904,11 @@ class JaxSpaceInvaders(JaxEnvironment[SpaceInvadersState, SpaceInvadersObservati
 
         # --- Player ---
         player = ObjectObservation.create(
-            x=jnp.clip(jnp.array(state.player_x, dtype=jnp.int32), 0, w),
-            y=jnp.clip(jnp.array(c.PLAYER_Y, dtype=jnp.int32), 0, h),
+            x=jnp.array(state.player_x - c.PLAYER_SIZE[0], dtype=jnp.int32),
+            y=jnp.array(c.PLAYER_Y, dtype=jnp.int32),
             width=jnp.array(c.PLAYER_SIZE[0], dtype=jnp.int32),
             height=jnp.array(c.PLAYER_SIZE[1], dtype=jnp.int32),
-            active=jnp.array(1, dtype=jnp.int32)
+            active=((jnp.asarray(state.player_dead) == 0) | (jnp.asarray(state.player_dead) > c.PLAYER_EXPLOSION_DURATION)).astype(jnp.int32)
         )
 
         # --- Enemies ---
@@ -934,44 +928,88 @@ class JaxSpaceInvaders(JaxEnvironment[SpaceInvadersState, SpaceInvadersObservati
         # Top 2 rows = 2, Middle 2 = 1, Bottom 2 = 0
         e_vid = jnp.where(rows < 2, 2, jnp.where(rows < 4, 1, 0)).astype(jnp.int32)
 
+        e_flip = (jnp.asarray(state.player_dead) == 0) & (state.enemy_flip == 1)
+        e_h_full = jnp.where(e_flip & ((rows == 2) | (rows == 3)), c.OPPONENT_SIZE[1] - 1, c.OPPONENT_SIZE[1])
+        e_h = jnp.clip(h - ey.astype(jnp.int32), 0, e_h_full)
+        e_on = (e_active == 1) & (e_h > 0)
         enemies = ObjectObservation.create(
-            x=jnp.clip(ex.astype(jnp.int32), 0, w),
-            y=jnp.clip(ey.astype(jnp.int32), 0, h),
-            width=jnp.full((total_enemies,), c.OPPONENT_SIZE[0], dtype=jnp.int32),
-            height=jnp.full((total_enemies,), c.OPPONENT_SIZE[1], dtype=jnp.int32),
-            active=e_active,
+            x=jnp.where(e_on, ex, 0).astype(jnp.int32),
+            y=jnp.where(e_on, ey, 0).astype(jnp.int32),
+            width=jnp.where(e_on, c.OPPONENT_SIZE[0], 0).astype(jnp.int32),
+            height=jnp.where(e_on, e_h, 0).astype(jnp.int32),
+            active=e_on.astype(jnp.int32),
             visual_id=e_vid
         )
 
         # --- Player Bullet ---
-        pb_active = state.bullet_active.astype(jnp.int32)
+        pb_on = jnp.asarray(state.bullet_active) != 0
         player_bullet = ObjectObservation.create(
-            x=jnp.clip(jnp.array(state.bullet_x, dtype=jnp.int32), 0, w),
-            y=jnp.clip(jnp.array(state.bullet_y, dtype=jnp.int32), 0, h),
-            width=jnp.array(c.BULLET_SIZE[0], dtype=jnp.int32),
-            height=jnp.array(c.BULLET_SIZE[1], dtype=jnp.int32),
-            active=pb_active
+            x=jnp.where(pb_on, state.bullet_x, 0).astype(jnp.int32),
+            y=jnp.where(pb_on, state.bullet_y, 0).astype(jnp.int32),
+            width=jnp.where(pb_on, c.BULLET_SIZE[0], 0).astype(jnp.int32),
+            height=jnp.where(pb_on, c.BULLET_SIZE[1], 0).astype(jnp.int32),
+            active=pb_on.astype(jnp.int32)
         )
 
         # --- Enemy Bullets ---
-        eb_active = state.enemy_bullets_active.astype(jnp.int32)
+        eb_h = jnp.clip(h - state.enemy_bullets_y, 0, c.BULLET_SIZE[1])
+        eb_on = state.enemy_bullets_active & (eb_h > 0)
         enemy_bullets = ObjectObservation.create(
-            x=jnp.clip(state.enemy_bullets_x, 0, w),
-            y=jnp.clip(state.enemy_bullets_y, 0, h),
-            width=jnp.full((c.MAX_ENEMY_BULLETS,), c.BULLET_SIZE[0], dtype=jnp.int32),
-            height=jnp.full((c.MAX_ENEMY_BULLETS,), c.BULLET_SIZE[1], dtype=jnp.int32),
-            active=eb_active
+            x=jnp.where(eb_on, state.enemy_bullets_x, 0).astype(jnp.int32),
+            y=jnp.where(eb_on, state.enemy_bullets_y, 0).astype(jnp.int32),
+            width=jnp.where(eb_on, c.BULLET_SIZE[0], 0).astype(jnp.int32),
+            height=jnp.where(eb_on, eb_h, 0).astype(jnp.int32),
+            active=eb_on.astype(jnp.int32)
         )
 
         # --- UFO ---
         # ufo_state: 1=alive
-        ufo_active = (state.ufo_state == 1).astype(jnp.int32)
+        ufo_x = jnp.asarray(state.ufo_x, dtype=jnp.int32)
+        ufo_x0 = jnp.maximum(ufo_x, 0)
+        ufo_w = jnp.minimum(ufo_x + c.UFO_SIZE[0], w) - ufo_x0
+        ufo_on = (state.ufo_state == 1) & (ufo_w > 0)
         ufo = ObjectObservation.create(
-            x=jnp.clip(jnp.array(state.ufo_x, dtype=jnp.int32), 0, w),
-            y=jnp.clip(jnp.array(c.UFO_Y, dtype=jnp.int32), 0, h),
-            width=jnp.array(c.UFO_SIZE[0], dtype=jnp.int32),
-            height=jnp.array(c.UFO_SIZE[1], dtype=jnp.int32),
-            active=ufo_active
+            x=jnp.where(ufo_on, ufo_x0, 0).astype(jnp.int32),
+            y=jnp.where(ufo_on, c.UFO_Y, 0).astype(jnp.int32),
+            width=jnp.where(ufo_on, ufo_w, 0).astype(jnp.int32),
+            height=jnp.where(ufo_on, c.UFO_SIZE[1], 0).astype(jnp.int32),
+            active=ufo_on.astype(jnp.int32)
+        )
+
+        cell_dy = jnp.array([
+            [0, 2, 0, 0, 0, 0, 2, 0],
+            [0, 0, 0, 0, 0, 0, 0, 0],
+            [0, 0, 0, 0, 0, 0, 0, 0],
+            [1, 0, 0, 0, 0, 0, 0, 1],
+            [0, 0, 0, 0, 0, 0, 0, 0],
+            [0, 0, 0, 0, 0, 0, 0, 0],
+        ], dtype=jnp.int32)
+        cell_dh = jnp.array([
+            [0, 1, 3, 3, 3, 3, 1, 0],
+            [0, 3, 3, 3, 3, 3, 3, 0],
+            [0, 3, 3, 3, 3, 3, 3, 0],
+            [2, 3, 3, 3, 3, 3, 3, 2],
+            [3, 3, 3, 3, 3, 3, 3, 3],
+            [3, 3, 1, 1, 1, 1, 3, 3],
+        ], dtype=jnp.int32)
+        grid_h, grid_w = c.BARRICADE_GRID_SHAPE
+        cell_h = c.BARRICADE_SPRITE_SIZE[0] // grid_h
+        cell_w = c.BARRICADE_SPRITE_SIZE[1] // grid_w
+        n_bar = c.BARRICADE_POS[0].shape[0]
+        bar_x = c.BARRICADE_POS[0][:, None, None] + jnp.arange(grid_w)[None, None, :] * cell_w
+        bar_y = c.BARRICADE_POS[1] + jnp.arange(grid_h)[None, :, None] * cell_h + cell_dy[None]
+        bar_h = cell_dh[None]
+        bar_on = (state.barricade_health > 0) & (bar_h > 0) & (state.active_barricade == 1)
+
+        def cells(a):
+            return jnp.broadcast_to(a, (n_bar, grid_h, grid_w)).transpose(0, 2, 1).reshape(-1).astype(jnp.int32)
+
+        barricades = ObjectObservation.create(
+            x=cells(jnp.where(bar_on, bar_x, 0)),
+            y=cells(jnp.where(bar_on, bar_y, 0)),
+            width=cells(jnp.where(bar_on, cell_w, 0)),
+            height=cells(jnp.where(bar_on, bar_h, 0)),
+            active=cells(bar_on)
         )
 
         return SpaceInvadersObservation(
@@ -980,7 +1018,7 @@ class JaxSpaceInvaders(JaxEnvironment[SpaceInvadersState, SpaceInvadersObservati
             player_bullet=player_bullet,
             enemy_bullets=enemy_bullets,
             ufo=ufo,
-            barricade_health=state.barricade_health,
+            barricades=barricades,
             score_player=state.player_score,
             lives=state.player_lives
         )
