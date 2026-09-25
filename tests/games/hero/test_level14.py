@@ -317,15 +317,17 @@ def test_no_magma_is_carried_as_a_creature():
 # --- room 5's magma mouth ---------------------------------------------------
 def test_room_5s_gap_is_the_levels_one_mouth():
     """The eight air cells 14-21 between room 5's two magma walls are the
-    mouth; no other room of any measured level has one (level 18 is a
-    placeholder copy of this level and carries it with the rest)."""
+    mouth; no other room of this level has one (level 18 is a placeholder
+    copy of this level and carries it with the rest). The other measured
+    mouths are level 15 room 9's and level 16 rooms 7 and 9 (2026-09-25),
+    which levels 19 and 20 copy."""
     assert HL.MAGMA_MOUTHS[L - 1] == [(5, 64, 32, 8, 16)]
     band = BANDS[5]["B"]
     assert runs_of(band, ".") == [(14, 21)]
     assert band[13] == band[22] == "%"
     assert cells(14, 21) == (64, 32)
     for lv, mouths in enumerate(HL.MAGMA_MOUTHS):
-        if lv + 1 not in (L, 18):
+        if lv + 1 not in (L, 15, 16, 18, 19, 20):
             assert mouths == [], f"level {lv + 1}"
     assert HL.MAGMA_MOUTHS[17] == HL.MAGMA_MOUTHS[L - 1]
 

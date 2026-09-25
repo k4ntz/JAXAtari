@@ -180,7 +180,8 @@ def test_laser_bolt_flies_and_relaunches():
 
 
 def test_spider_touch_kills_and_respawns_in_room():
-    """Death respawns at the top of the CURRENT room (measured)."""
+    """Death respawns in the CURRENT room, in the column he died in, at
+    corridor height (measured on the ROM 2026-09-25)."""
     env = _env()
     c = env.consts
     _, state = env.reset()
@@ -191,7 +192,7 @@ def test_spider_touch_kills_and_respawns_in_room():
     _, s, _, _, _ = env.step(state, NOOP)
     assert int(s.lives) == c.starting_lives - 1
     assert int(s.room) == 1                    # same room, not the level top
-    assert int(s.player_x) == c.respawn_x
+    assert int(s.player_x) == sx               # the column he died in
     assert int(s.player_y) == c.respawn_y
     assert int(s.power) == c.max_power         # gauge refills
 
@@ -539,13 +540,10 @@ def test_levels_4_to_16_data_present():
         for b in blobs:
             assert HL.decode_bg(b, pal).shape == (142, 160, 3)
     # Every level's way down starts with the room-0 central pillar. Levels
-    # 1-14 have been rebuilt from the ROM and state it on the band grid (rows
-    # 16-98, the ceiling and middle cells a stick takes together); levels
-    # 15-16 still carry the older y=19 authoring until their turn comes.
-    for lv in range(14):
+    # 1-16 have been rebuilt from the ROM and state it on the band grid (rows
+    # 16-98, the ceiling and middle cells a stick takes together).
+    for lv in range(16):
         assert (0, 60, 16, 8, 83, 1) in HL.DESTRUCTIBLE[lv], f"level {lv + 1}"
-    for lv in range(14, 16):
-        assert (0, 60, 19, 8, 80, 1) in HL.DESTRUCTIBLE[lv]
     for lv in range(16):
         assert HL.MINER_POS[lv][0] < HL.ROOMS_PER_LEVEL[lv]
 

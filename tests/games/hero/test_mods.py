@@ -126,7 +126,9 @@ def test_unlimited_lives_death_costs_nothing_but_still_respawns():
     _, s, _, done, _ = env.step(state, RIGHT)
     assert int(s.lives) == c.starting_lives          # no life lost
     assert int(s.power) == c.max_power               # ...but the respawn happened
-    assert int(s.player_x) in (c.respawn_x, c.spawn_x, 76)
+    # back in the column he died in, at corridor height (measured)
+    assert abs(int(s.player_x) - int(state.player_x)) <= 4
+    assert int(s.player_y) == c.respawn_y
     assert not bool(s.game_over)
     assert not bool(done)
 

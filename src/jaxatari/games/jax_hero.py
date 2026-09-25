@@ -355,15 +355,19 @@ def _build_level_arrays():
     side_r = np.zeros((nL, _MAX_ROOMS), bool)
     side_l_d = np.zeros((nL, _MAX_ROOMS), np.int32)
     side_r_d = np.zeros((nL, _MAX_ROOMS), np.int32)
-    # Rafts: one per level at most (HL.RAFTS). raft_room -1 = no raft.
-    raft_room = np.full((nL,), -1, np.int32)
+    # Rafts (HL.RAFTS): which rooms of a level float one. Level 16 has two
+    # (rooms 11 and 13); the ROM keeps ONE raft x for them (RAM 40, 147 in
+    # every other room) and puts it back at the entry-side end whenever a
+    # raft room is entered (measured 2026-09-25), so the engine does too.
+    raft_in = np.zeros((nL, _MAX_ROOMS), bool)
     raft_start = np.full((nL,), HL.RAFT_ENDS[1], np.int32)
     for li in range(nL):
         rooms_n[li] = _ROOMS[li]
-        assert len(HL.RAFTS[li]) <= 1, "the engine carries one raft per level"
+        assert len({x for _rm, x in HL.RAFTS[li]}) <= 1, \
+            "a level's rafts wait at the same end"
         for (rm, x) in HL.RAFTS[li]:
             assert x in HL.RAFT_ENDS, "a raft waits at one of its two ends"
-            raft_room[li], raft_start[li] = rm, x
+            raft_in[li, rm], raft_start[li] = True, x
         for (rm, side, delta) in HL.SIDE_EXITS[li]:
             if side < 0:
                 side_l[li, rm], side_l_d[li, rm] = True, delta
@@ -520,7 +524,7 @@ def _build_level_arrays():
                 mo=mo, mo_valid=mo_valid,
                 side_l=side_l, side_r=side_r,
                 side_l_d=side_l_d, side_r_d=side_r_d,
-                raft_room=raft_room, raft_start=raft_start)
+                raft_in=raft_in, raft_start=raft_start)
 
 
 _LV = _build_level_arrays()
@@ -741,12 +745,12 @@ class HeroConstants(AutoDerivedConstants):
         default_factory=lambda: jnp.array(_LV["side_l_d"], dtype=jnp.int32))
     SIDE_EXIT_RIGHT_DELTA: jnp.ndarray = struct.field(pytree_node=False,
         default_factory=lambda: jnp.array(_LV["side_r_d"], dtype=jnp.int32))
-    # The raft (HL.RAFTS): the room it floats in (-1 = none) and the end the
-    # level's first entry into that room finds it at. It patrols
+    # The raft (HL.RAFTS): the rooms it floats in, and the end the level's
+    # first entry into one finds it at. It patrols
     # raft_min_x..raft_max_x at raft_speed px/frame while the hero rides it,
     # turning round with a one-frame hold (so each end is drawn 2 frames).
-    RAFT_ROOM: jnp.ndarray = struct.field(pytree_node=False,
-        default_factory=lambda: jnp.array(_LV["raft_room"], dtype=jnp.int32))
+    RAFT_IN: jnp.ndarray = struct.field(pytree_node=False,
+        default_factory=lambda: jnp.array(_LV["raft_in"], dtype=jnp.bool_))
     RAFT_START: jnp.ndarray = struct.field(pytree_node=False,
         default_factory=lambda: jnp.array(_LV["raft_start"], dtype=jnp.int32))
     raft_min_x: int = struct.field(pytree_node=False, default=HL.RAFT_ENDS[0])
@@ -1065,6 +1069,12 @@ class JaxHero(JaxEnvironment[HeroState, HeroObservation, HeroInfo, HeroConstants
         return ((ax < bx + bw) & (ax + aw > bx) &
                 (ay < by + bh) & (ay + ah > by))
 
+    def _raft_in(self, lvl, room):
+        """Does this room of the level float a raft (False off the table)."""
+        r = self.consts.RAFT_IN
+        inside = (room >= 0) & (room < r.shape[1])
+        return inside & r[lvl, jnp.clip(room, 0, r.shape[1] - 1)]
+
     def _spider_pos(self, state):
         """Current (x, y) of every creature slot of the level.
 
@@ -1186,7 +1196,7 @@ class JaxHero(JaxEnvironment[HeroState, HeroObservation, HeroInfo, HeroConstants
         # lifts off. Standing on it is standing on the liquid's surface row,
         # within raft_catch px of the riding spot.
         ride_y = c.raft_y - c.player_height
-        raft_here = c.RAFT_ROOM[lvl] == state.room
+        raft_here = c.RAFT_IN[lvl, state.room]
         ride_spot = state.raft_x + c.raft_ride_dx
         riding = (raft_here & (state.player_y == ride_y) & (new_y >= ride_y) &
                   (jnp.abs(state.player_x - ride_spot) <= c.raft_catch))
@@ -1242,7 +1252,7 @@ class JaxHero(JaxEnvironment[HeroState, HeroObservation, HeroInfo, HeroConstants
         # Entering the raft's room puts the raft at the end he comes in from
         # (measured: in by the right edge it waits at x 124, in by the left
         # at x 28), heading for the other one.
-        into_raft = took_side & (new_room == c.RAFT_ROOM[lvl])
+        into_raft = took_side & self._raft_in(lvl, new_room)
         raft_x = jnp.where(into_raft & side_l, c.raft_max_x,
                            jnp.where(into_raft & side_r, c.raft_min_x,
                                      raft_x)).astype(jnp.int32)
@@ -1459,7 +1469,7 @@ class JaxHero(JaxEnvironment[HeroState, HeroObservation, HeroInfo, HeroConstants
         # row above its top, which does not overlap the rect itself.
         de = c.DEADLY_R[lvl]
         # ... except where the raft is under him.
-        on_raft = ((c.RAFT_ROOM[lvl] == new_room) & (new_y == ride_y) &
+        on_raft = (self._raft_in(lvl, new_room) & (new_y == ride_y) &
                    (jnp.abs(new_x - (raft_x + c.raft_ride_dx)) <= c.raft_catch))
         died_deadly = ((state.invuln_timer <= 0) & (~on_raft) &
                        jnp.any(c.DEADLY_VALID[lvl] & (de[:, 0] == new_room) &
@@ -1561,14 +1571,33 @@ class JaxHero(JaxEnvironment[HeroState, HeroObservation, HeroInfo, HeroConstants
         respawned = died & (new_lives > 0)
 
         next_lvl = jnp.clip(lvl + advance.astype(jnp.int32), 0, c.num_levels - 1)
-        # The measured respawn spot can sit inside a wall in some rooms (e.g.
-        # level 2 room 1's pillar): fall back to the spawn column, then to
-        # the descent-shaft column, whichever is free in this room.
+        # The ROM brings the hero back in the COLUMN HE DIED IN: he drops in
+        # from the top of the screen at the x of death and stops at corridor
+        # height, respawn_y (measured 2026-09-25 on levels 14 and 15: deaths
+        # at x 30, 40, 72, 77, 101 and 120, at every height, all came back at
+        # their own x on PY 73 = y 62). A fixed spot put a hero who died on
+        # the right of a wall back on its left. Where that column is solid at
+        # corridor height the ROM puts him in the rock anyway (in magma he
+        # dies again); here he takes the nearest free column on that row,
+        # searching out 4 px at a time, and the old fixed spots are the last
+        # resort.
         rs_state = state.replace(room=new_room)
+        dead_x = jnp.clip(new_x, 8, 160 - c.player_width).astype(jnp.int32)
+        steps = jnp.arange(1, 38, dtype=jnp.int32)
+        offs = jnp.concatenate([jnp.zeros((1,), jnp.int32),
+                                jnp.stack([-4 * steps, 4 * steps], axis=1).reshape(-1)])
+        cand = dead_x + offs
+        cand_ok = ((cand >= 8) & (cand <= 160 - c.player_width) &
+                   ~jax.vmap(lambda x: self._hits_wall(
+                       rs_state, x, jnp.int32(c.respawn_y)))(cand))
+        any_ok = jnp.any(cand_ok)
+        near_x = cand[jnp.argmax(cand_ok)]
         rs_bad_1 = self._hits_wall(rs_state, jnp.int32(c.respawn_x), jnp.int32(c.respawn_y))
         rs_bad_2 = self._hits_wall(rs_state, jnp.int32(c.spawn_x), jnp.int32(c.spawn_y))
-        rs_x = jnp.where(rs_bad_1, jnp.where(rs_bad_2, 76, c.spawn_x), c.respawn_x)
-        rs_y = jnp.where(rs_bad_1, jnp.where(rs_bad_2, 8, c.spawn_y), c.respawn_y)
+        old_x = jnp.where(rs_bad_1, jnp.where(rs_bad_2, 76, c.spawn_x), c.respawn_x)
+        old_y = jnp.where(rs_bad_1, jnp.where(rs_bad_2, 8, c.spawn_y), c.respawn_y)
+        rs_x = jnp.where(any_ok, near_x, old_x)
+        rs_y = jnp.where(any_ok, c.respawn_y, old_y)
         final_x = jnp.where(advance, c.spawn_x,
                             jnp.where(respawned, rs_x, new_x)).astype(jnp.int32)
         final_y = jnp.where(advance, c.spawn_y,
@@ -2754,7 +2783,7 @@ class HeroRenderer(JAXGameRenderer):
 
         # the raft, where it is now (the capture's copy is taken out of the
         # background by the generator, HL.RAFTS)
-        raster = maybe(c.RAFT_ROOM[lvl] == room, state.raft_x, c.raft_y,
+        raster = maybe(c.RAFT_IN[lvl, room], state.raft_x, c.raft_y,
                        self.SHAPE_MASKS["raft"], raster)
 
         # dynamite + explosion flash

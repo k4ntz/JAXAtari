@@ -435,38 +435,43 @@ def test_every_level_has_meltable_walls_and_keeps_its_edges(env):
 # Measured on the ROM 2026-09-24 (level_images CHARACTERS.md, "Raft"): a
 # yellow 8x2 platform on the liquid of level 10 room 13, level 11 room 12 and
 # level 12 room 14, which the recorded playthroughs ride under each room's
-# magma wall.
-RAFT_ROOMS = {10: (13, 124), 11: (12, 28), 12: (14, 124), 13: (12, 124),
-              14: (12, 28)}
+# magma wall. Keyed (level, room): level 16 has two, in rooms 11 and 13.
+RAFT_ROOMS = {(10, 13): 124, (11, 12): 28, (12, 14): 124, (13, 12): 124,
+              (14, 12): 28, (15, 13): 124, (16, 11): 28, (16, 13): 28}
 
 
-def test_the_rafts_are_the_five_measured_ones():
+def test_the_rafts_are_the_eight_measured_ones():
     """Level 13 room 12's raft was found by its ROM capture on 2026-09-24,
     under a six-cell magma wall; the playthrough rides it (frames 198-208).
     Level 14 room 12's, under the same wall, waits at the LEFT end: the level
-    descends right, so the hero comes in from the left."""
+    descends right, so the hero comes in from the left. Level 15 room 13's
+    (2026-09-25), under a sixteen-cell wall, waits at the RIGHT end: that
+    level descends left. Level 16 floats one in room 11 AND room 13, both at
+    the LEFT end (it descends right); the ROM keeps one raft x for the two
+    and puts it back at the entry end on entering either (2026-09-25)."""
     assert HL.RAFT_ENDS == (28, 124)
     assert (HL.RAFT_Y, HL.RAFT_W, HL.RAFT_H) == (136, 8, 2)
-    got = {lv + 1: tuple(r[0]) for lv, r in enumerate(HL.RAFTS[:16]) if r}
+    got = {(lv + 1, rm): x for lv, r in enumerate(HL.RAFTS[:16]) for rm, x in r}
     assert got == RAFT_ROOMS
     # levels 17-20 are placeholders aliasing 13-16, so 17 carries 13's raft
     assert HL.RAFTS[16:] == HL.RAFTS[12:16]
 
 
-@pytest.mark.parametrize("level", sorted(RAFT_ROOMS))
-def test_the_raft_is_not_painted_into_the_background(level):
-    room, _x = RAFT_ROOMS[level]
+@pytest.mark.parametrize("level, room", sorted(RAFT_ROOMS))
+def test_the_raft_is_not_painted_into_the_background(level, room):
     img = np.asarray(HL.decode_bg(getattr(HL, f"BG_RLE_L{level}")[room],
                                   getattr(HL, f"PALETTE_L{level}")))
     yellow = (img[136:142] == np.array(HL.RAFT_COLOUR)).all(axis=-1)
     assert not yellow.any(), "the engine draws the raft; the capture's copy must go"
 
 
-def _on_the_raft(env, level, x_off=0):
+def _on_the_raft(env, level, x_off=0, room=None):
     """The hero just above the waiting raft, every creature gone (level 12
     room 14's hanging spider sits in its path and kills him - on the ROM too)."""
     c = env.consts
-    room, start = RAFT_ROOMS[level]
+    if room is None:
+        (room,) = [rm for lv, rm in RAFT_ROOMS if lv == level]
+    start = RAFT_ROOMS[(level, room)]
     _, s = env.reset()
     s = s.replace(level=jnp.int32(level - 1), room=jnp.int32(room),
                   raft_x=jnp.int32(start),
@@ -479,11 +484,11 @@ def _on_the_raft(env, level, x_off=0):
     return s
 
 
-@pytest.mark.parametrize("level", sorted(RAFT_ROOMS))
-def test_standing_on_the_raft_it_carries_him_one_px_a_frame(env, level):
+@pytest.mark.parametrize("level, room", sorted(RAFT_ROOMS))
+def test_standing_on_the_raft_it_carries_him_one_px_a_frame(env, level, room):
     c = env.consts
-    _room, start = RAFT_ROOMS[level]
-    s = _on_the_raft(env, level)
+    start = RAFT_ROOMS[(level, room)]
+    s = _on_the_raft(env, level, room=room)
     assert int(s.player_y) == c.raft_y - c.player_height
     assert int(s.lives) == c.starting_lives, "the raft keeps him off the liquid"
     x0 = int(s.raft_x)
@@ -569,3 +574,49 @@ def test_the_renderer_draws_the_raft_where_it_is(env):
     band = (img[136:138] == np.array(c.raft_color, np.uint8)).all(axis=-1)
     cols = np.nonzero(band.all(axis=0))[0]
     assert cols.min() == x and cols.max() == x + 7
+
+
+# --- the respawn ------------------------------------------------------------
+# Measured on the ROM 2026-09-25: after a death the hero drops in from the top
+# of the screen AT THE X HE DIED AT and stops at corridor height, PY 73 (the
+# engine's respawn_y, 62). Level 14 room 5, pinned deaths at x 30, 40 and 120
+# at three heights; room 1 (bat, x 72) and room 2 (bat, x 101) free deaths.
+def _die_here(env, level, room, x):
+    """Kill the hero at (x, corridor) in this room: the power runs out."""
+    _, s = env.reset(jax.random.PRNGKey(0))
+    s = s.replace(level=jnp.int32(level - 1), room=jnp.int32(room),
+                  player_x=jnp.int32(x), player_y=jnp.int32(62),
+                  player_vy=jnp.float32(0), power=jnp.int32(1),
+                  has_moved=jnp.bool_(True), banner_timer=jnp.int32(0),
+                  spider_alive=jnp.zeros_like(s.spider_alive))
+    lives = int(s.lives)
+    _, s, *_ = env.step(s, 2)                         # UP: a moving frame
+    assert int(s.lives) == lives - 1
+    return s
+
+
+@pytest.mark.parametrize("level, room, x", [(14, 1, 72), (14, 2, 101),
+                                            (14, 5, 77), (15, 12, 140)])
+def test_the_hero_respawns_in_the_column_he_died_in(env, level, room, x):
+    s = _die_here(env, level, room, x)
+    assert int(s.room) == room
+    assert abs(int(s.player_x) - x) <= 1, "back where he died, not on the left"
+    assert int(s.player_y) == env.consts.respawn_y
+
+
+def test_a_death_right_of_a_wall_respawns_right_of_it(env):
+    """Level 15 room 12's corridor has rock at cells 8-11, 15-16 and 28-31. A
+    hero who dies at the right end comes back there, not at the left end."""
+    band = "........####...##...........####......"
+    s = _die_here(env, 15, 12, 140)
+    cell = (int(s.player_x) - 8) // 4
+    assert cell > 31 and band[cell] == "."
+
+
+def test_a_column_solid_at_corridor_height_takes_the_nearest_free_one(env):
+    """Level 15 room 10: rock at cells 10-17 (x 48-79). A death at x 64 comes
+    back in the nearest free column on the same row, never inside the rock."""
+    s = _die_here(env, 15, 10, 64)
+    x = int(s.player_x)
+    assert not bool(env._hits_wall(s, jnp.int32(x), jnp.int32(env.consts.respawn_y)))
+    assert abs(x - 64) <= 24
