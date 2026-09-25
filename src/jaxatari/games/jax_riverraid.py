@@ -189,6 +189,7 @@ class RiverraidObservation:
     fuel_tanks: ObjectObservation
     player_projectile: ObjectObservation 
     house_trees: ObjectObservation
+    dam: ObjectObservation
     
     river_left_bank: chex.Array
     river_right_bank: chex.Array
@@ -1475,6 +1476,15 @@ class JaxRiverraid(JaxEnvironment):
     def _get_observation(self, state: RiverraidState) -> RiverraidObservation:
         c = self.consts
         w, h = int(c.SCREEN_WIDTH), int(c.SCREEN_HEIGHT)
+        play_h = h - int(c.UI_HEIGHT) - 1
+
+        def trim(x, y, bw, bh, alive, bottom):
+            x0 = jnp.clip(x, 0, w)
+            y0 = jnp.clip(y, 0, bottom)
+            x1 = jnp.clip(x + bw, 0, w)
+            y1 = jnp.clip(y + bh, 0, bottom)
+            visible = alive & (x1 > x0) & (y1 > y0)
+            return x0, y0, x1 - x0, y1 - y0, visible.astype(jnp.int32)
 
         # --- Player ---
         # Map direction 0=Left, 1=Straight, 2=Right
@@ -1483,12 +1493,21 @@ class JaxRiverraid(JaxEnvironment):
             jax.lax.select(state.player_direction == 2, 90.0, 0.0)
         ).astype(jnp.float32)
         
+        p_straight = state.player_direction == 1
+        p_x, p_y, p_w, p_h, p_active = trim(
+            jnp.round(state.player_x).astype(jnp.int32),
+            jnp.round(state.player_y).astype(jnp.int32),
+            jnp.where(p_straight, 7, 5).astype(jnp.int32),
+            jnp.where(p_straight, 13, 14).astype(jnp.int32),
+            state.player_state == 0,
+            h,
+        )
         player = ObjectObservation.create(
-            x=jnp.clip(jnp.array(state.player_x, dtype=jnp.int32), 0, w),
-            y=jnp.clip(jnp.array(state.player_y, dtype=jnp.int32), 0, h),
-            width=jnp.array(c.PLAYER_WIDTH, dtype=jnp.int32),
-            height=jnp.array(c.PLAYER_HEIGHT, dtype=jnp.int32),
-            active=((state.player_state == 0).astype(jnp.int32)),
+            x=p_x,
+            y=p_y,
+            width=p_w,
+            height=p_h,
+            active=p_active,
             orientation=jnp.array(p_ori, dtype=jnp.float32)
         )
 
@@ -1497,44 +1516,88 @@ class JaxRiverraid(JaxEnvironment):
         e_dirs = state.enemy_direction
         e_ori = jnp.where((e_dirs == 1) | (e_dirs == 3), 90.0, 270.0).astype(jnp.float32)
         
-        enemy_widths = jnp.array([16, 8, 8])[state.enemy_type]
-
+        e_x, e_y, e_w, e_h, e_active = trim(
+            state.enemy_x.astype(jnp.int32),
+            state.enemy_y.astype(jnp.int32),
+            jnp.array([16, 8, 8], dtype=jnp.int32)[state.enemy_type],
+            jnp.array([8, 10, 6], dtype=jnp.int32)[state.enemy_type],
+            state.enemy_state == 1,
+            play_h,
+        )
         enemies = ObjectObservation.create(
-            x=jnp.clip(state.enemy_x.astype(jnp.int32), 0, w),
-            y=jnp.clip(state.enemy_y.astype(jnp.int32), 0, h),
-            width=enemy_widths.astype(jnp.int32),
-            height=jnp.full((c.MAX_ENEMIES,), 6, dtype=jnp.int32),
-            active=(state.enemy_state == 1).astype(jnp.int32),
+            x=e_x,
+            y=e_y,
+            width=e_w,
+            height=e_h,
+            active=e_active,
             visual_id=state.enemy_type.astype(jnp.int32),
             orientation=e_ori
         )
 
-        # --- Fuel Tanks ---
+        f_x, f_y, f_w, f_h, f_active = trim(
+            state.fuel_x.astype(jnp.int32),
+            state.fuel_y.astype(jnp.int32),
+            jnp.full((c.MAX_ENEMIES,), 7, dtype=jnp.int32),
+            jnp.full((c.MAX_ENEMIES,), 24, dtype=jnp.int32),
+            state.fuel_state == 1,
+            play_h,
+        )
         fuel_tanks = ObjectObservation.create(
-            x=jnp.clip(state.fuel_x.astype(jnp.int32), 0, w),
-            y=jnp.clip(state.fuel_y.astype(jnp.int32), 0, h),
-            width=jnp.full((c.MAX_ENEMIES,), 7, dtype=jnp.int32),
-            height=jnp.full((c.MAX_ENEMIES,), 12, dtype=jnp.int32),
-            active=(state.fuel_state == 1).astype(jnp.int32)
+            x=f_x,
+            y=f_y,
+            width=f_w,
+            height=f_h,
+            active=f_active
         )
 
-        # --- Player Projectile ---
-        bullet_active = (state.player_bullet_y > -1).astype(jnp.int32)
+        b_x, b_y, b_w, b_h, b_active = trim(
+            jnp.round(state.player_bullet_x).astype(jnp.int32),
+            jnp.round(state.player_bullet_y).astype(jnp.int32),
+            jnp.array(1, dtype=jnp.int32),
+            jnp.array(8, dtype=jnp.int32),
+            jnp.array(True),
+            play_h,
+        )
         player_projectile = ObjectObservation.create(
-            x=jnp.clip(jnp.array(state.player_bullet_x, dtype=jnp.int32), 0, w),
-            y=jnp.clip(jnp.array(state.player_bullet_y, dtype=jnp.int32), 0, h),
-            width=jnp.array(1, dtype=jnp.int32),
-            height=jnp.array(8, dtype=jnp.int32),
-            active=jnp.array(bullet_active, dtype=jnp.int32)
+            x=b_x,
+            y=b_y,
+            width=b_w,
+            height=b_h,
+            active=b_active
         )
 
-        # --- House/Trees ---
+        t_x, t_y, t_w, t_h, t_active = trim(
+            state.housetree_x.astype(jnp.int32),
+            state.housetree_y.astype(jnp.int32),
+            jnp.full((c.MAX_HOUSE_TREES,), 16, dtype=jnp.int32),
+            jnp.full((c.MAX_HOUSE_TREES,), 19, dtype=jnp.int32),
+            state.housetree_state == 1,
+            play_h,
+        )
         house_trees = ObjectObservation.create(
-            x=jnp.clip(state.housetree_x.astype(jnp.int32), 0, w),
-            y=jnp.clip(state.housetree_y.astype(jnp.int32), 0, h),
-            width=jnp.full((c.MAX_HOUSE_TREES,), 8, dtype=jnp.int32),
-            height=jnp.full((c.MAX_HOUSE_TREES,), 8, dtype=jnp.int32),
-            active=(state.housetree_state == 1).astype(jnp.int32)
+            x=t_x,
+            y=t_y,
+            width=t_w,
+            height=t_h,
+            active=t_active
+        )
+
+        dam_row = jnp.argmax(state.dam_position >= 1)
+        dam_intact = (jnp.max(state.dam_position) >= 1) & (state.dam_position[dam_row] == 1)
+        d_x, d_y, d_w, d_h, d_active = trim(
+            jnp.array(w // 2 - 152 // 2 + 5, dtype=jnp.int32),
+            (dam_row - c.DAM_OFFSET).astype(jnp.int32),
+            jnp.array(152, dtype=jnp.int32),
+            jnp.array(26, dtype=jnp.int32),
+            dam_intact,
+            play_h,
+        )
+        dam = ObjectObservation.create(
+            x=d_x,
+            y=d_y,
+            width=d_w,
+            height=d_h,
+            active=d_active
         )
 
         return RiverraidObservation(
@@ -1543,6 +1606,7 @@ class JaxRiverraid(JaxEnvironment):
             fuel_tanks=fuel_tanks,
             player_projectile=player_projectile,
             house_trees=house_trees,
+            dam=dam,
             river_left_bank=state.river_left,
             river_right_bank=state.river_right,
             island_left_bank=state.river_inner_left,
@@ -1773,6 +1837,7 @@ class JaxRiverraid(JaxEnvironment):
             "fuel_tanks": spaces.get_object_space(n=self.consts.MAX_ENEMIES, screen_size=screen_size),
             "player_projectile": single_obj,
             "house_trees": spaces.get_object_space(n=self.consts.MAX_HOUSE_TREES, screen_size=screen_size),
+            "dam": single_obj,
             
             "river_left_bank": spaces.Box(low=0, high=w, shape=(h,), dtype=jnp.int32),
             "river_right_bank": spaces.Box(low=0, high=w, shape=(h,), dtype=jnp.int32),
