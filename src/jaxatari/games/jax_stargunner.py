@@ -15,6 +15,7 @@ from jaxatari.environment import (
 )
 from jaxatari.modification import AutoDerivedConstants
 from jaxatari.renderers import JAXGameRenderer
+from jaxatari.rendering.jax_rendering_utils import RendererConfig
 
 
 # ============================================================
@@ -560,11 +561,14 @@ def _enemy_speed_fixed(level: chex.Array) -> chex.Array:
 # ============================================================
 # Renderer
 # ============================================================
-
 class StarGunnerRenderer(JAXGameRenderer):
-    def __init__(self, consts: StarGunnerConstants):
-        super().__init__(consts)
-        self.consts = consts
+    def __init__(
+        self,
+        consts: StarGunnerConstants | None = None,
+        config: RendererConfig | None = None,
+    ):
+        self.consts = consts or StarGunnerConstants()
+        super().__init__(self.consts, config=config)
 
         # Game assets.
         assets_path = Path(__file__).with_name(
@@ -1390,6 +1394,23 @@ class StarGunnerRenderer(JAXGameRenderer):
             lambda current: current,
             frame,
         )
+
+        if self.config.downscale is not None:
+            target_h, target_w = self.config.downscale
+            frame = jax.image.resize(
+                frame,
+                (target_h, target_w, 3),
+                method="nearest",
+            )
+            frame = jnp.clip(frame, 0, 255).astype(jnp.uint8)
+
+        if self.config.channels == 1:
+            frame = (
+                0.299 * frame[..., 0]
+                + 0.587 * frame[..., 1]
+                + 0.114 * frame[..., 2]
+            )
+            frame = jnp.clip(frame, 0, 255).astype(jnp.uint8)[..., None]
 
         return frame
 
