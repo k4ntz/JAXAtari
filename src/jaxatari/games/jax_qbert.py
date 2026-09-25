@@ -145,6 +145,8 @@ class QbertObservation(struct.PyTreeNode):
     snake: ObjectObservation
     green_ball: ObjectObservation
     sam: ObjectObservation
+    cubes: ObjectObservation
+    discs: ObjectObservation
     player_score: chex.Array
     lives: chex.Array
     pyramid: chex.Array
@@ -1071,6 +1073,8 @@ class JaxQbert(JaxEnvironment[QbertState, QbertObservation, QbertInfo, QbertCons
             "snake": single_obj,
             "green_ball": single_obj,
             "sam": single_obj,
+            "cubes": spaces.get_object_space(n=21, screen_size=screen_size),
+            "discs": spaces.get_object_space(n=4, screen_size=screen_size),
             "player_score": spaces.Box(0, 99999, (), jnp.int32),
             "lives": spaces.Box(-1, 9, (), jnp.int32),
             "pyramid": spaces.Box(-2, 3, (8, 8), jnp.int32),
@@ -1080,59 +1084,89 @@ class JaxQbert(JaxEnvironment[QbertState, QbertObservation, QbertInfo, QbertCons
 
     @partial(jax.jit, static_argnums=(0,))
     def _get_observation(self, state: QbertState):
-        # Keep coordinates in-space; disappearance is represented by active=0.
-        red_x = jnp.maximum(state.red_ball_positions[:, 0], 0)
-        red_y = jnp.maximum(state.red_ball_positions[:, 1], 0)
-        purple_x = jnp.maximum(state.purple_ball_position[0], 0)
-        purple_y = jnp.maximum(state.purple_ball_position[1], 0)
-        snake_x = jnp.maximum(state.snake_position[0], 0)
-        snake_y = jnp.maximum(state.snake_position[1], 0)
-        green_x = jnp.maximum(state.green_ball_position[0], 0)
-        green_y = jnp.maximum(state.green_ball_position[1], 0)
-        sam_x = jnp.maximum(state.sam_position[0], 0)
-        sam_y = jnp.maximum(state.sam_position[1], 0)
+        r = self.renderer
 
+        def cell(i, j):
+            return r.QBERT_POSITIONS[jnp.array(i * (i - 1) / 2 + (j - 1)).astype(jnp.int32)]
+
+        d = state.player_direction
+        c = state.player_moving_counter
+        move_positions = jnp.array([r.QBERT_MOVE_LEFT_UP, r.QBERT_MOVE_LEFT_DOWN, r.QBERT_MOVE_RIGHT_DOWN, r.QBERT_MOVE_RIGHT_UP]).astype(jnp.int32)
+
+        def fall(table):
+            return lambda: jnp.stack([
+                table[c][0] * (-1 * (d > 1)) + r.QBERT_MOVE_OUT_PYRAMID_6[c][0] * (d < 1),
+                table[c][1],
+            ]).astype(jnp.int32)
+
+        player_offset = jax.lax.switch(
+            state.player_position_category,
+            [
+                lambda: move_positions[d][c],
+                lambda: (r.QBERT_MOVE_DISC_LEFT_BOTTOM[c] * (d == 0) + r.QBERT_MOVE_DISC_RIGHT_BOTTOM[c] * (d == 3)).astype(jnp.int32),
+                lambda: (r.QBERT_MOVE_DISC_LEFT_TOP[c] * (d == 0) + r.QBERT_MOVE_DISC_RIGHT_TOP[c] * (d == 3)).astype(jnp.int32),
+                fall(r.QBERT_MOVE_OUT_PYRAMID_1),
+                fall(r.QBERT_MOVE_OUT_PYRAMID_2),
+                fall(r.QBERT_MOVE_OUT_PYRAMID_3),
+                fall(r.QBERT_MOVE_OUT_PYRAMID_4),
+                fall(r.QBERT_MOVE_OUT_PYRAMID_5),
+                fall(r.QBERT_MOVE_OUT_PYRAMID_6),
+            ],
+        )
+        player_xy = cell(state.player_last_position[1], state.player_last_position[0]) + player_offset
         player = ObjectObservation.create(
-            x=state.player_position[0],
-            y=state.player_position[1],
-            width=jnp.array(1, dtype=jnp.int32),
-            height=jnp.array(1, dtype=jnp.int32),
+            x=jnp.clip(player_xy[0], 0, self.consts.WIDTH - 8).astype(jnp.int32),
+            y=jnp.clip(player_xy[1], 0, self.consts.HEIGHT - 19).astype(jnp.int32),
+            width=jnp.array(8, dtype=jnp.int32),
+            height=jnp.array(19, dtype=jnp.int32),
         )
-        red_balls = ObjectObservation.create(
-            x=red_x,
-            y=red_y,
-            width=jnp.ones(3, dtype=jnp.int32),
-            height=jnp.ones(3, dtype=jnp.int32),
-            active=(state.red_ball_positions[:, 0] != -1).astype(jnp.int32),
+
+        ball_frame = jnp.floor(state.enemy_moving_counter / jnp.ceil(r._enemy_move_tick[state.level_number] / 2).astype(jnp.int32)).astype(jnp.int32)
+        snake_frame = jnp.floor(state.enemy_moving_counter / jnp.ceil(r._enemy_move_tick[state.level_number] / 5).astype(jnp.int32)).astype(jnp.int32)
+        ball_offset = r.BALL_MOVE[ball_frame]
+        ball_height = jnp.array([9, 7], dtype=jnp.int32)[ball_frame]
+        snake_offset = r.SNAKE_MOVE[snake_frame]
+        snake_height = jnp.array([21, 19, 16, 19, 21], dtype=jnp.int32)[snake_frame]
+
+        def enemy(pos, offset, width, height):
+            j = pos[..., 0]
+            i = pos[..., 1]
+            active = jnp.logical_and(j != -1, i != -1)
+            xy = cell(i, j) + offset
+            return ObjectObservation.create(
+                x=jnp.where(active, xy[..., 0], 0).astype(jnp.int32),
+                y=jnp.where(active, xy[..., 1], 0).astype(jnp.int32),
+                width=jnp.where(active, width, 0).astype(jnp.int32),
+                height=jnp.where(active, height, 0).astype(jnp.int32),
+                active=active.astype(jnp.int32),
+            )
+
+        red_balls = enemy(state.red_ball_positions, ball_offset, 7, ball_height)
+        purple_ball = enemy(state.purple_ball_position, ball_offset, 7, ball_height)
+        snake = enemy(state.snake_position, snake_offset, 8, snake_height)
+        green_ball = enemy(state.green_ball_position, ball_offset, 7, ball_height)
+        sam = enemy(state.sam_position, jnp.array([0, 1], dtype=jnp.int32), 8, 18)
+
+        cube_i = jnp.array([1, 2, 2, 3, 3, 3, 4, 4, 4, 4, 5, 5, 5, 5, 5, 6, 6, 6, 6, 6, 6], dtype=jnp.int32)
+        cube_j = jnp.array([1, 1, 2, 1, 2, 3, 1, 2, 3, 4, 1, 2, 3, 4, 5, 1, 2, 3, 4, 5, 6], dtype=jnp.int32)
+        pyra = state.pyramid.at[state.player_position[1], state.player_position[0]].set(state.last_pyramid[state.player_position[1]][state.player_position[0]])
+        cubes = ObjectObservation.create(
+            x=r.COLOR_POSITIONS[:, 0].astype(jnp.int32),
+            y=(r.COLOR_POSITIONS[:, 1] + 2).astype(jnp.int32),
+            width=jnp.full(21, 20, dtype=jnp.int32),
+            height=jnp.full(21, 5, dtype=jnp.int32),
+            state=jnp.clip(pyra[cube_i, cube_j], 0, 2).astype(jnp.int32),
         )
-        purple_ball = ObjectObservation.create(
-            x=purple_x,
-            y=purple_y,
-            width=jnp.array(1, dtype=jnp.int32),
-            height=jnp.array(1, dtype=jnp.int32),
-            active=(state.purple_ball_position[0] != -1).astype(jnp.int32),
+
+        disc_drawn = state.last_pyramid[jnp.array([2, 2, 4, 4]), jnp.array([0, 3, 0, 5])] == -2
+        discs = ObjectObservation.create(
+            x=jnp.array([38, 110, 14, 134], dtype=jnp.int32),
+            y=jnp.array([84, 84, 142, 142], dtype=jnp.int32),
+            width=jnp.full(4, 8, dtype=jnp.int32),
+            height=jnp.full(4, 2, dtype=jnp.int32),
+            active=disc_drawn.astype(jnp.int32),
         )
-        snake = ObjectObservation.create(
-            x=snake_x,
-            y=snake_y,
-            width=jnp.array(1, dtype=jnp.int32),
-            height=jnp.array(1, dtype=jnp.int32),
-            active=(state.snake_position[0] != -1).astype(jnp.int32),
-        )
-        green_ball = ObjectObservation.create(
-            x=green_x,
-            y=green_y,
-            width=jnp.array(1, dtype=jnp.int32),
-            height=jnp.array(1, dtype=jnp.int32),
-            active=(state.green_ball_position[0] != -1).astype(jnp.int32),
-        )
-        sam = ObjectObservation.create(
-            x=sam_x,
-            y=sam_y,
-            width=jnp.array(1, dtype=jnp.int32),
-            height=jnp.array(1, dtype=jnp.int32),
-            active=(state.sam_position[0] != -1).astype(jnp.int32),
-        )
+
         return QbertObservation(
             player=player,
             red_balls=red_balls,
@@ -1140,6 +1174,8 @@ class JaxQbert(JaxEnvironment[QbertState, QbertObservation, QbertInfo, QbertCons
             snake=snake,
             green_ball=green_ball,
             sam=sam,
+            cubes=cubes,
+            discs=discs,
             player_score=state.player_score,
             lives=state.lives,
             pyramid=state.pyramid,
