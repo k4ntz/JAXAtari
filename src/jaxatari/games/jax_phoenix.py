@@ -550,12 +550,12 @@ class JaxPhoenix(JaxEnvironment[PhoenixState, PhoenixObservation, PhoenixInfo, N
         w, h = int(c.WIDTH), int(c.HEIGHT)
 
         # --- Player ---
-        p_alive = (~state.player_dying & (state.player_respawn_timer == 0)).astype(jnp.int32)
+        p_alive = (state.player_dying | (state.player_respawn_timer <= 0)).astype(jnp.int32)
         player = ObjectObservation.create(
-            x=jnp.clip(jnp.array(state.player_x, dtype=jnp.int32), 0, w),
-            y=jnp.clip(jnp.array(state.player_y, dtype=jnp.int32), 0, h),
-            width=jnp.array(13, dtype=jnp.int32),
-            height=jnp.array(8, dtype=jnp.int32),
+            x=jnp.array(state.player_x, dtype=jnp.int32),
+            y=jnp.array(state.player_y, dtype=jnp.int32),
+            width=jnp.array(7, dtype=jnp.int32),
+            height=jnp.array(10, dtype=jnp.int32),
             active=p_alive
         )
 
@@ -564,8 +564,8 @@ class JaxPhoenix(JaxEnvironment[PhoenixState, PhoenixObservation, PhoenixInfo, N
         player_projectile = ObjectObservation.create(
             x=jnp.clip(jnp.array(state.projectile_x, dtype=jnp.int32), 0, w),
             y=jnp.clip(jnp.array(state.projectile_y, dtype=jnp.int32), 0, h),
-            width=jnp.array(c.PROJECTILE_WIDTH, dtype=jnp.int32),
-            height=jnp.array(c.PROJECTILE_HEIGHT, dtype=jnp.int32),
+            width=jnp.array(1, dtype=jnp.int32),
+            height=jnp.array(6, dtype=jnp.int32),
             active=p_active
         )
 
@@ -574,8 +574,8 @@ class JaxPhoenix(JaxEnvironment[PhoenixState, PhoenixObservation, PhoenixInfo, N
         enemy_projectiles = ObjectObservation.create(
             x=jnp.clip(state.enemy_projectile_x.astype(jnp.int32), 0, w),
             y=jnp.clip(state.enemy_projectile_y.astype(jnp.int32), 0, h),
-            width=jnp.full((8,), c.PROJECTILE_WIDTH, dtype=jnp.int32),
-            height=jnp.full((8,), c.PROJECTILE_HEIGHT, dtype=jnp.int32),
+            width=jnp.full((8,), 1, dtype=jnp.int32),
+            height=jnp.full((8,), 4, dtype=jnp.int32),
             active=ep_active
         )
 
@@ -606,22 +606,28 @@ class JaxPhoenix(JaxEnvironment[PhoenixState, PhoenixObservation, PhoenixInfo, N
         dying_mask = jnp.where(is_bat_level, state.bat_dying, state.phoenix_dying).astype(jnp.int32)
         obs_enemy_state = (final_state + (dying_mask * 4)).astype(jnp.int32)
 
+        enemies_x = state.enemies_x.astype(jnp.int32)
+        has_left = (state.bat_wings == 2) | (state.bat_wings == -1)
+        has_right = (state.bat_wings == 2) | (state.bat_wings == 1)
+        bat_x = jnp.where(state.bat_dying | has_left, enemies_x - 5, enemies_x)
+        bat_w = jnp.where(state.bat_dying, 16, 6 + 5 * has_left.astype(jnp.int32) + 5 * has_right.astype(jnp.int32))
+        bat_h = jnp.where(state.bat_dying, 7, jnp.where(has_left | has_right, 11, 10))
         enemies = ObjectObservation.create(
-            x=jnp.clip(state.enemies_x.astype(jnp.int32), 0, w),
+            x=jnp.clip(jnp.where(is_bat_level, bat_x, enemies_x), 0, w).astype(jnp.int32),
             y=jnp.clip(state.enemies_y.astype(jnp.int32), 0, h),
-            width=jnp.full((8,), c.ENEMY_WIDTH, dtype=jnp.int32),
-            height=jnp.full((8,), c.ENEMY_HEIGHT, dtype=jnp.int32),
-            active=((state.enemies_x > -1) & (state.enemies_y < h + 10)).astype(jnp.int32),
+            width=jnp.where(is_bat_level, bat_w, 8).astype(jnp.int32),
+            height=jnp.where(is_bat_level, bat_h, 9).astype(jnp.int32),
+            active=((state.enemies_x > -1) & (state.enemies_y < h + 10) & ((state.level % 5) != 0)).astype(jnp.int32),
             state=obs_enemy_state
         )
 
         # --- Boss ---
         boss_active = (((state.level % 5) == 0) & state.boss.active).astype(jnp.int32)
         boss = ObjectObservation.create(
-            x=jnp.clip(state.boss.x.astype(jnp.int32), 0, w),
-            y=jnp.clip(state.boss.y.astype(jnp.int32), 0, h),
-            width=jnp.array(32, dtype=jnp.int32),
-            height=jnp.array(16, dtype=jnp.int32),
+            x=(state.boss.x - c.BOSS_CORE_WIDTH / 2.0).astype(jnp.int32),
+            y=(state.boss.y + c.BOSS_CORE_Y_OFFSET).astype(jnp.int32) + 2,
+            width=jnp.array(8, dtype=jnp.int32),
+            height=jnp.array(11, dtype=jnp.int32),
             active=boss_active
         )
 
@@ -660,11 +666,21 @@ class JaxPhoenix(JaxEnvironment[PhoenixState, PhoenixObservation, PhoenixInfo, N
             + int(c.BOSS_GREEN_DX.shape[0])
         )
         
+        blocks_w = jnp.concatenate([
+            jnp.full(bx_b.shape, c.BOSS_BLUE_BLOCK_WIDTH, dtype=jnp.int32),
+            jnp.full(bx_r.shape, c.BOSS_RED_BLOCK_WIDTH, dtype=jnp.int32),
+            jnp.full(bx_g.shape, c.BOSS_GREEN_BLOCK_WIDTH, dtype=jnp.int32),
+        ])
+        blocks_h = jnp.concatenate([
+            jnp.full(bx_b.shape, c.BOSS_BLUE_BLOCK_HEIGHT, dtype=jnp.int32),
+            jnp.full(bx_r.shape, c.BOSS_RED_BLOCK_HEIGHT, dtype=jnp.int32),
+            jnp.full(bx_g.shape, c.BOSS_GREEN_BLOCK_HEIGHT, dtype=jnp.int32),
+        ])
         boss_blocks = ObjectObservation.create(
-            x=jnp.clip(blocks_x, 0, w),
-            y=jnp.clip(blocks_y, 0, h),
-            width=jnp.full((total_blocks,), c.BLOCK_WIDTH, dtype=jnp.int32),
-            height=jnp.full((total_blocks,), c.BLOCK_HEIGHT, dtype=jnp.int32),
+            x=blocks_x,
+            y=blocks_y,
+            width=blocks_w,
+            height=blocks_h,
             active=blocks_active,
             visual_id=blocks_vid
         )
