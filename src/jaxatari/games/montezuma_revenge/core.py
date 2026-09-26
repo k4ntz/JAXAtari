@@ -160,6 +160,8 @@ class MontezumaRevengeObservation:
     doors: ObjectObservation
     ropes: ObjectObservation
     platforms: ObjectObservation
+    ladders: ObjectObservation
+    lasers: ObjectObservation
 
 @struct.dataclass
 class MontezumaRevengeInfo:
