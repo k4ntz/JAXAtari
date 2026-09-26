@@ -35,12 +35,12 @@ def _get_default_asset_config() -> tuple:
     asterix_item_names = ['CAULDRON', 'HELMET', 'SHIELD', 'LAMP']
     obelix_item_names = ['APPLE', 'FISH', 'WILD_BOAR_LEG', 'MUG']
     points_names = ['POINTS50', 'POINTS100', 'POINTS200', 'POINTS300', 'POINTS400', 'POINTS500']
-    
+
     config_list = [
         {'name': 'STAGE', 'type': 'single', 'file': 'STAGE.npy'},
         {'name': 'TOP', 'type': 'single', 'file': 'TOP.npy'},
         {'name': 'BOTTOM', 'type': 'single', 'file': 'BOTTOM.npy'},
-        
+
         {'name': 'ASTERIX_SPRITES', 'type': 'group', 'files': [
             'ASTERIX_LEFT.npy', 'ASTERIX_RIGHT.npy',
             'ASTERIX_LEFT_HIT.npy', 'ASTERIX_RIGHT_HIT.npy',
@@ -49,20 +49,20 @@ def _get_default_asset_config() -> tuple:
             'OBELIX_LEFT.npy', 'OBELIX_RIGHT.npy',
             'OBELIX_LEFT_HIT.npy', 'OBELIX_RIGHT_HIT.npy',
         ]},
-        
+
         {'name': 'LYRE_LEFT', 'type': 'single', 'file': 'LYRE_LEFT.npy'},
         {'name': 'LYRE_RIGHT', 'type': 'single', 'file': 'LYRE_RIGHT.npy'},
-        
+
         {'name': 'digit', 'type': 'digits', 'pattern': 'DIGIT_{}.npy'},
-        
+
         {'name': 'points', 'type': 'group', 'files': [f'{n}.npy' for n in points_names]},
-        
+
         {'name': 'OBELIX_WAVE_SCREEN', 'type': 'single', 'file': 'OBELIX_WAVE_SCREEN.npy'},
     ]
-    
+
     for name in asterix_item_names + obelix_item_names:
         config_list.append({'name': name, 'type': 'single', 'file': f'{name}.npy'})
-    
+
     return tuple(config_list)
 
 
@@ -99,12 +99,12 @@ class AsterixConstants(AutoDerivedConstants):
     screen_width: int = struct.field(pytree_node=False, default=160)
     screen_height: int = struct.field(pytree_node=False, default=210)
     player_width: int = struct.field(pytree_node=False, default=8)
-    player_height: int = struct.field(pytree_node=False, default=8)
+    player_height: int = struct.field(pytree_node=False, default=12)
     speed_multiplier: float = struct.field(pytree_node=False, default=2.0)
     num_stages: int = struct.field(pytree_node=False, default=8)
     stage_spacing: int = struct.field(pytree_node=False, default=16)
     top_border: int = struct.field(pytree_node=False, default=23)
-    
+
     # Derived constants (dynamic calculation based on static fields)
     bottom_border: Optional[int] = struct.field(pytree_node=False, default=None)
     stage_positions: Optional[List[int]] = struct.field(pytree_node=False, default=None)
@@ -112,19 +112,19 @@ class AsterixConstants(AutoDerivedConstants):
     hit_frames: int = struct.field(pytree_node=False, default=60)
     respawn_frames: int = struct.field(pytree_node=False, default=120)
     character_transition_frames:int = struct.field(pytree_node=False, default=120)
-    
+
     POPUP_DURATIONS: jnp.ndarray = struct.field(pytree_node=False, default_factory=_get_popup_durations)
-    
+
     num_lives: int = struct.field(pytree_node=False, default=3)
     max_digits_score: int = struct.field(pytree_node=False, default=6)
-    
+
     player_base_speed: float = struct.field(pytree_node=False, default=1.0)
     player_character_speed_factor : float = struct.field(pytree_node=False, default=0.5)
-    
+
     spawn_min_delay: int = struct.field(pytree_node=False, default=20)
     spawn_max_delay: int = struct.field(pytree_node=False, default=50)
     spawn_mode_duration: int = struct.field(pytree_node=False, default=60)
-    
+
     # Initial spawn offsets for entities (off-screen distance)
     initial_spawn_offset_left: int = struct.field(pytree_node=False, default=-4)
     initial_spawn_offset_right: int = struct.field(pytree_node=False, default=-13)
@@ -132,7 +132,7 @@ class AsterixConstants(AutoDerivedConstants):
     ASTERIX_ITEM_POINTS: jnp.ndarray = struct.field(pytree_node=False, default_factory=_get_asterix_item_points)
     OBELIX_ITEM_POINTS: jnp.ndarray = struct.field(pytree_node=False, default_factory=_get_obelix_item_points)
     ASSET_CONFIG: tuple = struct.field(pytree_node=False, default_factory=_get_default_asset_config)
-    
+
     def compute_derived(self):
         return {
             'bottom_border': 8 * self.stage_spacing + self.top_border,
@@ -182,7 +182,7 @@ class AsterixState(struct.PyTreeNode):
     spawn_mode: jnp.ndarray
     spawn_mode_timer: jnp.ndarray
     first_spawn_done: jnp.ndarray
-    force_enemy_next: jnp.ndarray 
+    force_enemy_next: jnp.ndarray
     rng: jax.random.PRNGKey
     character_id: chex.Array
     collect_type_index: chex.Array
@@ -202,7 +202,7 @@ class AsterixObservation(struct.PyTreeNode):
 
 
 class AsterixInfo(struct.PyTreeNode):
-    pass 
+    pass
 
 class JaxAsterix(JaxEnvironment[AsterixState, AsterixObservation, AsterixInfo, AsterixConstants]):
     # ALE minimal action set: [NOOP, UP, RIGHT, LEFT, DOWN, UPRIGHT, UPLEFT, DOWNRIGHT, DOWNLEFT]
@@ -214,13 +214,13 @@ class JaxAsterix(JaxEnvironment[AsterixState, AsterixObservation, AsterixInfo, A
     def __init__(self, consts: AsterixConstants = None):
         if consts is None:
             consts = AsterixConstants()
-        
+
         super().__init__(consts)
         self.renderer = AsterixRenderer(consts=self.consts)
 
         stage_borders = jnp.array(self.consts.stage_positions, dtype=jnp.int32)
         lane_y_centers = (stage_borders[:-1] + stage_borders[1:]) // 2
-        
+
         entity_height = 8
         self.lane_y_coords = lane_y_centers - (entity_height // 2)
 
@@ -235,9 +235,9 @@ class JaxAsterix(JaxEnvironment[AsterixState, AsterixObservation, AsterixInfo, A
 
         if key is None:
             key = jax.random.PRNGKey(0)
-        
+
         max_entities = self.consts.num_stages
-        
+
         timer_rng, state_rng = jax.random.split(key, 2)
 
         lane_indices = jnp.arange(max_entities)
@@ -288,7 +288,7 @@ class JaxAsterix(JaxEnvironment[AsterixState, AsterixObservation, AsterixInfo, A
             spawn_mode=jnp.array(1, dtype=jnp.int32),
             spawn_mode_timer=jnp.array(60, dtype=jnp.int32),
             first_spawn_done=jnp.array(True, dtype=jnp.bool_),
-            force_enemy_next=jnp.ones((max_entities,), dtype=jnp.bool_), 
+            force_enemy_next=jnp.ones((max_entities,), dtype=jnp.bool_),
             rng=state_rng,
             character_id=jnp.array(0, dtype=jnp.int32),
             collect_type_index=jnp.array(0, dtype=jnp.int32),
@@ -311,7 +311,8 @@ class JaxAsterix(JaxEnvironment[AsterixState, AsterixObservation, AsterixInfo, A
         # Do not ``take(ACTION_SET, action)`` before indexing: ACTION_SET stores Atari
         # action ids (0,2,3,…), while dx/dy tables are ordered by the 0..8 index.
         action = action.astype(jnp.int32)
-        
+
+
         player_height = self.consts.player_height
         cooldown_frames = self.consts.cooldown_frames
         can_switch_stage = state.stage_cooldown <= 0
@@ -328,7 +329,7 @@ class JaxAsterix(JaxEnvironment[AsterixState, AsterixObservation, AsterixInfo, A
         dy_table = jnp.array([0, -1, 0, 0, 1, -1, -1, 1, 1], dtype=jnp.int32)
         dx = dx_table[action]
         dy = dy_table[action]
-        
+
         float_dx = dx.astype(jnp.float32) * self.consts.speed_multiplier
         int_dx = jnp.where(
             dx == 0,
@@ -374,10 +375,10 @@ class JaxAsterix(JaxEnvironment[AsterixState, AsterixObservation, AsterixInfo, A
 
         lane_y_coords = self.lane_y_coords
         item_w = 8
-        item_h = 8
+        item_h = 12 #item_h = 8
         enemy_width = 8
         enemy_w = 8
-        enemy_h = 8
+        enemy_h = 12 #enemy_h = 8
         screen_width = self.consts.screen_width
         num_platforms = self.consts.num_stages
 
@@ -391,36 +392,36 @@ class JaxAsterix(JaxEnvironment[AsterixState, AsterixObservation, AsterixInfo, A
         is_blocked = (state.enemies.alive | state.collectibles.alive | state.score_popups.active)
         new_lane_timers = jnp.where(paused | is_blocked, state.lane_timers, state.lane_timers - 1)
         should_spawn_lane = (~paused) & (~is_blocked) & (new_lane_timers <= 0)
-        
+
         rng_pos_keys = jax.random.split(rng_lanes_pos, num_platforms)
         entity_speed = jax.lax.select(state.character_id == 1, 2.0, 1.0)
 
         def update_lanes(i, carry):
             ens, cols, timers, first_done, force_enemy = carry
-            
+
             pred = should_spawn_lane[i]
-            
+
             def spawn_entity(args):
                 e, c, t, first_done, force_flag = args
                 key_pos = rng_pos_keys[i]
                 key_type, key_side = jax.random.split(key_pos)
-                
+
                 # GATEKEEPER LOGIC:
                 # If force_flag is True, we MUST spawn an enemy.
                 # If False, we respect the global spawn_mode (clumping).
                 must_be_enemy = force_flag[i]
-                
+
                 prob_enemy = jax.lax.select(new_mode == 0, 0.9, 0.1)
                 is_enemy = must_be_enemy | jax.lax.select(first_done, jax.random.bernoulli(key_type, prob_enemy), False)
-                
+
                 # UPDATE FORCE FLAG:
                 # If we just spawned an Enemy, next can be an Item (False).
                 # If we just spawned an Item, next MUST be an Enemy (True).
                 new_force_val = jnp.where(is_enemy, False, True)
-                
+
                 x_start = jax.lax.select(jax.random.bernoulli(key_side), screen_width + 8, -8)
                 vx_val = entity_speed * jax.lax.select(x_start > 0, -1.0, 1.0)
-                
+
                 new_e = e.replace(
                     x=e.x.at[i].set(jnp.where(is_enemy, x_start, e.x[i])),
                     vx=e.vx.at[i].set(jnp.where(is_enemy, vx_val, e.vx[i])),
@@ -432,20 +433,20 @@ class JaxAsterix(JaxEnvironment[AsterixState, AsterixObservation, AsterixInfo, A
                     alive=c.alive.at[i].set(jnp.where(~is_enemy, True, c.alive[i])),
                     type_index=c.type_index.at[i].set(state.collect_type_index)
                 )
-                
+
                 new_delay = jax.random.randint(key_side, (), self.consts.spawn_min_delay, self.consts.spawn_max_delay)
                 new_t = t.at[i].set(new_delay)
                 new_first_done = first_done | pred
-                
+
                 # Update the specific lane in the force_flag array
                 new_force_arr = force_flag.at[i].set(new_force_val)
-                
+
                 return new_e, new_c, new_t, new_first_done, new_force_arr
 
             return jax.lax.cond(pred, spawn_entity, lambda x: x, (ens, cols, timers, first_done, force_enemy))
 
         enemies, collectibles, new_lane_timers, first_spawn_done, new_force_enemy_next = jax.lax.fori_loop(
-            0, num_platforms, update_lanes, 
+            0, num_platforms, update_lanes,
             (state.enemies, state.collectibles, new_lane_timers, state.first_spawn_done, state.force_enemy_next)
         )
 
@@ -529,11 +530,11 @@ class JaxAsterix(JaxEnvironment[AsterixState, AsterixObservation, AsterixInfo, A
                 should_spawn = collisions_item[i]
                 is_free = ~popup.active[i]
                 should_spawn_here = should_spawn & is_free
-                
+
                 col_type = collectibles.type_index[i]
                 lut_idx = jnp.minimum(col_type, 4)
                 duration = self.consts.POPUP_DURATIONS[lut_idx]
-                
+
                 value = points_array[col_type]
                 popup = popup.replace(
                     x=popup.x.at[i].set(jnp.where(should_spawn_here, collectibles.x[i], popup.x[i])),
@@ -638,11 +639,11 @@ class JaxAsterix(JaxEnvironment[AsterixState, AsterixObservation, AsterixInfo, A
         new_player_x = jnp.where(just_finished_respawn, jnp.int32(respawn_x), new_player_x)
         new_y = jnp.where(just_finished_respawn, jnp.int32(respawn_y), new_y)
         new_cooldown = jnp.where(just_finished_respawn, jnp.int32(self.consts.cooldown_frames), new_cooldown)
-        
+
         def reset_timers_fn(t):
             return jax.random.randint(rng_next, (num_platforms,), self.consts.spawn_min_delay, self.consts.spawn_max_delay)
         new_lane_timers = jax.lax.cond(just_finished_respawn, reset_timers_fn, lambda t: t, new_lane_timers)
-        
+
         # Also reset gatekeeper on death to prevent unfair starts
         new_force_enemy_next = jax.lax.cond(just_finished_respawn, lambda f: jnp.ones_like(f, dtype=jnp.bool_), lambda f: f, new_force_enemy_next)
 
@@ -664,7 +665,7 @@ class JaxAsterix(JaxEnvironment[AsterixState, AsterixObservation, AsterixInfo, A
         game_over = jnp.where(new_lives <= 0, jnp.array(True), state.game_over)
 
         new_level = jnp.maximum(1, (new_score // 10000) + 1).astype(jnp.int32)
-        
+
         new_state = AsterixState(
             player_x=new_player_x,
             player_y=new_y,
@@ -713,7 +714,7 @@ class JaxAsterix(JaxEnvironment[AsterixState, AsterixObservation, AsterixInfo, A
             x=jnp.clip(state.enemies.x, 0, self.consts.screen_width - 1).astype(jnp.int32),
             y=self.lane_y_coords.astype(jnp.int32),
             width=jnp.full((self.consts.num_stages,), 8, dtype=jnp.int32),
-            height=jnp.full((self.consts.num_stages,), 8, dtype=jnp.int32),
+            height=jnp.full((self.consts.num_stages,), 12, dtype=jnp.int32),
             active=state.enemies.alive.astype(jnp.bool_),
             orientation=jnp.where(state.enemies.vx < 0, 2, jnp.where(state.enemies.vx > 0, 1, 0)).astype(jnp.int32),
         )
@@ -722,11 +723,11 @@ class JaxAsterix(JaxEnvironment[AsterixState, AsterixObservation, AsterixInfo, A
             x=jnp.clip(state.collectibles.x, 0, self.consts.screen_width - 1).astype(jnp.int32),
             y=self.lane_y_coords.astype(jnp.int32),
             width=jnp.full((self.consts.num_stages,), 8, dtype=jnp.int32),
-            height=jnp.full((self.consts.num_stages,), 8, dtype=jnp.int32),
+            height=jnp.full((self.consts.num_stages,), 12, dtype=jnp.int32),
             active=state.collectibles.alive.astype(jnp.bool_),
             visual_id=state.collectibles.type_index.astype(jnp.int32),
         )
-        
+
         return AsterixObservation(player=player, enemies=enemy, collectibles=collectible)
 
 
@@ -799,11 +800,11 @@ class AsterixRenderer(JAXGameRenderer):
 
         # Load all assets via declarative manifest
         final_asset_config = list(self.consts.ASSET_CONFIG)
-        
+
         # Add procedural background
         static_procedural = _create_static_procedural_sprites(self.consts.screen_height, self.consts.screen_width)
         final_asset_config.insert(0, {'name': 'background', 'type': 'background', 'data': static_procedural['background']})
-        
+
         (
             self.PALETTE,
             self.SHAPE_MASKS,
@@ -868,11 +869,11 @@ class AsterixRenderer(JAXGameRenderer):
 
         stage_borders = jnp.array(self.consts.stage_positions, dtype=jnp.int32)
         lane_y_centers = (stage_borders[:-1] + stage_borders[1:]) // 2
-        
+
         enemy_height = 8
         collectible_height = 8
         popup_height = 8
-        
+
         self.enemy_y_coords = lane_y_centers - (enemy_height // 2)
         self.collectible_y_coords = lane_y_centers - (collectible_height // 2)
         self.popup_y_coords = lane_y_centers - (popup_height // 2)
@@ -953,7 +954,7 @@ class AsterixRenderer(JAXGameRenderer):
     @partial(jax.jit, static_argnums=(0,))
     def _render_collectibles(self, state, raster):
         collectible_y_coords = self.collectible_y_coords
-        
+
         def render_one(i, r_in):
             is_alive = state.collectibles.alive[i]
             x = state.collectibles.x[i].astype(jnp.int32)
