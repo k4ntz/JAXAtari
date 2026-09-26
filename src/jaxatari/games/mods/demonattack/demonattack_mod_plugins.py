@@ -39,7 +39,7 @@ def _normal_active_demons(state: DemonAttackState) -> jax.Array:
 def _clear_bombs(env, state: DemonAttackState) -> DemonAttackState:
     return state.replace(
         bomb_active=jnp.zeros_like(state.bomb_active, dtype=jnp.bool_),
-        bomb_burst_step=jnp.asarray(env.consts.BOMB_BURST_RATES, dtype=state.bomb_burst_step.dtype),
+        bomb_burst_step=jnp.asarray(env.consts.MAX_BOMBS, dtype=state.bomb_burst_step.dtype),
         bomb_burst_length=jnp.zeros_like(state.bomb_burst_length),
         bomb_burst_timer=jnp.zeros_like(state.bomb_burst_timer),
         bomb_action_counter=jnp.zeros_like(state.bomb_action_counter),
@@ -120,8 +120,14 @@ class RelentlessWavesMod(JaxAtariInternalModPlugin):
         "WAVE_TOTAL_DEMONS": 12,
         "ENEMY_SHOT_ACTION_TABLE": (4, 4, 3, 3, 3, 2, 3, 2, 3, 2, 3, 2),
         "BOMB_PRE_FIRE_PAUSE": 8,
-        "BOMB_BURST_LENGTH_OPTIONS": (5, 7, 7, 7),
-        "BOMB_JITTER_X_TABLE": (-1, 0, 1, 0, -1, 0, 1),
+        "BOMB_TYPE_ROW_RANGE": (
+            (2, 4),  # STANDARD (placeholder)
+            (4, 4),  # LONG
+            (5, 6),  # TIGHT
+            (4, 4),  # SNAKE
+        ),
+        "WAVE_BIG_DEMON_STANDARD_ROW_RANGE_TABLE": ((3, 4), (3, 4), (4, 4), (4, 4), (5, 6), (5, 6)),
+        "BOMB_JITTER_X_TABLE": (0, 1, 0, -1, 0, 1, 0, -1, 0, 1, 0, -1, 0),
     }
 
 

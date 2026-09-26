@@ -494,6 +494,7 @@ class DemonAttackInfo(struct.PyTreeNode):
     time: jnp.ndarray
     wave_number: jnp.ndarray
     wave_pattern: jnp.ndarray
+    score: jnp.ndarray
 
 class JaxDemonAttack(JaxEnvironment[DemonAttackState, DemonAttackObservation, DemonAttackInfo, DemonAttackConstants]):
     ACTION_SET: jnp.ndarray = jnp.array(
@@ -2609,7 +2610,7 @@ class JaxDemonAttack(JaxEnvironment[DemonAttackState, DemonAttackObservation, De
             "laser": object_space,
             "bomb": spaces.get_object_space(n=self.consts.MAX_BOMBS,
                                             screen_size=(self.consts.HEIGHT, self.consts.WIDTH)),
-            "score": spaces.Box(low=0, high=99999, shape=(), dtype=jnp.int32),
+            "score": spaces.Box(low=0, high=jnp.iinfo(jnp.int32).max, shape=(), dtype=jnp.int32),
             "lives": spaces.Box(low=0, high=self.consts.MAX_BUNKERS, shape=(), dtype=jnp.int32),
         })
 
@@ -2627,6 +2628,7 @@ class JaxDemonAttack(JaxEnvironment[DemonAttackState, DemonAttackObservation, De
             time=state.step_counter,
             wave_number=state.wave_number,
             wave_pattern=state.wave_pattern,
+            score=state.score,
         )
 
     @partial(jax.jit, static_argnums=(0,))
