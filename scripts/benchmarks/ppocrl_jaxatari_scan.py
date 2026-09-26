@@ -461,9 +461,8 @@ def single_run(key: jax.random.PRNGKey, network: Network | MLP_Network, actor: A
             print(f"model saved to {model_path}")
 
         current_performances = {}
-        current_task_key = f"{task_id}+{str(list(config["TRAIN_MODS"]))}"
 
-        for idx, (eval_task, eval_task_train_mods, eval_task_eval_mods) in enumerate(seen_tasks):
+        for eval_task_idx, eval_task, eval_task_train_mods, eval_task_eval_mods in seen_tasks:
             eval_task_key = f"{eval_task}+tr:{str(list(eval_task_train_mods))}+ev:{str(list(eval_task_eval_mods))}"
             # We only want to log videos for the CURRENT task to save time/space
             capture_video = config["CAPTURE_VIDEO"] and (eval_task == task_id) and (eval_task_train_mods == list(config["TRAIN_MODS"]))
@@ -486,9 +485,9 @@ def single_run(key: jax.random.PRNGKey, network: Network | MLP_Network, actor: A
                     eval=True
                 )()
                 # renderer unaffected by mods
-                eval_renderers_cache[eval_task_key] = jaxatari.make(eval_task).renderer
+                # eval_renderers_cache[eval_task_key] = jaxatari.make(eval_task).renderer
 
-                # eval_renderers_cache[eval_task_key] = jaxatari.make(eval_task, mods=eval_task_eval_mods).renderer
+                eval_renderers_cache[eval_task_key] = jaxatari.make(eval_task, mods=eval_task_eval_mods).renderer
 
             cached_env = eval_envs_cache[eval_task_key]
             cached_renderer = eval_renderers_cache[eval_task_key]
@@ -516,7 +515,6 @@ def single_run(key: jax.random.PRNGKey, network: Network | MLP_Network, actor: A
             eval_act_params = agent_state.params.actor_params
 
             if config["CL_METHOD"].lower() == "packnet":
-                eval_task_idx = idx + 1
 
                 def apply_inference_mask(param, task_ids):
                     # only keep weights belonging to tasks up to eval_task_idx
@@ -564,7 +562,7 @@ def single_run(key: jax.random.PRNGKey, network: Network | MLP_Network, actor: A
             bwt_sum, fm_sum, past_tasks_count = 0, 0, 0
             
             # calculate BWT and FM
-            for eval_task, eval_task_train_mods, eval_task_eval_mods in seen_tasks:
+            for _, eval_task, eval_task_train_mods, eval_task_eval_mods in seen_tasks:
                 eval_task_key = f"{eval_task}+tr:{str(list(eval_task_train_mods))}+ev:{str(list(eval_task_eval_mods))}"
                 is_current_task = (eval_task == task_id) and (eval_task_train_mods == list(config["TRAIN_MODS"]))
 
@@ -588,7 +586,7 @@ def single_run(key: jax.random.PRNGKey, network: Network | MLP_Network, actor: A
                 }, step=current_global_step)
 
             # update max performances and lock in baselines
-            for eval_task, eval_task_train_mods, eval_task_eval_mods in seen_tasks:
+            for _, eval_task, eval_task_train_mods, eval_task_eval_mods in seen_tasks:
                 eval_task_key = f"{eval_task}+tr:{str(list(eval_task_train_mods))}+ev:{str(list(eval_task_eval_mods))}"
                 current_perf = current_performances[eval_task_key]
                 is_current_task = (eval_task == task_id) and (eval_task_train_mods == list(config["TRAIN_MODS"]))
@@ -1145,8 +1143,10 @@ def continual_run(config: dict):
             eval_mods_list = [train_mods]
 
         for eval_mods in eval_mods_list:
-            if (task_id, train_mods, eval_mods) not in seen_tasks:
-                seen_tasks.append((task_id, train_mods, eval_mods))
+            # if (task_id, train_mods, eval_mods) not in seen_tasks:
+            if not any(task_id == t_id and train_mods == t_mods and eval_mods == e_mods for _, t_id, t_mods, e_mods in seen_tasks):
+                # seen_tasks entry: (task_index, task_id, train_mods, eval_mods)
+                seen_tasks.append((i+1, task_id, train_mods, eval_mods))
 
         # reset the optimizer state (step count & momentum) for new tasks
         if i > 0:
