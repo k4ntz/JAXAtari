@@ -46,7 +46,7 @@ ENEMY_H = jnp.array([4, 4, 4], dtype=jnp.float32)  # height of each enemy sprite
 ENEMY_COLOR = jnp.array(
     [
         [236, 200, 96],   # SAUCER  – gelblich/orange
-        [180, 100, 220],  # BUZZIE  – violett
+        [146, 70, 192],  # BUZZIE  – lila
         [110, 210, 110],  # SQUEEZER – grün
     ],
     jnp.uint8,
@@ -156,7 +156,7 @@ class StarGunnerConstants(struct.PyTreeNode):
     BOBO_WIDTH: int = struct.field(pytree_node=False, default=8)
     BOBO_HEIGHT: int = struct.field(pytree_node=False, default=4)
     BOBO_Y: int = struct.field(pytree_node=False, default=10)
-    BOBO_SPEED: float = struct.field(pytree_node=False, default=3.0)
+    BOBO_SPEED: float = struct.field(pytree_node=False, default=2.5)
     BOBO_BOMB_PERIOD: int = struct.field(pytree_node=False, default=45)
 
     MAX_BOMBS: int = struct.field(pytree_node=False, default=4)
@@ -213,7 +213,11 @@ class StarGunnerState(struct.PyTreeNode):
     explosion_y: chex.Array
     explosion_timer: chex.Array
     explosion_active: chex.Array
+    explosion_frag_vx: chex.Array
+    explosion_frag_vy: chex.Array
 
+    player_frag_vx: chex.Array
+    player_frag_vy: chex.Array
     player_explosion_x: chex.Array
     player_explosion_y: chex.Array
     player_explosion_timer: chex.Array
@@ -429,6 +433,8 @@ class JaxStarGunner(
             prev_player_x=start_x,
             prev_player_y=start_y,
             previous_action=jnp.array(0, jnp.int32),
+            player_frag_vx=jnp.zeros((4,), jnp.float32),
+            player_frag_vy=jnp.zeros((4,), jnp.float32),
             bullet_x=jnp.zeros((self.consts.MAX_BULLETS,), jnp.float32),
             bullet_y=jnp.zeros((self.consts.MAX_BULLETS,), jnp.float32),
             bullet_vx=jnp.zeros((self.consts.MAX_BULLETS,), jnp.float32),
@@ -455,6 +461,8 @@ class JaxStarGunner(
             explosion_y=jnp.zeros((n,), jnp.float32),
             explosion_timer=jnp.zeros((n,), jnp.int32),
             explosion_active=jnp.zeros((n,), jnp.bool_),
+            explosion_frag_vx=jnp.zeros((n, 4), jnp.float32),
+            explosion_frag_vy=jnp.zeros((n, 4), jnp.float32),
             player_explosion_x=jnp.array(0.0, jnp.float32),
             player_explosion_y=jnp.array(0.0, jnp.float32),
             player_explosion_timer=jnp.array(0, jnp.int32),
@@ -922,6 +930,10 @@ class JaxStarGunner(
                 & state.bomb_active
         )
         damaged = vulnerable & (enemy_touch | jnp.any(bomb_each))
+        angles = jnp.array([jnp.pi/4, 3*jnp.pi/4, 5*jnp.pi/4, 7*jnp.pi/4])
+        p_frag_speed = 1.2
+        new_p_frag_vx = jnp.where(damaged, jnp.cos(angles) * p_frag_speed, state.player_frag_vx)
+        new_p_frag_vy = jnp.where(damaged, jnp.sin(angles) * p_frag_speed, state.player_frag_vy)
 
 
         p_exp_active = state.player_explosion_active | damaged
@@ -938,6 +950,19 @@ class JaxStarGunner(
         should_have = new_score // self.consts.EXTRA_LIFE_THRESHOLD
         new_extra = jnp.minimum(should_have, self.consts.MAX_LIVES - self.consts.PLAYER_LIVES_START)
         gained_lives = jnp.maximum(new_extra - state.extra_lives_earned, 0)
+
+        angles = jnp.array([jnp.pi/4, 3*jnp.pi/4, 5*jnp.pi/4, 7*jnp.pi/4])
+        frag_speed = 1.5
+        new_frag_vx = jnp.where(
+            enemy_hit[:, None],
+            jnp.cos(angles)[None, :] * frag_speed,
+            state.explosion_frag_vx,
+        )
+        new_frag_vy = jnp.where(
+            enemy_hit[:, None],
+            jnp.sin(angles)[None, :] * frag_speed,
+            state.explosion_frag_vy,
+        )
 
         return (
             state.replace(
@@ -958,6 +983,10 @@ class JaxStarGunner(
                 explosion_timer=exp_timer,
                 explosion_x=exp_x,
                 explosion_y=exp_y,
+                explosion_frag_vx=new_frag_vx,
+                explosion_frag_vy=new_frag_vy,
+                player_frag_vx=new_p_frag_vx,
+                player_frag_vy=new_p_frag_vy,
                 player_explosion_active=p_exp_active,
                 player_explosion_timer=p_exp_timer,
                 player_explosion_x=p_exp_x,
@@ -1456,7 +1485,7 @@ class StarGunnerRenderer:
             state.bobo_x,
             c.BOBO_Y,
             BOBO_SPRITE,
-            jnp.array([180, 60, 220], jnp.uint8),
+            jnp.array([223, 130, 25], jnp.uint8),
         )
 
         # Bombs
@@ -1500,23 +1529,18 @@ class StarGunnerRenderer:
                     return draw_sprite(img, state.enemy_x[i], edy[i], sprite, color)
 
                 def reforming_fn(_):
+                    progress = 1.0 - (timer_val / c.REFORM_FRAMES)  # 0->1
                     etype = state.enemy_type[i]
-                    saucer_color = jnp.array(c.ENEMY_COLOR_SAUCER, jnp.uint8)
-                    color = jax.lax.switch(
-                        etype,
-                        [lambda: saucer_color,
-                         lambda: ENEMY_COLOR[BUZZIE],
-                         lambda: ENEMY_COLOR[SQUEEZER]],
-                    )
-                    sprite = jax.lax.switch(etype,
-                                            [lambda: SAUCER_SPRITE, lambda: BUZZIE_SPRITE, lambda: SQUEEZER_SPRITE])
-                    flicker = (timer_val % 4) < 2
-                    return jax.lax.cond(
-                        flicker,
-                        lambda _: draw_sprite(img, state.enemy_x[i], edy[i], sprite, color),
-                        lambda _: img,
-                        operand=None,
-                    )
+                    color = jax.lax.switch(etype, [lambda: jnp.array(c.ENEMY_COLOR_SAUCER, jnp.uint8),
+                                                   lambda: ENEMY_COLOR[BUZZIE], lambda: ENEMY_COLOR[SQUEEZER]])
+                    angles = jnp.array([jnp.pi / 4, 3 * jnp.pi / 4, 5 * jnp.pi / 4, 7 * jnp.pi / 4])
+                    spread = 12.0 * (1.0 - progress)
+                    img_local = img
+                    for f in range(4):
+                        fx = state.enemy_x[i] + jnp.cos(angles[f]) * spread
+                        fy = edy[i] + jnp.sin(angles[f]) * spread
+                        img_local = draw_rect(img_local, fx, fy, 2, 2, color)
+                    return img_local
 
                 def empty_fn(_):
                     return img
@@ -1540,40 +1564,29 @@ class StarGunnerRenderer:
 
         # Enemy explosions
         for i in range(c.NUM_ENEMIES):
-            size = jnp.where(
-                state.explosion_active[i],
-                c.EXPLOSION_SIZE + (c.EXPLOSION_DURATION - state.explosion_timer[i]),
-                0,
-            )
-            col = jnp.where(
-                state.explosion_timer[i] > 6,
-                jnp.array([255, 220, 0], jnp.uint8),
-                jnp.array([255, 80, 0], jnp.uint8),
-            )
-            img = draw_rect(
-                img, state.explosion_x[i], state.explosion_y[i], size, size, col
-            )
+            elapsed = c.EXPLOSION_DURATION - state.explosion_timer[i]
+            for f in range(4):
+                fx = state.explosion_x[i] + state.explosion_frag_vx[i, f] * elapsed
+                fy = state.explosion_y[i] + state.explosion_frag_vy[i, f] * elapsed
+                active = state.explosion_active[i]
+                col = jnp.where(
+                    state.explosion_timer[i] > 6,
+                    jnp.array([255, 220, 0], jnp.uint8),
+                    jnp.array([255, 80, 0], jnp.uint8),
+                )
+                w = jnp.where(active, 2, 0)
+                img = draw_rect(img, fx, fy, w, w, col)
 
         # Player explosion
-        p_size = jnp.where(
-            state.player_explosion_active,
-            c.PLAYER_EXPLOSION_SIZE
-            + (c.PLAYER_EXPLOSION_DURATION - state.player_explosion_timer),
-            0,
-        )
-        p_col = jnp.where(
-            state.player_explosion_timer > (c.PLAYER_EXPLOSION_DURATION // 2),
-            jnp.array([255, 240, 80], jnp.uint8),
-            jnp.array([255, 60, 20], jnp.uint8),
-        )
-        img = draw_rect(
-            img,
-            state.player_explosion_x,
-            state.player_explosion_y,
-            p_size,
-            p_size,
-            p_col,
-        )
+        p_elapsed = c.PLAYER_EXPLOSION_DURATION - state.player_explosion_timer
+        for f in range(4):
+            fx = state.player_explosion_x + state.player_frag_vx[f] * p_elapsed
+            fy = state.player_explosion_y + state.player_frag_vy[f] * p_elapsed
+            w = jnp.where(state.player_explosion_active, 2, 0)
+            col = jnp.where(state.player_explosion_timer > 8,
+                            jnp.array([255, 240, 80], jnp.uint8),
+                            jnp.array([255, 60, 20], jnp.uint8))
+            img = draw_rect(img, fx, fy, w, w, col)
 
         # Player ship
         show = (state.invuln_timer <= 0) | ((state.step_counter // 4) % 2 == 0)
@@ -1681,7 +1694,7 @@ if __name__ == "__main__":
     import matplotlib.pyplot as plt
     import matplotlib.animation as animation
 
-    env = JaxStarGunner()
+    env = JaxStarGunner(start_in_play=False)
     _, g_state = env.reset(jax.random.PRNGKey(0))
     held = {"up": False, "down": False, "left": False, "right": False, "fire": False}
 
