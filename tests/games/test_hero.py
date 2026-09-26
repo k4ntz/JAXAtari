@@ -535,16 +535,17 @@ def test_levels_4_to_16_data_present():
                           (HL.BG_RLE_L13, HL.PALETTE_L13, 16),
                           (HL.BG_RLE_L14, HL.PALETTE_L14, 16),
                           (HL.BG_RLE_L15, HL.PALETTE_L15, 16),
-                          (HL.BG_RLE_L16, HL.PALETTE_L16, 16)]:
+                          (HL.BG_RLE_L16, HL.PALETTE_L16, 16),
+                          (HL.BG_RLE_L17, HL.PALETTE_L17, 16)]:
         assert len(blobs) == n
         for b in blobs:
             assert HL.decode_bg(b, pal).shape == (142, 160, 3)
     # Every level's way down starts with the room-0 central pillar. Levels
-    # 1-16 have been rebuilt from the ROM and state it on the band grid (rows
+    # 1-17 have been rebuilt from the ROM and state it on the band grid (rows
     # 16-98, the ceiling and middle cells a stick takes together).
-    for lv in range(16):
+    for lv in range(17):
         assert (0, 60, 16, 8, 83, 1) in HL.DESTRUCTIBLE[lv], f"level {lv + 1}"
-    for lv in range(16):
+    for lv in range(17):
         assert HL.MINER_POS[lv][0] < HL.ROOMS_PER_LEVEL[lv]
 
 

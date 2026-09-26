@@ -268,6 +268,45 @@ def _snake_pose(length, head_down):
                      ).astype(jnp.int32)
 
 
+# --- The water tentacle (kind 5; measured on the ROM 2026-09-26, level 17
+# room 11, the first one in the game) --------------------------------------
+# A light-blue curl that rises out of the liquid and sinks back on a
+# 64-frame cycle locked to ROOM ENTRY: five poses 4, 6, 9, 10 and 12 rows
+# tall, all standing on row 137, in the order 0 1 2 3 4 3 2 1, each held 8
+# frames (pose 0 until frame 8 after the transition, entered from either
+# side). It does not patrol: it FOLLOWS the hero. Its left edge steps one
+# pixel toward his x every 4 frames (on room_timer % 4 == 1), clamped to the
+# water it swims in (HL.CREATURE_TRACK: level 17 room 11, x 29-121 over the
+# '~' cells at x 28-127), and it starts at his entry x, clamped - x 121
+# coming in by the right edge, x 29 by the left (both measured). Hero parked
+# at x 91 it settled at x 91; at x 17 and x 157 it waited at the clamps.
+_TENT_SEQ = (0, 1, 2, 3, 4, 3, 2, 1)
+_TENT_H = (4, 6, 9, 10, 12)
+_TENT_BOTTOM = 138                  # one past the lowest row it is drawn on
+_TENT_HOLD = 8
+_TENT_STEP = 4                      # frames per pixel of pursuit
+
+
+def _tentacle_pose(room_timer):
+    """Pose index 0-4 of every tentacle on this frame of the room visit."""
+    seq = jnp.array(_TENT_SEQ, jnp.int32)
+    return seq[(room_timer // _TENT_HOLD) % len(_TENT_SEQ)]
+
+
+def _tentacle_box(room_timer):
+    """(top row, height) of a tentacle on this frame: it grows upwards."""
+    h = jnp.array(_TENT_H, jnp.int32)[_tentacle_pose(room_timer)]
+    return _TENT_BOTTOM - h, h
+
+
+def _tentacle_follow(c, lvl, tent_x, hero_x, room_timer, entered):
+    """Every slot's tentacle x after this frame (see _TENT_SEQ above)."""
+    target = jnp.clip(hero_x, c.SPIDER_TRACK_LO[lvl], c.SPIDER_TRACK_HI[lvl])
+    tick = (room_timer % _TENT_STEP) == 1
+    stepped = tent_x + jnp.where(tick, jnp.sign(target - tent_x), 0)
+    return jnp.where(entered, target, stepped).astype(jnp.int32)
+
+
 def _creature_pos(c, lvl, step):
     """(x, y) of every creature slot of a level on a given frame.
 
@@ -322,6 +361,10 @@ def _build_level_arrays():
     sp_hold = np.ones((nL, nS), np.int32)          # frames per drawn pose
     sp_poses = np.zeros((nL, nS), np.int32)        # distinct sprites, 0 = kind's
     sp_patrol_half = np.full((nL, nS), _DEFAULT_PATROL_HALF, np.int32)
+    # a tentacle's pursuit range, left-edge x (HL.CREATURE_TRACK); other
+    # kinds never read it
+    sp_track_lo = np.zeros((nL, nS), np.int32)
+    sp_track_hi = np.zeros((nL, nS), np.int32)
     nD = _MAX_DWALLS
     dw = np.zeros((nL, nD, 6), np.int32)          # room, x, y, w, h, dyn_ok
     dw_valid = np.zeros((nL, nD), bool)
@@ -405,6 +448,11 @@ def _build_level_arrays():
             # measured STILL creature counts 1 and so is drawn as one bitmap
             # - the pose clock still ticks, it just has nowhere to go.
             sp_poses[li, si] = HL.CREATURE_SPRITES.get((li + 1, si), 0)
+            assert (kind == 5) == ((li + 1, si) in HL.CREATURE_TRACK), \
+                "every tentacle, and only a tentacle, has a pursuit range"
+            if kind == 5:
+                sp_track_lo[li, si], sp_track_hi[li, si] = \
+                    HL.CREATURE_TRACK[(li + 1, si)]
         for gi, (rm, x, y) in enumerate(HL.LANTERNS[li]):
             lan[li, gi] = (rm, x, y)
             lan_valid[li, gi] = True
@@ -517,6 +565,7 @@ def _build_level_arrays():
                 sp_bob=sp_bob, sp_bob_half=sp_bob_half, sp_hold=sp_hold,
                 sp_poses=sp_poses,
                 sp_bob_base=sp_bob_base, sp_patrol_half=sp_patrol_half,
+                sp_track_lo=sp_track_lo, sp_track_hi=sp_track_hi,
                 dw=dw, dw_valid=dw_valid,
                 dw_group=dw_group, dw_scores=dw_scores,
                 lan=lan, lan_valid=lan_valid, de=de, de_valid=de_valid,
@@ -799,6 +848,11 @@ class HeroConstants(AutoDerivedConstants):
         default_factory=lambda: jnp.array(_LV["sp_patrol_half"], dtype=jnp.int32))
     SPIDER_VALID: jnp.ndarray = struct.field(pytree_node=False,
         default_factory=lambda: jnp.array(_LV["sp_valid"], dtype=jnp.bool_))
+    # the water tentacle's pursuit range (kind 5, HL.CREATURE_TRACK)
+    SPIDER_TRACK_LO: jnp.ndarray = struct.field(pytree_node=False,
+        default_factory=lambda: jnp.array(_LV["sp_track_lo"], dtype=jnp.int32))
+    SPIDER_TRACK_HI: jnp.ndarray = struct.field(pytree_node=False,
+        default_factory=lambda: jnp.array(_LV["sp_track_hi"], dtype=jnp.int32))
     LANTERN: jnp.ndarray = struct.field(pytree_node=False,
         default_factory=lambda: jnp.array(_LV["lan"], dtype=jnp.int32))
     LANTERN_VALID: jnp.ndarray = struct.field(pytree_node=False,
@@ -955,6 +1009,7 @@ class HeroState:
     raft_dir: chex.Array          # -1 / +1: the way it goes when next ridden
     room_timer: chex.Array        # frames since this room was entered (mouths)
     mouth_open: chex.Array        # died in this room: its mouths stay open
+    tentacle_x: chex.Array        # (num_spiders,) a tentacle's x (kind 5)
     step_counter: chex.Array
     game_over: chex.Array
     rng_key: chex.PRNGKey
@@ -1057,6 +1112,8 @@ class JaxHero(JaxEnvironment[HeroState, HeroObservation, HeroInfo, HeroConstants
             raft_dir=jnp.where(c.RAFT_START[0] >= c.raft_max_x, -1, 1).astype(jnp.int32),
             room_timer=jnp.array(0, dtype=jnp.int32),
             mouth_open=jnp.array(False, dtype=jnp.bool_),
+            tentacle_x=jnp.clip(jnp.int32(c.spawn_x), c.SPIDER_TRACK_LO[0],
+                                c.SPIDER_TRACK_HI[0]).astype(jnp.int32),
             step_counter=jnp.array(0, dtype=jnp.int32),
             game_over=jnp.array(False, dtype=jnp.bool_),
             rng_key=key,
@@ -1083,7 +1140,10 @@ class JaxHero(JaxEnvironment[HeroState, HeroObservation, HeroInfo, HeroConstants
         however its kind usually behaves. Plus the measured horizontal
         patrol (halfwidth 0 = no patrol).
         """
-        return _creature_pos(self.consts, state.level, state.step_counter)
+        c = self.consts
+        x, y = _creature_pos(c, state.level, state.step_counter)
+        return (jnp.where(c.SPIDER_KIND[state.level] == 5, state.tentacle_x, x),
+                y)
 
     def _dwall_rects(self, state):
         """Solid rect of every destructible wall of the level: intact = the
@@ -1373,10 +1433,22 @@ class JaxHero(JaxEnvironment[HeroState, HeroObservation, HeroInfo, HeroConstants
         # is the only way down). It stays lethal on contact and stays immune
         # to the laser.
         sp_x, sp_y = self._spider_pos(state)
+        # the tentacle (kind 5) follows the hero on the room's own clock
+        tent_entered = new_room != state.room
+        tent_timer = jnp.where(tent_entered, 0, state.room_timer + 1)
+        tentacle_x = _tentacle_follow(c, lvl, state.tentacle_x, new_x,
+                                      tent_timer, tent_entered)
+        is_tent = c.SPIDER_KIND[lvl] == 5
+        sp_x = jnp.where(is_tent, tentacle_x, sp_x)
+        tent_y, tent_h = _tentacle_box(tent_timer)
         sp_room = c.SPIDER_ROOM[lvl]
         is_magma = c.SPIDER_KIND[lvl] == 2
-        laser_killable = ~is_magma
-        blast_killable = c.SPIDER_KIND[lvl] != 3          # snakes sit in rock
+        # The water tentacle is proof against both weapons: "As one cannot
+        # shoot it" (the Activision manual), and on the ROM a stick blown on
+        # level 17 room 11's ledge, the tentacle 1-7 px from it, took the
+        # rock pillar beside it and left the tentacle (2026-09-26).
+        laser_killable = ~is_magma & ~is_tent
+        blast_killable = (c.SPIDER_KIND[lvl] != 3) & ~is_tent   # snakes sit in rock
         sp_here = state.spider_alive & (sp_room == new_room)
         # A spider's body hangs under a thread, so only the rows from
         # spider_body_top down are it. A BAT is body all the way: 11 rows of
@@ -1401,6 +1473,9 @@ class JaxHero(JaxEnvironment[HeroState, HeroObservation, HeroInfo, HeroConstants
                                      jnp.where(is_free, c.free_spider_height,
                                                c.spider_height
                                                - c.spider_body_top)))
+        # a tentacle is as tall as the pose it is in, standing on row 137
+        body_y = jnp.where(is_tent, tent_y, body_y)
+        body_h = jnp.where(is_tent, tent_h, body_h)
         body_w = jnp.where(is_snake, _snake_length(state.step_counter,
                                                    c.SPIDER_HOLD[lvl]),
                            c.spider_width)
@@ -1445,7 +1520,12 @@ class JaxHero(JaxEnvironment[HeroState, HeroObservation, HeroInfo, HeroConstants
         tb_y = jnp.where(kind_l == 2, sp_y + c.spider_body_top + 1, body_y)
         tb_w = jnp.where(kind_l == 2, 3, body_w)
         tb_h = jnp.where(kind_l == 2, 4, body_h)
-        touching = (sp_here & drawn &
+        # The water tentacle does NOT kill on touch: on the ROM (level 17 room
+        # 11, 2026-09-26) it was drawn over the hovering hero's legs and suit
+        # for 330 of 400 frames at four heights and he lived, while the bat
+        # and the liquid killed him in the same set-up. What kills there is
+        # the liquid it stands in.
+        touching = (sp_here & drawn & ~is_tent &
                     self._aabb(new_x, new_y, c.player_width, c.player_height,
                                tb_x, tb_y, tb_w, tb_h))
         # Touching a creature kills the HERO, and holding fire does not save
@@ -1695,6 +1775,7 @@ class JaxHero(JaxEnvironment[HeroState, HeroObservation, HeroInfo, HeroConstants
             raft_dir=final_raft_dir,
             room_timer=final_room_timer,
             mouth_open=final_mouth_open,
+            tentacle_x=tentacle_x,
             step_counter=new_step,
             game_over=game_over,
             rng_key=state.rng_key,
@@ -1746,6 +1827,10 @@ class JaxHero(JaxEnvironment[HeroState, HeroObservation, HeroInfo, HeroConstants
                                               c.free_spider_height,
                                               c.spider_height
                                               - c.spider_body_top)))
+        obs_is_tent = c.SPIDER_KIND[lvl] == 5
+        obs_tent_y, obs_tent_h = _tentacle_box(state.room_timer)
+        obs_y = jnp.where(obs_is_tent, obs_tent_y, obs_y)
+        obs_h = jnp.where(obs_is_tent, obs_tent_h, obs_h)
         obs_w = jnp.where(obs_is_snake,
                           _snake_length(state.step_counter,
                                         c.SPIDER_HOLD[state.level]),
@@ -1879,6 +1964,7 @@ _ART_PALETTE = {
     'y': (252, 252, 84),      # miner lamp spark / lamp glow (#fcfc54)
     'b': (45, 87, 176),       # HUD mini-hero suit blue
     'K': (50, 132, 50),       # level-2 breakable pillar / wall snake fringe
+    't': (101, 183, 217),     # the water tentacle (level 17, measured)
 }
 
 # Roderick (facing right), 9 wide x 24 tall. Built from stacked sections:
@@ -2129,6 +2215,25 @@ _SPIDER_FREE_ART2 = [        # body up, legs gathered below - two rows lower
     ".......",
     ".......",
 ]
+
+# The water tentacle (kind 5), its five poses exactly as the ROM draws them
+# at level 17 room 11 (2026-09-26), in its one colour (101, 183, 217), on
+# the 7x12 creature canvas, standing on its bottom row (see _TENT_SEQ).
+_TENTACLE_POSES = [
+    ["..##..", ".##.#.", "##...#", "##...#"],
+    ["..###..", ".##.##.", "##...##", "#.....#", "##...#.", "##...#."],
+    ["..###..", ".##.##.", ".#...#.", "##...##", "#.....#", "#..#.##",
+     "##..##.", ".#.....", ".#....."],
+    ["..###..", ".##.##.", "##...##", "#..#..#", "#.#..##", "#.#..#.",
+     "#..##..", "##.....", ".##.##.", ".##.##."],
+    ["..###..", ".#...#.", "##.#..#", "#.#.#.#", "#.#...#", "#.#..#.",
+     "#..##..", "##.....", ".#..##.", ".#..##.", ".#.####", ".#.####"],
+]
+_TENTACLE_ARTS = [
+    ["......."] * (12 - len(p)) + [r.ljust(7, ".").replace("#", "t") for r in p]
+    for p in _TENTACLE_POSES
+]
+assert [len(p) for p in _TENTACLE_POSES] == list(_TENT_H)
 
 # Magma block: a red block of the cave, drawn here as a glowing column.
 # Static, lethal on contact, immune to the laser, but a stick of dynamite
@@ -2411,6 +2516,9 @@ class HeroRenderer(JAXGameRenderer):
             {'name': 'spider2', 'type': 'procedural', 'data': self._sprite(_SPIDER_ART2)},
             {'name': 'spiderfree', 'type': 'procedural', 'data': self._sprite(_SPIDER_FREE_ART)},
             {'name': 'spiderfree2', 'type': 'procedural', 'data': self._sprite(_SPIDER_FREE_ART2)},
+            *({'name': f'tentacle{i}', 'type': 'procedural',
+               'data': self._sprite(art)}
+              for i, art in enumerate(_TENTACLE_ARTS)),
             {'name': 'bat', 'type': 'procedural', 'data': self._sprite(_BAT_ART)},
             {'name': 'bat2', 'type': 'procedural', 'data': self._sprite(_BAT_ART2)},
             {'name': 'bat3', 'type': 'procedural', 'data': self._sprite(_BAT_ART3)},
@@ -2509,9 +2617,10 @@ class HeroRenderer(JAXGameRenderer):
             _cycle("magma"),
             _cycle(*(f"snake{i}" for i in range(_SNAKE_POSES))),
             _cycle("spiderfree", "spiderfree2"),
+            _cycle(*(f"tentacle{i}" for i in range(len(_TENTACLE_ARTS)))),
         ])
-        self.CREATURE_POSES = jnp.array([2, 4, 1, _SNAKE_POSES, 2],
-                                        dtype=jnp.int32)
+        self.CREATURE_POSES = jnp.array([2, 4, 1, _SNAKE_POSES, 2,
+                                         len(_TENTACLE_ARTS)], dtype=jnp.int32)
         self.BLACK_ID = jnp.asarray(self.COLOR_TO_ID[(0, 0, 0)])
         # room backgrounds as colour-id masks, same dtype as the raster they
         # are slotted into: decode each RLE screen to palette INDICES (via an
@@ -2747,6 +2856,9 @@ class HeroRenderer(JAXGameRenderer):
         # and draws nothing at all while it is pulled in.
         kind = c.SPIDER_KIND[lvl]
         sx, sy = _creature_pos(c, lvl, state.step_counter)
+        # a tentacle is where it has followed the hero to, and its pose runs
+        # on the room's clock (see _TENT_SEQ)
+        sx = jnp.where(kind == 5, state.tentacle_x, sx)
         snake_frame = _snake_pose(_snake_length(state.step_counter,
                                                 c.SPIDER_HOLD[lvl]),
                                   _snake_head_down(state.step_counter))
@@ -2758,7 +2870,8 @@ class HeroRenderer(JAXGameRenderer):
                           c.SPIDER_POSES[lvl], self.CREATURE_POSES[kind])
         anim_frame = jnp.where(
             kind == 3, snake_frame,
-            (state.step_counter // c.SPIDER_HOLD[lvl]) % poses)
+            jnp.where(kind == 5, _tentacle_pose(state.room_timer),
+                      (state.step_counter // c.SPIDER_HOLD[lvl]) % poses))
         sp_room = c.SPIDER_ROOM[lvl]
         for i in range(c.num_spiders):
             raster = maybe(state.spider_alive[i] & (sp_room[i] == room),
