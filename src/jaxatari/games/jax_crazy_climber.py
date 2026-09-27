@@ -1984,7 +1984,10 @@ class JaxCrazyClimber(JaxEnvironment[CrazyClimberState, CrazyClimberObservation,
             & ~state.tower_state.is_falling
             & (state.helicopter_state.fly_away_state == HeliFlyAwayStates.NORMAL)
         )
-        return state.replace(player_move_state=player.replace(should_fall=player.should_fall | hit))
+        return state.replace(
+            player_move_state=player.replace(should_fall=player.should_fall | hit),
+            bonus=jnp.where(hit, jnp.maximum(state.bonus - 100, 0), state.bonus),
+        )
 
     @partial(jax.jit, static_argnums=(0,))
     def _bonus_step(self, state: CrazyClimberState) -> CrazyClimberState: 
