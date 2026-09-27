@@ -116,7 +116,7 @@ class DonkeyKongConstants(AutoDerivedConstants):
     GAME_FREEZE_DURATION: int = struct.field(pytree_node=False, default=70)
 
     # If mario reaches that height on the ladder, game round is cleared
-    LEVEL_1_GOAL_X: int = struct.field(pytree_node=False, default=40)
+    LEVEL_1_GOAL_X: int = struct.field(pytree_node=False, default=26)
 
     # Mario sprite indexes
     MARIO_WALK_SPRITE_0: int = struct.field(pytree_node=False, default=0)
