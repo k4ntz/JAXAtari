@@ -1044,15 +1044,20 @@ class StarGunnerRenderer:
 
     def _blit_number_spaced(self, img, value, x0, y0, color, ndigits=4, spacing=10):
         clear_width = ndigits * spacing
-        img = img.at[y0 : y0 + 7, x0 : x0 + clear_width].set(jnp.array([0, 0, 0], jnp.uint8))
+        img = img.at[y0: y0 + 7, x0: x0 + clear_width].set(jnp.array([0, 0, 0], jnp.uint8))
         for i in range(ndigits):
             place = 10 ** (ndigits - 1 - i)
             d = (value // place) % 10
             glyph = self.digit_font[d]
             xi = x0 + i * spacing
-            img = img.at[y0 : y0 + 7, xi : xi + 5].set(
-                jnp.where(glyph[..., None] > 0, color, img[y0 : y0 + 7, xi : xi + 5])
+            # Only draw if this digit is significant OR it is the ones digit
+            should_show = (value >= place) | (i == ndigits - 1)
+            masked = jnp.where(
+                should_show & (glyph[..., None] > 0),
+                color,
+                img[y0: y0 + 7, xi: xi + 5],
             )
+            img = img.at[y0: y0 + 7, xi: xi + 5].set(masked)
         return img
 
     def _background(self, state):
