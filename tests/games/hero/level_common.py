@@ -219,7 +219,7 @@ def check_creatures_are_sane(level):
     """
     for slot, (room, x, y, patrol, kind) in enumerate(HL.SPIDERS[level - 1]):
         # 0 hanging spider, 1 bat, 3 wall snake, 4 untethered spider,
-        # 5 water tentacle (level 17 room 11, 2026-09-26)
+        # 5 water tentacle (level 17 room 11 and level 18 room 11, 2026-09-26)
         assert kind in (0, 1, 3, 4, 5), \
             f"level {level}: unexpected creature kind {kind}"
         assert (kind == 5) == ((level, slot) in HL.CREATURE_TRACK), (

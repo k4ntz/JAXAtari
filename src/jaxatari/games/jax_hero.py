@@ -596,6 +596,15 @@ class HeroConstants(AutoDerivedConstants):
     spawn_y: int = struct.field(pytree_node=False, default=HL.SPAWN[1])
     respawn_x: int = struct.field(pytree_node=False, default=HL.RESPAWN[0])
     respawn_y: int = struct.field(pytree_node=False, default=HL.RESPAWN[1])
+    # Where the respawn drop stops after a death in the FLOOR band - killed
+    # by a floor-band creature or by the liquid: PY 34 (= y 101), just under
+    # the corridor band, in the column he died in. A death in the corridor
+    # band stops at respawn_y as before. Measured on the ROM 2026-09-26/27,
+    # level 18 rooms 6, 11, 12 and 14 and level 15 room 10: 12 deaths, the
+    # height always the band of what killed him (room 11: corridor spider,
+    # hero pinned as low as sy 87 -> y 62; room 6: floor bat, sy 86 -> y 101),
+    # straight through any wall above (room 12's magma, room 10's rock).
+    respawn_low_y: int = struct.field(pytree_node=False, default=101)
 
     # Room flip thresholds (player TOP y; the flip happens when the measured
     # centre row crosses the screen edge: centre = top + 11).
@@ -1482,9 +1491,19 @@ class JaxHero(JaxEnvironment[HeroState, HeroObservation, HeroInfo, HeroConstants
         # a 0-wide box overlaps nothing, which _aabb's strict inequalities do
         # not say on their own
         drawn = body_w > 0
+        # The LASER takes a hanging spider anywhere on its drawn sprite, the
+        # thread included - not only the body under it. Measured on the ROM
+        # 2026-09-26, bolt row by row: level 18 room 11's spider (rows 70-80)
+        # dies to a bolt on rows 70-79+ and lives at 68-69 and 82; room 12's
+        # floor spider (rows 109-119) dies to rows 109-117 and lives at 108.
+        # That floor spider can only be shot through its thread: the lowest
+        # the hero can fly, feet on the water, puts his bolt above its body.
+        is_hang = c.SPIDER_KIND[lvl] == 0
+        laser_y = jnp.where(is_hang, sp_y, body_y)
+        laser_h = jnp.where(is_hang, c.spider_height, body_h)
         spider_laser = (laser_on & sp_here & laser_killable & drawn &
                         self._aabb(lx, ly, c.laser_bolt_length, c.laser_height,
-                                   sp_x, body_y, body_w, body_h))
+                                   sp_x, laser_y, body_w, laser_h))
         spider_blast = (state.spider_alive & blast_killable & drawn &
                         (sp_room == dyn_room) & explode_now &
                         self._aabb(ex, ey, ew, eh, sp_x, body_y,
@@ -1537,6 +1556,10 @@ class JaxHero(JaxEnvironment[HeroState, HeroObservation, HeroInfo, HeroConstants
         # creature instead; that was wrong.
         died_spider = ((state.invuln_timer <= 0) &
                        jnp.any(touching & (~spider_kill)))
+        # which band the fatal touch was in decides where he comes back
+        died_to_floor_creature = ((state.invuln_timer <= 0) &
+                                  jnp.any(touching & (~spider_kill) &
+                                          (c.SPIDER_Y[lvl] >= 99)))
         died_blast = blast_here & self._aabb(new_x, new_y, c.player_width, c.player_height,
                                              kx, ey, kw, eh)
 
@@ -1560,7 +1583,14 @@ class JaxHero(JaxEnvironment[HeroState, HeroObservation, HeroInfo, HeroConstants
         # --- magma: cave rock that burns (HERO_SPEC.md section 3) ---
         # It is solid because it is in the wall rects, so the hero can never
         # be INSIDE it - the only way to meet it is to end up against it.
-        # The lethal box is therefore the rect grown by one pixel all round.
+        # The lethal box is therefore the rect grown by one pixel at its sides
+        # and top. NOT underneath: flying up under a magma wall he stops with
+        # his head against it like any ceiling and hovers there, alive -
+        # measured on the ROM 2026-09-27, level 18 room 12: UP held on the
+        # raft under the sixteen-cell magma wall, he lifted off, rose to sy 107
+        # (y 99, the row under the magma) and hovered there for 100+ frames.
+        # So the hero's box here is the one walls use (the 2-row rotor shaft
+        # does not touch), and the magma rect is not grown downwards.
         # A magma column blasted out with a stick stops burning with it.
         mg = c.MAGMA_R[lvl]
         dwr = c.DESTRUCT[lvl]
@@ -1575,10 +1605,10 @@ class JaxHero(JaxEnvironment[HeroState, HeroObservation, HeroInfo, HeroConstants
         magma_alive = c.MAGMA_VALID[lvl] & (~jnp.any(covers, axis=0))
         died_magma = ((state.invuln_timer <= 0) &
                       jnp.any(magma_alive & (mg[:, 0] == new_room) &
-                              self._aabb(new_x, new_y, c.player_width,
-                                         c.player_height,
+                              self._aabb(new_x, new_y + 2, c.player_width,
+                                         c.player_height - 2,
                                          mg[:, 1] - 1, mg[:, 2] - 1,
-                                         mg[:, 3] + 2, mg[:, 4] + 2)))
+                                         mg[:, 3] + 2, mg[:, 4] + 1)))
 
         flr = c.FLARES_T[lvl]
         flare_period = jnp.maximum(1, flr[:, 5])
@@ -1660,16 +1690,21 @@ class JaxHero(JaxEnvironment[HeroState, HeroObservation, HeroInfo, HeroConstants
         # corridor height the ROM puts him in the rock anyway (in magma he
         # dies again); here he takes the nearest free column on that row,
         # searching out 4 px at a time, and the old fixed spots are the last
-        # resort.
+        # resort. A death in the FLOOR band (a floor creature, the liquid)
+        # stops the drop lower, at respawn_low_y, just under the corridor band
+        # and straight through any wall over it (measured 2026-09-26/27: on
+        # level 18 room 12, dead on the raft under the magma wall at x 70, he
+        # came back at x 70 under the wall, over the raft).
         rs_state = state.replace(room=new_room)
         dead_x = jnp.clip(new_x, 8, 160 - c.player_width).astype(jnp.int32)
         steps = jnp.arange(1, 38, dtype=jnp.int32)
         offs = jnp.concatenate([jnp.zeros((1,), jnp.int32),
                                 jnp.stack([-4 * steps, 4 * steps], axis=1).reshape(-1)])
         cand = dead_x + offs
+        died_low = died_to_floor_creature | died_deadly
+        rs_row = jnp.where(died_low, c.respawn_low_y, c.respawn_y).astype(jnp.int32)
         cand_ok = ((cand >= 8) & (cand <= 160 - c.player_width) &
-                   ~jax.vmap(lambda x: self._hits_wall(
-                       rs_state, x, jnp.int32(c.respawn_y)))(cand))
+                   ~jax.vmap(lambda x: self._hits_wall(rs_state, x, rs_row))(cand))
         any_ok = jnp.any(cand_ok)
         near_x = cand[jnp.argmax(cand_ok)]
         rs_bad_1 = self._hits_wall(rs_state, jnp.int32(c.respawn_x), jnp.int32(c.respawn_y))
@@ -1677,7 +1712,7 @@ class JaxHero(JaxEnvironment[HeroState, HeroObservation, HeroInfo, HeroConstants
         old_x = jnp.where(rs_bad_1, jnp.where(rs_bad_2, 76, c.spawn_x), c.respawn_x)
         old_y = jnp.where(rs_bad_1, jnp.where(rs_bad_2, 8, c.spawn_y), c.respawn_y)
         rs_x = jnp.where(any_ok, near_x, old_x)
-        rs_y = jnp.where(any_ok, c.respawn_y, old_y)
+        rs_y = jnp.where(any_ok, rs_row, old_y)
         final_x = jnp.where(advance, c.spawn_x,
                             jnp.where(respawned, rs_x, new_x)).astype(jnp.int32)
         final_y = jnp.where(advance, c.spawn_y,

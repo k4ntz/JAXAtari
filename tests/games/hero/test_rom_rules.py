@@ -438,7 +438,7 @@ def test_every_level_has_meltable_walls_and_keeps_its_edges(env):
 # magma wall. Keyed (level, room): level 16 has two, in rooms 11 and 13.
 RAFT_ROOMS = {(10, 13): 124, (11, 12): 28, (12, 14): 124, (13, 12): 124,
               (14, 12): 28, (15, 13): 124, (16, 11): 28, (16, 13): 28,
-              (17, 14): 124}
+              (17, 14): 124, (18, 12): 28}
 
 
 def test_the_rafts_are_the_eight_measured_ones():
@@ -451,13 +451,15 @@ def test_the_rafts_are_the_eight_measured_ones():
     the LEFT end (it descends right); the ROM keeps one raft x for the two
     and puts it back at the entry end on entering either (2026-09-25).
     Level 17 room 14's (2026-09-26), under a sixteen-cell magma wall, waits
-    at the RIGHT end: that level descends left."""
+    at the RIGHT end: that level descends left. Level 18 room 12's
+    (2026-09-26), under a sixteen-cell magma wall, waits at the LEFT end:
+    that level descends right."""
     assert HL.RAFT_ENDS == (28, 124)
     assert (HL.RAFT_Y, HL.RAFT_W, HL.RAFT_H) == (136, 8, 2)
-    got = {(lv + 1, rm): x for lv, r in enumerate(HL.RAFTS[:17]) for rm, x in r}
+    got = {(lv + 1, rm): x for lv, r in enumerate(HL.RAFTS[:18]) for rm, x in r}
     assert got == RAFT_ROOMS
-    # levels 18-20 are placeholders aliasing 14-16, so 18 carries 14's raft
-    assert HL.RAFTS[17:] == HL.RAFTS[13:16]
+    # levels 19-20 are placeholders aliasing 15-16 and carry their rafts
+    assert HL.RAFTS[18:] == HL.RAFTS[14:16]
 
 
 @pytest.mark.parametrize("level, room", sorted(RAFT_ROOMS))

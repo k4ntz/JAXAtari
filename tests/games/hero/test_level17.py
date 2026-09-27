@@ -374,7 +374,8 @@ def test_the_mouth_cycle_is_the_roms():
 def test_room_11_holds_the_one_tentacle():
     slot = _tentacle_slot()
     assert HL.SPIDERS[L - 1][slot] == (11, 29, 126, 0, 5)
-    assert HL.CREATURE_TRACK == {(L, slot): (29, 121)}
+    assert {k: v for k, v in HL.CREATURE_TRACK.items() if k[0] == L} == {
+        (L, slot): (29, 121)}
     assert HL.CREATURE_MOTION[(L, slot)] == (0, 0, 8)
     assert (L, slot) not in HL.CREATURE_PATROL
     floor = BANDS[TENTACLE_ROOM]["C"]
