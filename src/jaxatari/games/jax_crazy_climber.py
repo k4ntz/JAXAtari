@@ -204,9 +204,10 @@ class FlowerpotEnemyState:
     cycle_row: chex.Array
     drop_x_offset: chex.Array
     drop_type: chex.Array
+    resume_floor: chex.Array
 
     @classmethod
-    def new(cls, active: bool, phase_steps: int, window_row, window_col, cycle_row, drop_type):
+    def new(cls, active: bool, phase_steps: int, window_row, window_col, cycle_row, drop_type, resume_floor=0):
         return cls(
             active=jnp.array(active),
             phase=jnp.array(0, dtype=jnp.int32),
@@ -216,6 +217,7 @@ class FlowerpotEnemyState:
             cycle_row=cycle_row,
             drop_x_offset=jnp.array(0, dtype=jnp.int32),
             drop_type=drop_type,
+            resume_floor=jnp.asarray(resume_floor, dtype=jnp.int32),
         )
 
 class CrazyClimberState(struct.PyTreeNode):
@@ -562,17 +564,24 @@ class CrazyClimberConstants(struct.PyTreeNode):
     HELICOPTER_SEQUENCE: chex.Array = struct.field(pytree_node=False, default_factory=lambda:jnp.array([0,1,0,2]))
     HELICOPTER_SKIDS_SIZE: int = struct.field(pytree_node=False, default=22)
 
-    FLOWERPOT_SCORE_RANGES: jnp.ndarray = struct.field(
+    FLOWERPOT_LEVEL: int = struct.field(pytree_node=False, default=1)
+    FLOWERPOT_FLOOR_RANGES: jnp.ndarray = struct.field(
         pytree_node=False,
         default_factory=lambda: jnp.array(
             [
-                [2500, 5000],
-                [10000, 12500],
+                [25, 50],
+                [101, 125],
             ],
             dtype=jnp.int32,
         ),
     )
-    FLOWERPOT_MIN_CLIMBED_FLOORS: int = struct.field(pytree_node=False, default=25)
+    FLOWERPOT_SECTION_START_FLOORS: jnp.ndarray = struct.field(
+        pytree_node=False,
+        default_factory=lambda: jnp.array(
+            [0, 2, 15, 25, 35, 50, 58, 73, 81, 101, 113, 125, 133, 151, 161],
+            dtype=jnp.int32,
+        ),
+    )
     FLOWERPOT_PHASE_0_STEPS: int = struct.field(pytree_node=False, default=32)
     FLOWERPOT_DROP_TYPE_COUNT: int = struct.field(pytree_node=False, default=3)
     FLOWERPOT_DROP_LOOP_LENGTHS: jnp.ndarray = struct.field(
@@ -747,6 +756,7 @@ class JaxCrazyClimber(JaxEnvironment[CrazyClimberState, CrazyClimberObservation,
         state = self._step_counter(state)
         state = self._level_step(state)
         state = self._player_step(state, atari_action)
+        state = self._flowerpot_death_step(previous_state, state)
         state = self._tower_step(state)
 
         state = jax.lax.cond(state.level_state.condor_active,
@@ -1558,15 +1568,39 @@ class JaxCrazyClimber(JaxEnvironment[CrazyClimberState, CrazyClimberObservation,
         )
 
     @partial(jax.jit, static_argnums=(0,))
+    def _flowerpot_death_step(
+        self, previous_state: CrazyClimberState, state: CrazyClimberState,
+    ) -> CrazyClimberState:
+        death_started = (
+            (previous_state.player_move_state.falling_count == 0)
+            & (state.player_move_state.falling_count > 0)
+            & (state.level_state.current_level == self.consts.FLOWERPOT_LEVEL)
+        )
+        section_starts = self.consts.FLOWERPOT_SECTION_START_FLOORS
+        resume_index = jnp.searchsorted(
+            section_starts, previous_state.climbed_floors, side="right",
+        ) + 1
+        resume_floor = section_starts[jnp.minimum(resume_index, section_starts.shape[0] - 1)]
+        enemy = state.flowerpot_enemy_state
+        return state.replace(flowerpot_enemy_state=enemy.replace(
+            resume_floor=jnp.where(death_started, resume_floor, enemy.resume_floor),
+        ))
+
+    @partial(jax.jit, static_argnums=(0,))
     def _flowerpot_enemy_step(self, state: CrazyClimberState) -> CrazyClimberState:
-        score_ranges = self.consts.FLOWERPOT_SCORE_RANGES
-        score_in_flowerpot_range = jnp.any(
-            (state.score >= score_ranges[:, 0])
-            & (state.score < score_ranges[:, 1])
+        h = state.climbed_floors
+        floor_ranges = self.consts.FLOWERPOT_FLOOR_RANGES
+        floor_in_flowerpot_range = jnp.any(
+            (h >= floor_ranges[:, 0])
+            & (h < floor_ranges[:, 1])
         )
         flowerpot_area_active = (
-            score_in_flowerpot_range
-            & (state.climbed_floors >= self.consts.FLOWERPOT_MIN_CLIMBED_FLOORS)
+            (state.level_state.current_level == self.consts.FLOWERPOT_LEVEL)
+            & floor_in_flowerpot_range
+            & (h >= state.flowerpot_enemy_state.resume_floor)
+            & (state.player_move_state.falling_count == 0)
+            & ~jnp.asarray(state.tower_state.is_falling)
+            & ~jnp.asarray(state.player_move_state.should_fall)
         )
 
         def reset_flowerpot_enemy(s: CrazyClimberState) -> CrazyClimberState:
@@ -1578,6 +1612,7 @@ class JaxCrazyClimber(JaxEnvironment[CrazyClimberState, CrazyClimberObservation,
                     jnp.array(0, dtype=jnp.int32),
                     jnp.array(0, dtype=jnp.int32),
                     jnp.array(0, dtype=jnp.int32),
+                    resume_floor=s.flowerpot_enemy_state.resume_floor,
                 )
             )
 
@@ -1681,6 +1716,7 @@ class JaxCrazyClimber(JaxEnvironment[CrazyClimberState, CrazyClimberObservation,
                         selected_window[1],
                         selected_window[0],
                         selected_drop_type,
+                        resume_floor=s.flowerpot_enemy_state.resume_floor,
                     )
                 )
                 return protect_flowerpot_row(s)
@@ -1772,6 +1808,9 @@ class JaxCrazyClimber(JaxEnvironment[CrazyClimberState, CrazyClimberObservation,
             & (state.flowerpot_enemy_state.phase == 1)
             & (state.flowerpot_enemy_state.drop_x_offset == 0)
             & drop_collision
+            & (player_state.falling_count == 0)
+            & ~jnp.asarray(state.tower_state.is_falling)
+            & ~jnp.asarray(player_state.should_fall)
         )
 
         def deflect_drop(s: CrazyClimberState) -> CrazyClimberState:
@@ -1788,9 +1827,13 @@ class JaxCrazyClimber(JaxEnvironment[CrazyClimberState, CrazyClimberObservation,
                 ),
             )
 
+        def handle_hit(s: CrazyClimberState) -> CrazyClimberState:
+            s = s.replace(bonus=jnp.maximum(s.bonus - 100, 0))
+            return jax.lax.cond(can_deflect, deflect_drop, make_player_fall, s)
+
         return jax.lax.cond(
             collision_active,
-            lambda s: jax.lax.cond(can_deflect, deflect_drop, make_player_fall, s),
+            handle_hit,
             lambda s: s,
             state,
         )
@@ -2040,6 +2083,14 @@ class JaxCrazyClimber(JaxEnvironment[CrazyClimberState, CrazyClimberObservation,
             player_move_state=player_reset_state,
             level_state=level_reset_state,
             tower_state=tower_reset_state,
+            flowerpot_enemy_state=FlowerpotEnemyState.new(
+                False,
+                0,
+                jnp.array(0, dtype=jnp.int32),
+                jnp.array(0, dtype=jnp.int32),
+                jnp.array(0, dtype=jnp.int32),
+                jnp.array(0, dtype=jnp.int32),
+            ),
             climbed_floors=0,
             bonus=bonus_reset,
         )
