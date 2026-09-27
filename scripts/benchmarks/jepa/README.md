@@ -177,6 +177,21 @@ On Seaquest and Breakout the frozen encoder plateaus well below the scratch CNN,
 and fine-tuning does not close the gap — which rules out the obvious explanation
 that the frozen encoder is merely stale with respect to the improving policy.
 
+**Against published PPO** (Schulman et al. 2017, Table 6: last-100-episode mean
+after 40M frames = 10M timesteps, i.e. **10x the budget used here**).
+
+| game | best here (1M) | published PPO (10M) | ratio |
+|---|---|---|---|
+| pong | 17.2 | 20.7 | 0.83 |
+| seaquest | 949 | 1204.5 | 0.79 |
+| breakout | 40.8 | 274.8 | **0.15** |
+
+Pong and Seaquest reach ~4/5 of the published score on 1/10 of the interaction,
+which is what a correct implementation stopped early should look like. Breakout is
+the outlier, and it is also the game where the frozen representation does worst —
+consistent with the frame-stacking limitation noted below, though the budget and
+the representation are not separated here.
+
 ## Known limitations
 
 - **Budget.** Agents are trained for 1M steps against a 200M-step reference. The

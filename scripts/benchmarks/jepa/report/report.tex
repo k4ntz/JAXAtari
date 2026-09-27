@@ -538,33 +538,47 @@ the gap at this setting" rather than as a general statement about fine tuning.
 \subsection{Comparison against published scores}
 
 The lab guidelines ask for a comparison against reported PPO scores from the
-original ALE implementation. The relevant numbers should be taken from the source
-linked in the guidelines and inserted here.
+original ALE implementation. The source they link is the original PPO paper of
+Schulman et al. (2017), whose Table 6 reports mean final scores over the last one
+hundred episodes after forty million game frames, equivalently ten million
+timesteps at a frame skip of four.
 
 \begin{table}[h]
 \centering
-\caption{This work against published PPO scores. The published column must be
-filled from the source linked in the lab guidelines, and the step budgets differ
-by two orders of magnitude, which has to be stated alongside any comparison.}
+\caption{This work against the published PPO scores of Schulman et al. (2017),
+Table 6. The published column is measured at ten times the step budget used here,
+so the columns are not directly comparable and the ratio in the final column is
+given to make the size of that gap explicit rather than to hide it.}
 \label{tab:published}
-\begin{tabular}{lrrr}
+\begin{tabular}{lrrrr}
 \toprule
-Game & This work, scratch (1M steps) & This work, frozen LeWM (1M steps) & Published PPO \\
+Game & Scratch (1M) & Frozen LeWM (1M) & Published PPO (10M) & Best here / published \\
 \midrule
-Pong     & 15.3 & 17.2 & \todofill{published score} \\
-Seaquest & 949  & 571  & \todofill{published score} \\
-Breakout & 40.8 & 12.2 & \todofill{published score} \\
+Pong     & 15.3 & 17.2 &   20.7 & 0.83 \\
+Seaquest & 949  & 571  & 1204.5 & 0.79 \\
+Breakout & 40.8 & 12.2 &  274.8 & 0.15 \\
 \bottomrule
 \end{tabular}
 \end{table}
 
-Any such comparison has to be read with the budget difference in front of it. The
-agents in this report are trained for one million environment steps, which at a
-frame skip of four corresponds to four million game frames. Published Atari results
-are typically reported after 200 million frames, a factor of fifty. The numbers
-here describe learning trends in the early part of training and not converged
-performance, and they should not be presented as though they were comparable
-without that qualification.
+The budget difference has to be read alongside these numbers. The agents here are
+trained for one million environment steps, which is one tenth of the budget behind
+the published column, and published Atari results are elsewhere often reported
+after two hundred million frames, which is a factor of fifty. Nothing in this table
+should be presented as a converged comparison.
+
+With that qualification stated, the pattern is still informative. On Pong and
+Seaquest this implementation reaches roughly four fifths of the published score
+using one tenth of the interaction, which is the behaviour expected of a correct
+implementation stopped early. Breakout is the clear outlier at fifteen percent, and
+it is the same game on which the frozen representation performs worst. Breakout
+rewards precise tracking of a small fast object, and the limitation noted in
+Section~\ref{sec:limitations} applies with particular force there: the LeWM trunk
+encodes each frame independently and concatenates the embeddings, so it has weaker
+access to precisely localised motion than a network that convolves over the stacked
+frames. That this is also the game where the gap to published PPO is widest for
+\emph{both} arms suggests the budget is the dominant factor and the representation
+a secondary one, but the two are not separated here.
 
 \section{Methodological problems found during the work}
 \label{sec:confounds}
@@ -633,6 +647,7 @@ generalises beyond this project, is that batch normalisation inside a policy tru
 is specifically hazardous for algorithms that compare two forward passes.
 
 \section{Limitations}
+\label{sec:limitations}
 
 \begin{itemize}
 
