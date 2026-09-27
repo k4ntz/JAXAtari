@@ -241,21 +241,21 @@ class FallingObjectState:
         )
 
 
-def _falling_object_visible(obj, consts):
+def _falling_object_visible(obj, consts, scroll_y=0):
     return (
         obj.started
         & (obj.x >= consts.FALLING_OBJECT_X_MIN)
         & (obj.x <= consts.FALLING_OBJECT_X_MAX)
-        & (obj.y >= consts.FALLING_OBJECT_Y_MIN)
-        & (obj.y <= consts.FALLING_OBJECT_Y_MAX)
+        & (obj.y + scroll_y >= consts.FALLING_OBJECT_Y_MIN)
+        & (obj.y + scroll_y <= consts.FALLING_OBJECT_Y_MAX)
     )
 
 
-def _falling_object_sprite_bounds(obj, sizes):
+def _falling_object_sprite_bounds(obj, sizes, scroll_y=0):
     index = jnp.clip(obj.sprite_index - 1, 0, sizes.shape[0] - 1)
     width, height = sizes[index]
     left = jnp.round(obj.x - width / 2).astype(jnp.int32)
-    top = jnp.round(obj.y - height / 2).astype(jnp.int32)
+    top = jnp.round(obj.y - height / 2).astype(jnp.int32) + scroll_y
     return left, top, width, height
 
 
@@ -2304,8 +2304,9 @@ class JaxCrazyClimber(JaxEnvironment[CrazyClimberState, CrazyClimberObservation,
     @partial(jax.jit, static_argnums=(0,))
     def _get_observation(self, state: CrazyClimberState) -> CrazyClimberObservation:
         obj = state.falling_object_state
-        visible = _falling_object_visible(obj, self.consts)
-        left, top, width, height = _falling_object_sprite_bounds(obj, self.FALLING_OBJECT_SIZES)
+        scroll_y = state.tower_state.tower_step * 3
+        visible = _falling_object_visible(obj, self.consts, scroll_y)
+        left, top, width, height = _falling_object_sprite_bounds(obj, self.FALLING_OBJECT_SIZES, scroll_y)
         falling_object = ObjectObservation.create(
             x=jnp.where(visible, left, -1),
             y=jnp.where(visible, top, -1),
@@ -2961,10 +2962,11 @@ class JaxCrazyClimber(JaxEnvironment[CrazyClimberState, CrazyClimberObservation,
         @partial(jax.jit, static_argnums=(0,))
         def _render_falling_object(self, raster, state: CrazyClimberState) -> jnp.ndarray:
             obj = state.falling_object_state
-            left, top, _, _ = _falling_object_sprite_bounds(obj, self.FALLING_OBJECT_SIZES)
+            scroll_y = state.tower_state.tower_step * 3
+            left, top, _, _ = _falling_object_sprite_bounds(obj, self.FALLING_OBJECT_SIZES, scroll_y)
             index = jnp.clip(obj.sprite_index - 1, 0, self.FALLING_OBJECT_SPRITES.shape[0] - 1)
             return jax.lax.cond(
-                _falling_object_visible(obj, self.consts),
+                _falling_object_visible(obj, self.consts, scroll_y),
                 lambda r: self.jr.render_at_clipped(r, left, top, self.FALLING_OBJECT_SPRITES[index]),
                 lambda r: r,
                 raster,
