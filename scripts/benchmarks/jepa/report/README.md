@@ -1,24 +1,29 @@
 # Report
 
 `report.tex` plus `figures/`. Nothing else is needed to build it.
+`report.pdf` is the compiled output, 14 pages, committed so it can be read
+without a LaTeX toolchain.
 
 ## Building it
 
-There is no LaTeX toolchain on the machine this was written on, so the document
-has been checked structurally (environments, braces, table columns, figure paths)
-but not compiled. Two ways to build it:
+**Locally, no sudo.** [Tectonic](https://tectonic-typesetting.github.io/) is a
+single binary that fetches the packages it needs on first run:
+
+```bash
+brew install tectonic && tectonic -X compile report.tex
+```
+
+This is how `report.pdf` was produced. It compiles clean, no warnings.
 
 **Overleaf, no install.** Create a new project, upload `report.tex` and the whole
-`figures/` folder, press Recompile. This is the quickest route.
+`figures/` folder, press Recompile.
 
-**Locally.** `brew install --cask basictex`, open a new shell, then
-`pdflatex report.tex` twice. Two passes so that the table and figure references
-resolve.
+**A full TeX Live.** `brew install --cask basictex`, open a new shell, then
+`pdflatex report.tex` twice, so that the table and figure references resolve.
 
-## Before submitting
+## Related documents
 
-One table is deliberately incomplete. Table `tab:published` compares against
-reported PPO scores from the original ALE implementation, which the lab guidelines
-ask for. The published column is marked `\todofill{}` and prints in red. Fill it
-from the source linked in the guidelines rather than from memory, then delete the
-`\todofill` macro definition at the top of the file.
+The group report for the lab, which covers both halves of Topic 30 in the short
+structured format the group agreed on, lives outside this repository. This
+document is the technical companion to it: same results, full derivations and
+justifications.
