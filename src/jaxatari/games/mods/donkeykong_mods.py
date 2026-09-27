@@ -5,6 +5,7 @@ from jaxatari.games.mods.donkeykong.donkeykong_mod_plugins import (
     AggressiveBarrelsMod,
     PacifistMod,
     ShiftedLaddersMod,
+    CenterLaddersMod,
     NoBarrelsMod
 )
 
@@ -18,6 +19,7 @@ class DonkeyKongEnvMod(JaxAtariModController):
         "aggressive_barrels": AggressiveBarrelsMod,
         "pacifist": PacifistMod,
         "shifted_ladders": ShiftedLaddersMod,
+        "center_ladders": CenterLaddersMod,
         "no_barrels": NoBarrelsMod,
     }
 

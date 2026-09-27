@@ -23,8 +23,8 @@ class DonkeyKongConstants(AutoDerivedConstants):
     WINDOW_HEIGHT: int = struct.field(pytree_node=False, default=210 * 3)
 
     ASSET_CONFIG: tuple = struct.field(pytree_node=False, default=(
-        {"name": "background", "type": "background", "file": "donkeyKong_background_level_1.npy"},
-        {"name": "background_level_2", "type": "single", "file": "donkeyKong_background_level_2.npy"},
+        {"name": "background", "type": "background", "file": "donkeyKong_background_level_1_clean.npy"},
+        {"name": "background_level_2", "type": "single", "file": "donkeyKong_background_level_2_clean.npy"},
         {"name": "donkeykong", "type": "group", "files": ["donkeyKong1.npy", "donkeyKong2.npy"]},
         {"name": "girlfriend", "type": "single", "file": "girlfriend.npy"},
         {"name": "lifebar_level_1", "type": "single", "file": "level_1_life_bar.npy"},
@@ -248,6 +248,8 @@ class Ladder:
     start_x: chex.Array
     end_y: chex.Array
     end_x: chex.Array
+    render_positions: chex.Array = struct.field(default=None)
+    render_sizes: chex.Array = struct.field(default=None)
 
 # Barrels - Level 1 Enemy
 @struct.dataclass
@@ -413,9 +415,30 @@ class JaxDonkeyKong(JaxEnvironment[DonkeyKongState, DonkeyKongObservation, Donke
         return x
 
     @partial(jax.jit, static_argnums=(0,))
+    def snap_ladder_to_girders(self, stage: int, x: int, level: int = 1):
+        """
+        Calculates the vertical endpoints (y_top, y_bottom) of a ladder connecting
+        the floor girder at `stage` to the ceiling girder at `stage + 1` at horizontal coordinate `x`.
+        """
+        y_bot = self.bar_linear_equation(stage, x, level)
+        y_top = self.bar_linear_equation(stage + 1, x, level)
+        return jnp.round(y_top).astype(jnp.int32), jnp.round(y_bot).astype(jnp.int32)
+
+    @partial(jax.jit, static_argnums=(0,))
     def init_ladders_for_level(self, level: int) -> Ladder:
         # Ladder positions for level 1  --- the last 3 ladders are dummy ladders which do not exist in the real game
         # this is needed because jax needs same size of array for the Ladders to compile correctly
+        l1_render_pos = jnp.array([
+            [76, 40], [76, 52], [76, 68], [76, 80], [108, 68], [48, 92], [68, 88], [100, 84], [100, 104],
+            [64, 120], [64, 132], [88, 116], [108, 120], [48, 148], [80, 148], [72, 176], [72, 188], [108, 176],
+            [-1, -1], [-1, -1]
+        ], dtype=jnp.int32)
+        l1_render_sizes = jnp.array([
+            [4, 17], [4, 5], [4, 1], [4, 1], [4, 13], [4, 17], [4, 21], [4, 9], [4, 5],
+            [4, 1], [4, 5], [4, 21], [4, 17], [4, 17], [4, 17], [4, 1], [4, 5], [4, 17],
+            [0, 0], [0, 0]
+        ], dtype=jnp.int32)
+
         Ladder_level_1 = Ladder(
             stage=jnp.array([6, 5, 5, 4, 4, 4, 3, 3, 3, 2, 2, 1, 1,                                                     -1, -1, -1], dtype=jnp.int32),
             climbable=jnp.array([True, False, True, True, True, False, False, True, True, True, True, False, True,      False, False, False]),
@@ -423,16 +446,32 @@ class JaxDonkeyKong(JaxEnvironment[DonkeyKongState, DonkeyKongObservation, Donke
             start_x=jnp.array([76, 74, 106, 46, 66, 98, 62, 86, 106, 46, 78, 70, 106,                                   -1, -1, -1], dtype=jnp.int32),
             end_y=jnp.array([34, 53, 53, 79, 78, 76, 104, 106, 108, 135, 133, 161, 164,                                 -1, -1, -1], dtype=jnp.int32),
             end_x=jnp.array([76, 74, 106, 46, 66, 98, 62, 86, 106, 46, 78, 70, 106,                                     -1, -1, -1], dtype=jnp.int32),
+            render_positions=l1_render_pos,
+            render_sizes=l1_render_sizes,
         )
 
         # Ladder positions for level 2
+        l2_render_pos = jnp.array([
+            [40, 144], [60, 144], [96, 144], [116, 144],
+            [40, 116], [60, 116], [96, 116], [116, 116],
+            [40, 88],  [60, 88],  [96, 88],  [116, 88],
+            [40, 60],  [60, 60],  [96, 60],  [116, 60],
+            [40, 36],  [60, 36],  [96, 36],  [116, 36],
+        ], dtype=jnp.int32)
+        l2_render_sizes = jnp.array(
+            [[4, 29]] * 16 + [[4, 25]] * 4,
+            dtype=jnp.int32
+        )
+
         Ladder_level_2 = Ladder(
             stage=jnp.array([4, 4, 4, 4, 3, 3, 3, 3, 2, 2, 2, 2, 1, 1, 1, 1], dtype=jnp.int32),
             climbable=jnp.array([True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True]),
             start_y=jnp.array([171, 171, 171, 171, 143, 143, 143, 143, 115, 115, 115, 115, 87, 87, 87, 87], dtype=jnp.int32),
             start_x=jnp.array([40, 60, 96, 116, 40, 60, 96, 116, 40, 60, 96, 116, 40, 60, 96, 116], dtype=jnp.int32),
-            end_y=jnp.array([143, 143, 143, 143, 115, 115, 115, 155, 87, 87, 87, 87, 59, 59, 59, 59], dtype=jnp.int32),
+            end_y=jnp.array([143, 143, 143, 143, 115, 115, 115, 115, 87, 87, 87, 87, 59, 59, 59, 59], dtype=jnp.int32),
             end_x=jnp.array([40, 60, 96, 116, 40, 60, 96, 116, 40, 60, 96, 116, 40, 60, 96, 116], dtype=jnp.int32),
+            render_positions=l2_render_pos,
+            render_sizes=l2_render_sizes,
         )
 
         return jax.lax.cond(
@@ -846,7 +885,8 @@ class JaxDonkeyKong(JaxEnvironment[DonkeyKongState, DonkeyKongObservation, Donke
                 )
                 
                 # check first if barrel is positioned on top of a ladder
-                mask = jnp.logical_and(ladders.stage == curr_stage, ladders.end_x == y)
+                ladder_aligned = jnp.abs(y - ladders.end_x) <= (self.consts.BARREL_MOVING_SPEED * 0.5)
+                mask = jnp.logical_and(ladders.stage == curr_stage, ladder_aligned)
                 barrel_is_on_ladder = jnp.any(mask)
                 key = jax.random.PRNGKey(jnp.round(x).astype(jnp.int32) + jnp.round(y).astype(jnp.int32) + stage + state.step_counter)
                 roll_down_prob = jax.random.bernoulli(key, prob_barrel_rolls_down_a_ladder)
@@ -2331,6 +2371,35 @@ class DonkeyKongRenderer(JAXGameRenderer):
             state.level == 1,
             lambda: self.BACKGROUND,
             lambda: draw_level_2_drop_pits(self.BACKGROUND),
+        )
+
+        # Draw dynamic ladders
+        ladder_color = jax.lax.cond(
+            state.level == 1,
+            lambda: 0,
+            lambda: 1,
+        )
+        if state.ladders.render_positions is not None:
+            ladder_positions = state.ladders.render_positions
+            ladder_sizes = state.ladders.render_sizes
+        else:
+            ladder_positions = jnp.stack([
+                state.ladders.start_x,
+                jnp.minimum(state.ladders.start_y, state.ladders.end_y)
+            ], axis=-1)
+            ladder_sizes = jnp.stack([
+                jnp.full_like(state.ladders.start_x, self.consts.LADDER_WIDTH),
+                jnp.abs(state.ladders.start_y - state.ladders.end_y)
+            ], axis=-1)
+
+        raster = self.jr.draw_ladders(
+            raster,
+            ladder_positions,
+            ladder_sizes,
+            rung_height=1,
+            space_height=3,
+            color_id=ladder_color,
+            global_grid=True,
         )
 
         raster = self.jr.render_at(

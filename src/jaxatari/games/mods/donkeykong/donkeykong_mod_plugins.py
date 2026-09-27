@@ -38,19 +38,6 @@ class NoBarrelsMod(JaxAtariInternalModPlugin):
 
 
 class ShiftedLaddersMod(JaxAtariInternalModPlugin):
-    asset_overrides = {
-        "background": {
-            "name": "background",
-            "type": "background",
-            "file": "donkeyKong_background_level_1_shifted.npy",
-        },
-        "background_level_2": {
-            "name": "background_level_2",
-            "type": "single",
-            "file": "donkeyKong_background_level_2_shifted.npy",
-        }
-    }
-
     @partial(jax.jit, static_argnums=(0,))
     def init_ladders_for_level(self, level: int) -> Ladder:
         Ladder_level_1 = Ladder(
@@ -75,5 +62,66 @@ class ShiftedLaddersMod(JaxAtariInternalModPlugin):
             level == 1,
             lambda _: Ladder_level_1,
             lambda _: Ladder_level_2,
+            operand=None
+        )
+
+
+class CenterLaddersMod(JaxAtariInternalModPlugin):
+    """
+    Shifts ladders inward toward the screen center in both Level 1 and Level 2.
+    - Level 1: Outer climbable ascent ladders shift inward toward the center,
+      snapping vertical endpoints to the sloped girders. Inner ladders are adjusted
+      for spacing.
+    - Level 2: All 4 ladder columns shift inward symmetrically: [40, 60, 96, 116] -> [52, 68, 88, 104].
+    """
+    @partial(jax.jit, static_argnums=(0,))
+    def init_ladders_for_level(self, level: int) -> Ladder:
+        from jaxatari.games.jax_donkeykong import JaxDonkeyKong
+        base_ladders = JaxDonkeyKong.init_ladders_for_level(self._env, level)
+
+        # Level 1 adjustments:
+        # Outer climbable ladders shifted inward:
+        #   Stage 1 outer (Ladder 12): x=106 -> 94 (render segment 17: [96, 172], size [4, 21])
+        #   Stage 2 outer (Ladder 9):  x=46 -> 58  (render segment 13: [60, 144], size [4, 21])
+        #   Stage 3 outer (Ladder 8):  x=106 -> 94 (render segment 12: [96, 116], size [4, 21])
+        #   Stage 3 inner (Ladder 7):  x=86 -> 82  (render segment 11: [84, 116], size [4, 21])
+        #   Stage 4 outer (Ladder 3):  x=46 -> 58  (render segment 5:  [60, 88],  size [4, 21])
+        #   Stage 4 inner (Ladder 4):  x=66 -> 70  (render segment 6:  [72, 88],  size [4, 21])
+        #   Stage 5 outer (Ladder 2):  x=106 -> 94 (render segment 4:  [96, 64],  size [4, 17])
+        l1_start_x = base_ladders.start_x.at[12].set(94).at[9].set(58).at[8].set(94).at[7].set(82).at[3].set(58).at[4].set(70).at[2].set(94)
+        l1_end_x   = base_ladders.end_x.at[12].set(94).at[9].set(58).at[8].set(94).at[7].set(82).at[3].set(58).at[4].set(70).at[2].set(94)
+        l1_start_y = base_ladders.start_y.at[12].set(185).at[9].set(159).at[8].set(131).at[7].set(132).at[3].set(103).at[4].set(104).at[2].set(75)
+        l1_end_y   = base_ladders.end_y.at[12].set(162).at[9].set(134).at[8].set(106).at[7].set(106).at[3].set(78).at[4].set(78).at[2].set(52)
+
+        l1_render_pos = base_ladders.render_positions.at[17].set(jnp.array([96, 172])).at[13].set(jnp.array([60, 144])).at[12].set(jnp.array([96, 116])).at[11].set(jnp.array([84, 116])).at[5].set(jnp.array([60, 88])).at[6].set(jnp.array([72, 88])).at[4].set(jnp.array([96, 64]))
+        l1_render_sizes = base_ladders.render_sizes.at[17].set(jnp.array([4, 21])).at[13].set(jnp.array([4, 21])).at[12].set(jnp.array([4, 21])).at[5].set(jnp.array([4, 21])).at[4].set(jnp.array([4, 17]))
+
+        ladders_level_1 = base_ladders.replace(
+            start_x=l1_start_x,
+            end_x=l1_end_x,
+            start_y=l1_start_y,
+            end_y=l1_end_y,
+            render_positions=l1_render_pos,
+            render_sizes=l1_render_sizes,
+        )
+
+        # Level 2 adjustments:
+        # All 4 columns centered: [40, 60, 96, 116] -> [52, 68, 88, 104]
+        l2_cols = jnp.array([52, 68, 88, 104], dtype=jnp.int32)
+        l2_all_cols = jnp.tile(l2_cols, 5)
+        l2_start_x = l2_all_cols[:16]
+        l2_end_x = l2_all_cols[:16]
+        l2_render_pos = base_ladders.render_positions.at[:20, 0].set(l2_all_cols)
+
+        ladders_level_2 = base_ladders.replace(
+            start_x=l2_start_x,
+            end_x=l2_end_x,
+            render_positions=l2_render_pos,
+        )
+
+        return jax.lax.cond(
+            level == 1,
+            lambda _: ladders_level_1,
+            lambda _: ladders_level_2,
             operand=None
         )
