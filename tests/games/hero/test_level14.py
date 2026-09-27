@@ -319,8 +319,8 @@ def test_room_5s_gap_is_the_levels_one_mouth():
     """The eight air cells 14-21 between room 5's two magma walls are the
     mouth; no other room of this level has one. The other measured
     mouths are level 15 room 9's and level 16 rooms 7 and 9 (2026-09-25),
-    which levels 19 and 20 copy, level 17 room 9's and level 18 room 8's
-    (2026-09-26)."""
+    which level 20 copies, level 17 room 9's and level 18 room 8's
+    (2026-09-26), and level 19 room 6's (2026-09-27)."""
     assert HL.MAGMA_MOUTHS[L - 1] == [(5, 64, 32, 8, 16)]
     band = BANDS[5]["B"]
     assert runs_of(band, ".") == [(14, 21)]
