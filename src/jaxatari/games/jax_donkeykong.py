@@ -103,6 +103,8 @@ class DonkeyKongConstants(AutoDerivedConstants):
     # Mario movement and physics
     LEVEL_1_MARIO_START_X: chex.Array = struct.field(pytree_node=False, default_factory=lambda: jnp.float32(176.0))
     LEVEL_1_MARIO_START_Y: chex.Array = struct.field(pytree_node=False, default_factory=lambda: jnp.float32(45.0))
+    LEVEL_1_MARIO_DEFAULT_START_X: chex.Array = struct.field(pytree_node=False, default_factory=lambda: jnp.float32(176.0))
+    LEVEL_1_MARIO_DEFAULT_START_Y: chex.Array = struct.field(pytree_node=False, default_factory=lambda: jnp.float32(45.0))
     LEVEL_2_MARIO_START_X: chex.Array = struct.field(pytree_node=False, default_factory=lambda: jnp.float32(155.0))
     LEVEL_2_MARIO_START_Y: chex.Array = struct.field(pytree_node=False, default_factory=lambda: jnp.float32(32.0))
     MARIO_JUMPING_HEIGHT: chex.Array = struct.field(pytree_node=False, default_factory=lambda: jnp.float32(5.0))
@@ -116,7 +118,12 @@ class DonkeyKongConstants(AutoDerivedConstants):
     GAME_FREEZE_DURATION: int = struct.field(pytree_node=False, default=70)
 
     # If mario reaches that height on the ladder, game round is cleared
-    LEVEL_1_GOAL_X: int = struct.field(pytree_node=False, default=26)
+    LEVEL_1_GOAL_X: int = struct.field(pytree_node=False, default=20)
+    LEVEL_1_GOAL_PAULINE_X: int = struct.field(pytree_node=False, default=68)
+
+    # Mario initial stage and direction
+    LEVEL_1_MARIO_START_STAGE: int = struct.field(pytree_node=False, default=1)
+    LEVEL_1_MARIO_START_DIRECTION: int = struct.field(pytree_node=False, default=1)
 
     # Mario sprite indexes
     MARIO_WALK_SPRITE_0: int = struct.field(pytree_node=False, default=0)
@@ -485,15 +492,15 @@ class JaxDonkeyKong(JaxEnvironment[DonkeyKongState, DonkeyKongObservation, Donke
     def init_invisible_wall_for_level(self, level: int) -> invisible_wall_each_stage:
         # Set invisible wall depending of level
         invisible_wall_level_1 = invisible_wall_each_stage(
-            stage=jnp.array([6, 5, 4, 3, 2, 1], dtype=jnp.int32),
-            left_end=jnp.array([32, 37, 32, 37, 32, 37], dtype=jnp.int32),
-            right_end=jnp.array([113, 120, 113, 120, 113, 120], dtype=jnp.int32),
+            stage=jnp.array([6, 5, 4, 3, 2, 1, 7], dtype=jnp.int32),
+            left_end=jnp.array([32, 37, 32, 37, 32, 37, 46], dtype=jnp.int32),
+            right_end=jnp.array([113, 120, 113, 120, 113, 120, 77], dtype=jnp.int32),
         )
         # level 2
         invisible_wall_level_2 = invisible_wall_each_stage(
-            stage=jnp.array([6, 5, 4, 3, 2, 1], dtype=jnp.int32),
-            left_end=jnp.array([32, 32, 32, 32, 32, 32], dtype=jnp.int32),
-            right_end=jnp.array([120, 120, 120, 120, 120, 120], dtype=jnp.int32),
+            stage=jnp.array([6, 5, 4, 3, 2, 1, 7], dtype=jnp.int32),
+            left_end=jnp.array([32, 32, 32, 32, 32, 32, 32], dtype=jnp.int32),
+            right_end=jnp.array([120, 120, 120, 120, 120, 120, 120], dtype=jnp.int32),
         )
 
         return jax.lax.cond(
@@ -1603,10 +1610,12 @@ class JaxDonkeyKong(JaxEnvironment[DonkeyKongState, DonkeyKongObservation, Donke
             )
         new_state = reset_jumping(new_state)
 
-        # check if mario reached the goal -- only for level 1 climbing the ladder, for level 2 there is an another goal to be reached
+        # check if mario reached the goal -- only for level 1 climbing the ladder or reaching the princess on the platform
         def mario_reached_goal(state):
-            reached_goal = state.mario_y <= self.consts.LEVEL_1_GOAL_X
-            reached_goal &= state.mario_climbing
+            reached_goal = (state.level == 1) & (
+                (state.mario_climbing & (state.mario_y <= self.consts.LEVEL_1_GOAL_X))
+                | ((state.mario_stage == 7) & (state.mario_x <= self.consts.LEVEL_1_GOAL_PAULINE_X))
+            )
             reached_goal &= jnp.logical_not(state.mario_reached_goal) # false if already reached the goal
             new_state = state.replace(
                 game_freeze_start = state.step_counter,
@@ -1646,12 +1655,12 @@ class JaxDonkeyKong(JaxEnvironment[DonkeyKongState, DonkeyKongObservation, Donke
                 mario_jumping_over_enemy=False,
                 mario_climbing=False,
                 start_frame_when_mario_jumped=-1,
-                mario_view_direction=self.consts.MOVING_RIGHT,
+                mario_view_direction=self.consts.LEVEL_1_MARIO_START_DIRECTION,
                 mario_walk_frame_counter=0,
                 mario_climb_frame_counter=0,
                 mario_walk_sprite=self.consts.MARIO_WALK_SPRITE_0,
                 mario_climb_sprite=self.consts.MARIO_CLIMB_SPRITE_0,
-                mario_stage=1,
+                mario_stage=self.consts.LEVEL_1_MARIO_START_STAGE,
                 lives = 2,
                 mario_got_hit = False,
                 game_freeze_start = -1,
@@ -1708,6 +1717,18 @@ class JaxDonkeyKong(JaxEnvironment[DonkeyKongState, DonkeyKongObservation, Donke
                 operand=None
             )
             # new_state_life_loose --> Mario got hit by an enemy, Mario's life counter decrement
+            mario_stage_life_loose = jax.lax.cond(
+                state.level == 1,
+                lambda _: self.consts.LEVEL_1_MARIO_START_STAGE,
+                lambda _: 1,
+                operand=None
+            )
+            mario_dir_life_loose = jax.lax.cond(
+                state.level == 1,
+                lambda _: self.consts.LEVEL_1_MARIO_START_DIRECTION,
+                lambda _: self.consts.MOVING_RIGHT,
+                operand=None
+            )
             new_state_life_loose = new_state.replace(
                 lives = state.lives - 1,
                 level = state.level,
@@ -1715,6 +1736,8 @@ class JaxDonkeyKong(JaxEnvironment[DonkeyKongState, DonkeyKongObservation, Donke
                 invisible_wall_each_stage = invisible_wall,
                 mario_y = mario_y.astype(jnp.float32),
                 mario_x = mario_x.astype(jnp.float32),
+                mario_stage = mario_stage_life_loose,
+                mario_view_direction = mario_dir_life_loose,
                 hammer_y = hammer_y,
                 hammer_x = hammer_x,
             )
@@ -1730,7 +1753,7 @@ class JaxDonkeyKong(JaxEnvironment[DonkeyKongState, DonkeyKongObservation, Donke
             invisible_wall = self.init_invisible_wall_for_level(level)
             mario_y, mario_x, hammer_y, hammer_x = jax.lax.cond(
                 level == 1,
-                lambda _: (self.consts.LEVEL_1_MARIO_START_X, self.consts.LEVEL_1_MARIO_START_Y, self.consts.LEVEL_1_HAMMER_X, self.consts.LEVEL_1_HAMMER_Y),
+                lambda _: (self.consts.LEVEL_1_MARIO_DEFAULT_START_X, self.consts.LEVEL_1_MARIO_DEFAULT_START_Y, self.consts.LEVEL_1_HAMMER_X, self.consts.LEVEL_1_HAMMER_Y),
                 lambda _: (self.consts.LEVEL_2_MARIO_START_X, self.consts.LEVEL_2_MARIO_START_Y, self.consts.LEVEL_2_HAMMER_X, self.consts.LEVEL_2_HAMMER_Y),
                 operand=None
             )
@@ -1783,6 +1806,8 @@ class JaxDonkeyKong(JaxEnvironment[DonkeyKongState, DonkeyKongObservation, Donke
                 invisible_wall_each_stage=invisible_wall,
                 mario_y = mario_y.astype(jnp.float32),
                 mario_x = mario_x.astype(jnp.float32),
+                mario_stage = 1,
+                mario_view_direction = self.consts.MOVING_RIGHT,
                 hammer_y = hammer_y,
                 hammer_x = hammer_x,
                 game_score = game_score,
@@ -2057,12 +2082,12 @@ class JaxDonkeyKong(JaxEnvironment[DonkeyKongState, DonkeyKongObservation, Donke
             mario_jumping_over_enemy=False,
             mario_climbing=False,
             start_frame_when_mario_jumped=-1,
-            mario_view_direction=self.consts.MOVING_RIGHT,
+            mario_view_direction=self.consts.LEVEL_1_MARIO_START_DIRECTION,
             mario_walk_frame_counter=0,
             mario_climb_frame_counter=0,
             mario_walk_sprite=self.consts.MARIO_WALK_SPRITE_0,
             mario_climb_sprite=self.consts.MARIO_CLIMB_SPRITE_0,
-            mario_stage=1,
+            mario_stage=self.consts.LEVEL_1_MARIO_START_STAGE,
             lives = 2,
             mario_got_hit = False,
             game_freeze_start = -1,
@@ -2340,6 +2365,7 @@ class DonkeyKongRenderer(JAXGameRenderer):
             self.COLOR_TO_ID,
             self.FLIP_OFFSETS,
         ) = self.jr.load_and_setup_assets(asset_config, sprite_path)
+        self.BLANK_BACKGROUND = jnp.full_like(self.BACKGROUND, self.BACKGROUND[0, 0])
 
     @partial(jax.jit, static_argnums=(0,))
     def render(self, state):
@@ -2370,7 +2396,7 @@ class DonkeyKongRenderer(JAXGameRenderer):
         raster = jax.lax.cond(
             state.level == 1,
             lambda: self.BACKGROUND,
-            lambda: draw_level_2_drop_pits(self.BACKGROUND),
+            lambda: draw_level_2_drop_pits(self.BLANK_BACKGROUND),
         )
 
         # Draw dynamic ladders

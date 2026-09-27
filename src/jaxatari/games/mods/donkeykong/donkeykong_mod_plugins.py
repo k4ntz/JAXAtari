@@ -106,8 +106,9 @@ class CenterLaddersMod(JaxAtariInternalModPlugin):
         )
 
         # Level 2 adjustments:
-        # All 4 columns centered: [40, 60, 96, 116] -> [52, 68, 88, 104]
-        l2_cols = jnp.array([52, 68, 88, 104], dtype=jnp.int32)
+        # Center even further to clear the trap holes at x=52..56 and x=104..108:
+        # Columns centered symmetrically between traps: [62, 74, 86, 98]
+        l2_cols = jnp.array([62, 74, 86, 98], dtype=jnp.int32)
         l2_all_cols = jnp.tile(l2_cols, 5)
         l2_start_x = l2_all_cols[:16]
         l2_end_x = l2_all_cols[:16]
@@ -125,3 +126,17 @@ class CenterLaddersMod(JaxAtariInternalModPlugin):
             lambda _: ladders_level_2,
             operand=None
         )
+
+
+class StartTopPlatformMod(JaxAtariInternalModPlugin):
+    """
+    Mod where Mario starts from the platform just below the top one (Stage 6, on the right side).
+    """
+    constants_overrides = {
+        "LEVEL_1_MARIO_START_X": jnp.float32(43.0),
+        "LEVEL_1_MARIO_START_Y": jnp.float32(106.0),
+        "LEVEL_1_MARIO_START_STAGE": 6,
+        "LEVEL_1_MARIO_START_DIRECTION": 3,  # MOVING_LEFT
+    }
+
+

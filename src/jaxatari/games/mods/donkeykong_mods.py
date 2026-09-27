@@ -6,7 +6,8 @@ from jaxatari.games.mods.donkeykong.donkeykong_mod_plugins import (
     PacifistMod,
     ShiftedLaddersMod,
     CenterLaddersMod,
-    NoBarrelsMod
+    NoBarrelsMod,
+    StartTopPlatformMod,
 )
 
 class DonkeyKongEnvMod(JaxAtariModController):
@@ -21,6 +22,7 @@ class DonkeyKongEnvMod(JaxAtariModController):
         "shifted_ladders": ShiftedLaddersMod,
         "center_ladders": CenterLaddersMod,
         "no_barrels": NoBarrelsMod,
+        "start_top_platform": StartTopPlatformMod,
     }
 
     _mod_sprite_dir = os.path.join(os.path.dirname(__file__), "donkeykong", "sprites")
