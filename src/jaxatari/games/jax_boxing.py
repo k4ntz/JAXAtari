@@ -33,6 +33,7 @@ DIFFICULTY_PRESETS = {
         "CPU_DANCING_DURATION": 60,   
         "CPU_AIM_NOISE_SCALE": 1.5,   
         "PLAYER_FACE_SHRINK_Y": -1.0,
+        "CPU_OPPORTUNITY_CHANCE": 0.5,
     },
     "normal": {
         "CPU_TRACKING_INTERVAL": -1,  # -1 triggers authentic Atari dynamic 16/32 logic
@@ -41,6 +42,7 @@ DIFFICULTY_PRESETS = {
         "CPU_DANCING_DURATION": 40,   # Authentic 40 frames of retreat
         "CPU_AIM_NOISE_SCALE": 1.0,   # Authentic offset ranges
         "PLAYER_FACE_SHRINK_Y": 0.0,
+        "CPU_OPPORTUNITY_CHANCE": 1.0,
     },
     "hard": {
         "CPU_TRACKING_INTERVAL": 8,   # Fast reaction
@@ -49,6 +51,7 @@ DIFFICULTY_PRESETS = {
         "CPU_DANCING_DURATION": 15,   
         "CPU_AIM_NOISE_SCALE": 0.5,   # Tighter aim
         "PLAYER_FACE_SHRINK_Y": 0.0,
+        "CPU_OPPORTUNITY_CHANCE": 1.0,
     },
     "impossible": {
         "CPU_TRACKING_INTERVAL": 1,   # Instant reaction
@@ -57,6 +60,7 @@ DIFFICULTY_PRESETS = {
         "CPU_DANCING_DURATION": 0,    # Never retreats
         "CPU_AIM_NOISE_SCALE": 0.4,   # Slightly more noise to prevent stalemates
         "PLAYER_FACE_SHRINK_Y": 1.0,
+        "CPU_OPPORTUNITY_CHANCE": 1.0,
     }
 }
 
@@ -171,10 +175,12 @@ class BoxingConstants(struct.PyTreeNode):
     MAX_SCORE: int = 100
     TOTAL_TIME: int = 7200 # 2 minutes at 60Hz
     
-    # Starting positions
-    P1_START_X: int = 95
-    P2_START_X: int = 50
-    START_Y: int = 82
+    # Starting positions (White boxer top-left, Black boxer bottom-right)
+    P1_START_X: int = 35
+    P1_START_Y: int = 42
+    P2_START_X: int = 112
+    P2_START_Y: int = 125
+    START_Y: int = 42
 
     ASSET_CONFIG: tuple = _get_default_asset_config()
 
@@ -186,6 +192,7 @@ class BoxingConstants(struct.PyTreeNode):
     CPU_DANCING_DURATION: int = 40
     CPU_AIM_NOISE_SCALE: float = 1.0
     PLAYER_FACE_SHRINK_Y: float = 0.0
+    CPU_OPPORTUNITY_CHANCE: float = 1.0
     ENEMY_PEACEFUL: bool = False
     SHOW_COLLISION_ZONE: bool = False
 
@@ -274,12 +281,13 @@ class JaxBoxing(JaxEnvironment[BoxingState, BoxingObservation, BoxingInfo, Boxin
             CPU_DANCING_DURATION=params["CPU_DANCING_DURATION"],
             CPU_AIM_NOISE_SCALE=params.get("CPU_AIM_NOISE_SCALE", 1.0),
             PLAYER_FACE_SHRINK_Y=params.get("PLAYER_FACE_SHRINK_Y", 0.0),
+            CPU_OPPORTUNITY_CHANCE=params.get("CPU_OPPORTUNITY_CHANCE", 1.0),
         )
 
     def reset(self, key: chex.PRNGKey) -> Tuple[BoxingObservation, BoxingState]:
         key, subkey = jax.random.split(key)
-        pos = jnp.array([[self.consts.P1_START_X, self.consts.START_Y],
-                         [self.consts.P2_START_X, self.consts.START_Y]], dtype=jnp.int32)
+        pos = jnp.array([[self.consts.P1_START_X, self.consts.P1_START_Y],
+                         [self.consts.P2_START_X, self.consts.P2_START_Y]], dtype=jnp.int32)
         orientation = jnp.array([
             (pos[0, 0] > pos[1, 0]).astype(jnp.int32),
             (pos[1, 0] > pos[0, 0]).astype(jnp.int32)
@@ -297,10 +305,10 @@ class JaxBoxing(JaxEnvironment[BoxingState, BoxingObservation, BoxingInfo, Boxin
             done=jnp.array(False),
             key=subkey,
             cpu_target_x=jnp.array(self.consts.P1_START_X, dtype=jnp.int32),
-            cpu_target_y=jnp.array(self.consts.START_Y, dtype=jnp.int32),
+            cpu_target_y=jnp.array(self.consts.P1_START_Y, dtype=jnp.int32),
             cpu_horiz_offset=jnp.array(0, dtype=jnp.int32),
             cpu_vert_offset=jnp.array(0, dtype=jnp.int32),
-            cpu_inertia=jnp.array(48, dtype=jnp.int32),
+            cpu_inertia=jnp.array(144, dtype=jnp.int32),
             cpu_dancing_value=jnp.array(0, dtype=jnp.int32),
             hit_anim_timer=jnp.array([0, 0], dtype=jnp.int32),
             hit_anim_dx=jnp.array([0, 0], dtype=jnp.int32),
@@ -568,28 +576,46 @@ class JaxBoxing(JaxEnvironment[BoxingState, BoxingObservation, BoxingInfo, Boxin
         dancing = state.cpu_dancing_value >= 16
         dx = jnp.where(dancing, -dx, dx)
         
-        # 3. Strike Decision (from Bounding Box + Random LFSR representation)
+        # 3. Strike Decision (from Bounding Box + Arm Alignment Opportunity)
         horiz_dist = jnp.abs(p1_pos[0] - p2_pos[0])
         vert_dist = jnp.abs(p1_pos[1] - p2_pos[1])
         
         in_strike_zone = jnp.logical_and(horiz_dist <= 47, vert_dist <= 40)
         is_stunned = state.stun_timer[1] > 0
         is_punching = state.punch_state[1] > 0
+        is_cooling_down = state.punch_cooldown[1] > 0
         
-        can_punch = jnp.logical_and(in_strike_zone, jnp.logical_and(~is_stunned, jnp.logical_and(~dancing, ~is_punching)))
+        can_punch = jnp.logical_and(
+            in_strike_zone, 
+            jnp.logical_and(~is_stunned, jnp.logical_and(~dancing, jnp.logical_and(~is_punching, ~is_cooling_down)))
+        )
         
-        # Splitting PRNGKey for the 1.5% chance per frame.
-        # We simulate the difficulty presets by scaling this probability.
-        # Normal = ~1.5% chance. 
-        # (256 * 0.015 = ~4)
-        _, subkey = jax.random.split(state.key)
-        random_val = jax.random.randint(subkey, (), 0, 256)
+        # Check if opponent's head aligns with either of the CPU's arms on the Y axis
+        # and boxers are in horizontal reach for a punch
+        face_min_y = p1_pos[1] + self.consts.FACE_MIN_Y
+        face_max_y = p1_pos[1] + self.consts.FACE_MAX_Y
+        top_arm_y = p2_pos[1] + self.consts.TOP_ARM_Y
+        bot_arm_y = p2_pos[1] + self.consts.BOT_ARM_Y
+        
+        arm_aligned = jnp.logical_or(
+            jnp.logical_and(top_arm_y >= face_min_y, top_arm_y <= face_max_y),
+            jnp.logical_and(bot_arm_y >= face_min_y, bot_arm_y <= face_max_y)
+        )
+        in_punch_reach = horiz_dist <= 32
+        hit_opportunity = jnp.logical_and(arm_aligned, in_punch_reach)
+        
+        # Splitting PRNGKey for decisions
+        key, subkey1, subkey2 = jax.random.split(state.key, 3)
+        random_val = jax.random.randint(subkey1, (), 0, 256)
+        opp_random = jax.random.uniform(subkey2, ())
+        
+        take_opportunity = jnp.logical_and(hit_opportunity, opp_random < self.consts.CPU_OPPORTUNITY_CHANCE)
         
         score_diff = state.score[1] - state.score[0]
         base_aggr = jnp.where(score_diff >= 0, self.consts.CPU_AGGR_WINNING, self.consts.CPU_AGGR_LOSING)
-        # Using a normalized aggr out of 255 where 4 represents normal 1.5%
-        should_punch = random_val < base_aggr
+        random_punch = random_val < base_aggr
         
+        should_punch = jnp.logical_or(take_opportunity, random_punch)
         strike_decision = jnp.logical_and(can_punch, should_punch)
         
         # When punching, dx/dy are effectively halted by the engine (unless moving into punch state)
@@ -660,15 +686,6 @@ class JaxBoxing(JaxEnvironment[BoxingState, BoxingObservation, BoxingInfo, Boxin
         # 4. Punch State Update
         s0, a0, h0, c0 = self._update_punch(state, action, 0, 1)
         s1, a1, h1, c1 = self._update_punch(state, p2_action, 1, 0)
-        
-        def print_idle(operand):
-            jax.debug.print("White Player: Idle")
- 
-        def print_punching(operand):
-            state_val, arm_val = operand
-            jax.debug.print("White Player: Punching - Arm (0=Top, 1=Bottom): {arm}, State: {state}", arm=arm_val, state=state_val)
- 
-        jax.lax.cond(s0 == 0, print_idle, print_punching, (s0, a0))
         
         state = replace(state, 
                         punch_state=jnp.array([s0, s1]), 
@@ -806,7 +823,11 @@ class BoxingRenderer(JAXGameRenderer):
         self.config = config or render_utils.RendererConfig(game_dimensions=(210, 160), channels=3)
         self.jr = render_utils.JaxRenderingUtils(self.config)
         
-        sprite_path = f"{os.path.dirname(os.path.abspath(__file__))}/sprites/boxing"
+        installed_path = os.path.join(render_utils.get_base_sprite_dir(), "boxing")
+        if os.path.exists(installed_path):
+            sprite_path = installed_path
+        else:
+            sprite_path = f"{os.path.dirname(os.path.abspath(__file__))}/sprites/boxing"
         (self.PALETTE, self.SHAPE_MASKS, self.BACKGROUND, self.COLOR_TO_ID, _) = self.jr.load_and_setup_assets(list(self.consts.ASSET_CONFIG), sprite_path)
         
         # Custom debug colors appended to palette

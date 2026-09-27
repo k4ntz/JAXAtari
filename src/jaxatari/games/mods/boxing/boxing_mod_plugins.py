@@ -33,10 +33,10 @@ class CenterEnemyMod(JaxAtariInternalModPlugin, JaxAtariPostStepModPlugin):
         """
         Snap the enemy to the center immediately after reset.
         """
-        center_x = (self._env.consts.XMIN + self._env.consts.XMAX) / 2.0
-        center_y = (self._env.consts.YMIN + self._env.consts.YMAX) / 2.0
+        center_x = (self._env.consts.XMIN + self._env.consts.XMAX) // 2
+        center_y = (self._env.consts.YMIN + self._env.consts.YMAX) // 2
         
-        new_pos = state.pos.at[1].set(jnp.array([center_x, center_y]))
+        new_pos = state.pos.at[1].set(jnp.array([center_x, center_y], dtype=jnp.int32))
         state = replace(state, pos=new_pos)
         
         # The wrapper doesn't auto-recompute obs after after_reset, so we must do it
@@ -51,10 +51,10 @@ class CenterEnemyMod(JaxAtariInternalModPlugin, JaxAtariPostStepModPlugin):
         """
         Snap the enemy back to the center after every step, neutralizing knockback.
         """
-        center_x = (self._env.consts.XMIN + self._env.consts.XMAX) / 2.0
-        center_y = (self._env.consts.YMIN + self._env.consts.YMAX) / 2.0
+        center_x = (self._env.consts.XMIN + self._env.consts.XMAX) // 2
+        center_y = (self._env.consts.YMIN + self._env.consts.YMAX) // 2
         
-        new_pos = new_state.pos.at[1].set(jnp.array([center_x, center_y]))
+        new_pos = new_state.pos.at[1].set(jnp.array([center_x, center_y], dtype=jnp.int32))
         modified_state = replace(new_state, pos=new_pos)
         
         return modified_state
