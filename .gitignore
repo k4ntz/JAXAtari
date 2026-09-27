@@ -10,3 +10,30 @@ results/
 docs/build/
 .python-version
 
+# StarGunner debug/temp files
+active_frames.png
+analyze_hills.py
+best_frame.npy
+capture_gameplay.py
+capture_long.py
+extract3.py
+extract_all.py
+extract_attract_cycle.py
+extract_play_sprites.py
+find_gameplay.py
+frame_attract.npy
+frames_attract_cycle.npy
+frames_gameplay.npy
+frames_long.npy
+frames_overview.png
+frames_play.npy
+frames_play_clean.npy
+frames_start.npy
+gameplay_overview.png
+hills_analysis.npz
+hills_animation_check.png
+inspect2.py
+inspect_frame.png
+inspect_frame.py
+play_clean_overview.png
+sprite_boxes.png
