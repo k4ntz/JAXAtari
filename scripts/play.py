@@ -101,7 +101,46 @@ ACTION_NAMES = {
     if not k.startswith("_") and isinstance(v, int)
 }
 
-def main():
+def _level_number(text: str) -> int:
+    """argparse type for -l/--level: a 1-based level number."""
+    try:
+        value = int(text)
+    except ValueError:
+        raise argparse.ArgumentTypeError(f"level must be an integer, got {text!r}")
+    if value < 1:
+        raise argparse.ArgumentTypeError(f"level numbers start at 1, got {value}")
+    return value
+
+
+def debug_flag_mods(args) -> list:
+    """Mod names selected by the level-debugging shortcuts (-l, -lifes, -granades).
+
+    The flags are only shorthands for mods a game may provide under these
+    conventional names (H.E.R.O. does; see src/jaxatari/games/mods/hero_mods.py):
+      -l N       -> start_level_N
+      -lifes     -> unlimited_lives
+      -granades  -> unlimited_dynamite
+    """
+    mods = []
+    if getattr(args, "level", None) is not None:
+        mods.append(f"start_level_{args.level}")
+    if getattr(args, "unlimited_lives", False):
+        mods.append("unlimited_lives")
+    if getattr(args, "unlimited_dynamite", False):
+        mods.append("unlimited_dynamite")
+    return mods
+
+
+def merge_debug_mods(mods, args):
+    """Append the debug-flag mods to an (already normalized) -m list, skipping duplicates."""
+    base = list(mods) if mods else []
+    extra = [m for m in debug_flag_mods(args) if m not in base]
+    if not extra:
+        return mods
+    return base + extra
+
+
+def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description="Play a JAXAtari game, record your actions or replay them."
     )
@@ -190,10 +229,45 @@ def main():
         help="Enable profiling.",
     )
 
+    debug = parser.add_argument_group(
+        "level debugging shortcuts",
+        "Shorthands for mods a game may provide under conventional names "
+        "(H.E.R.O. does). Example: -g hero -l 5 -lifes -granades",
+    )
+    debug.add_argument(
+        "-l", "--level",
+        type=_level_number,
+        default=None,
+        metavar="N",
+        help="Start every episode on level N (1-based) instead of level 1. Applies the start_level_N mod.",
+    )
+    debug.add_argument(
+        "-lifes", "--unlimited-lives",
+        dest="unlimited_lives",
+        action="store_true",
+        help="Unlimited lives: dying still respawns you but never costs a life. Applies the unlimited_lives mod.",
+    )
+    debug.add_argument(
+        "-granades", "--unlimited-dynamite",
+        dest="unlimited_dynamite",
+        action="store_true",
+        help="Unlimited grenades/dynamite: planting never uses a stick. Applies the unlimited_dynamite mod.",
+    )
+    return parser
+
+
+def main():
+    parser = build_parser()
     args = parser.parse_args()
 
     # Normalize mods so we accept space-separated, comma-separated, or mixed
     args.mods = _normalize_mods(args.mods)
+
+    # -l / -lifes / -granades are shorthands for mods; fold them into the list
+    debug_mods = debug_flag_mods(args)
+    if debug_mods:
+        args.mods = merge_debug_mods(args.mods, args)
+        print(f"Debug flags selected mods {debug_mods}; loading with mods: {args.mods}")
 
     execute_without_rendering = False
 

@@ -43,7 +43,7 @@ Total:  🥇: 1   |   🥈: 2   |   🥉: 0   |   ❌: 2
 | frostbite                    | 🥇       | 14 |
 | gopher                       | ❌       | 0 |
 | gravitar                     | 🥇       | 15 |
-| hero                         | 🥉       | 0 |
+| hero                         | 🥉       | 18 |
 | ice_hockey                   | ❌       | 0 |
 | jamesbond                    | ❌       | 0 |
 | kangaroo                     | 🥇       | 42 |
