@@ -197,6 +197,13 @@ def build_parser() -> argparse.ArgumentParser:
              "30 with its 'slow' mod).",
     )
     parser.add_argument(
+        "--speed",
+        type=float,
+        default=None,
+        help="Game-speed multiplier on the frame rate (default 1.0; H.E.R.O. 1.5, "
+             "i.e. 90 fps). While playing, + and - change it by 0.25.",
+    )
+    parser.add_argument(
         "--pixel-aspect",
         type=float,
         default=None,
@@ -282,6 +289,12 @@ def main():
     is_hero = str(args.game).lower() == "hero"
     if args.fps is None:
         args.fps = 60 if is_hero and "slow" not in (args.mods or []) else 30
+    # --speed runs more game frames per second: everything - hero, laser,
+    # creatures, timers - speeds up together and the game rules stay as they are.
+    if args.speed is None:
+        args.speed = 1.5 if is_hero and "slow" not in (args.mods or []) else 1.0
+    base_fps = args.fps
+    args.fps = max(1, int(round(base_fps * args.speed)))
     if args.pixel_aspect is None:
         args.pixel_aspect = 1.75 if is_hero else 1.0
     upscale_x = UPSCALE_FACTOR * args.pixel_aspect
@@ -456,7 +469,7 @@ def main():
         clock.tick(frame_rate)
 
     def running_fn():
-        nonlocal running, pause, frame_by_frame, next_frame_asked
+        nonlocal running, pause, frame_by_frame, next_frame_asked, frame_rate
         nonlocal obs, state, reset_counter, total_return, action_key
         while running:
             # check for external actions
@@ -492,6 +505,12 @@ def main():
                                 print(f"Failed to save state: {e}")
                         elif event.key == pygame.K_f:
                             frame_by_frame = not frame_by_frame
+                        elif event.key in (pygame.K_PLUS, pygame.K_EQUALS, pygame.K_KP_PLUS,
+                                           pygame.K_MINUS, pygame.K_KP_MINUS):
+                            faster = event.key in (pygame.K_PLUS, pygame.K_EQUALS, pygame.K_KP_PLUS)
+                            args.speed = min(4.0, max(0.25, args.speed + (0.25 if faster else -0.25)))
+                            frame_rate = max(1, int(round(base_fps * args.speed)))
+                            print(f"Speed x{args.speed:.2f} ({frame_rate} fps)")
                         elif event.key == pygame.K_n:
                             next_frame_asked = True
 

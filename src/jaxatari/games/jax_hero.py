@@ -714,7 +714,13 @@ class HeroConstants(AutoDerivedConstants):
     dyn_draw_dx: int = struct.field(pytree_node=False, default=4)
     dyn_fuse_playable: int = struct.field(pytree_node=False, default=60)
     dyn_fuse_rom: int = struct.field(pytree_node=False, default=34)
-    explosion_frames: int = struct.field(pytree_node=False, default=4)
+    # The explosion lasts 32 frames on the ROM (measured 2026-09-28, level 1
+    # room 0 and level 5 room 1): four rounds of flash, flash, big, big,
+    # medium, medium, small, small (see _BLAST_SEQ). Everything the blast
+    # DOES - walls, creatures, lantern, the hero - happens on the detonation
+    # frame alone (explode_now); this only draws it and keeps a second stick
+    # from being planted while it is on screen.
+    explosion_frames: int = struct.field(pytree_node=False, default=32)
     # Vertical reach of the blast. MEASURED TRUTH (not yet implemented): the
     # blast takes the CEILING cell and the MIDDLE cell of the column together
     # and never touches the floor band. The levels captured so far model the
@@ -1296,10 +1302,27 @@ class JaxHero(JaxEnvironment[HeroState, HeroObservation, HeroInfo, HeroConstants
                                jnp.where(sink, c.sink_speed, c.fall_speed)).astype(jnp.float32)
             dy = jnp.round(new_vy).astype(jnp.int32)
         cand_y = (state.player_y + dy).astype(jnp.int32)
-        # ceiling of the topmost room: don't fly above the level start screen
-        cand_y = jnp.where((state.room == 0) & (cand_y < 8), jnp.int32(8), cand_y)
-        y_blocked = self._hits_wall(state, new_x, cand_y)
-        new_y = jnp.where(y_blocked, state.player_y, cand_y).astype(jnp.int32)
+        if c.rom_hero:
+            # ceiling of the topmost room: the ROM stops him at sy 5, our
+            # y -3 - the same row a climb out of any deeper room flips at
+            # (measured: from the level start he climbs 11 px above y 8)
+            cand_y = jnp.where((state.room == 0) & (cand_y < c.flip_enter_top_y),
+                               jnp.int32(c.flip_enter_top_y), cand_y)
+            y_blocked = self._hits_wall(state, new_x, cand_y)
+            # A 2 px step that would go 1 px into rock goes the 1 px there is
+            # room for: the ROM always lands flush on the floor (and rises
+            # flush to a ceiling). Stopping 1 px short left him hovering over
+            # the floor and dropping that last pixel while UP spun the rotor
+            # up - a visible twitch at every take-off.
+            half_y = (state.player_y + jnp.sign(dy)).astype(jnp.int32)
+            half_ok = (jnp.abs(dy) == 2) & ~self._hits_wall(state, new_x, half_y)
+            new_y = jnp.where(y_blocked, jnp.where(half_ok, half_y, state.player_y),
+                              cand_y).astype(jnp.int32)
+        else:
+            # ceiling of the topmost room: don't fly above the level start screen
+            cand_y = jnp.where((state.room == 0) & (cand_y < 8), jnp.int32(8), cand_y)
+            y_blocked = self._hits_wall(state, new_x, cand_y)
+            new_y = jnp.where(y_blocked, state.player_y, cand_y).astype(jnp.int32)
         new_vy = jnp.where(y_blocked, 0.0, new_vy).astype(jnp.float32)
 
         # --- the raft (HL.RAFTS, measured on the ROM 2026-09-24) ---
@@ -1777,7 +1800,9 @@ class JaxHero(JaxEnvironment[HeroState, HeroObservation, HeroInfo, HeroConstants
         final_burn_cell = jnp.where(advance | finish, -1, burn_cell).astype(jnp.int32)
         final_burn_timer = jnp.where(advance | finish, 0, burn_timer).astype(jnp.int32)
         final_dyn_active = dyn_active & (~reset_pose)
-        final_explosion = jnp.where(reset_pose, 0, explosion_timer).astype(jnp.int32)
+        # a death does not cut the explosion short: the ROM plays all 32 frames
+        # of it while the hero dies (measured); only a new level clears it
+        final_explosion = jnp.where(advance, 0, explosion_timer).astype(jnp.int32)
         final_dyn_fuse = jnp.where(reset_pose, 0, new_fuse).astype(jnp.int32)
         # Power and dynamite refill on respawn or advance (as on the console:
         # every new life carries six fresh sticks — the deep levels' sealed
@@ -2656,6 +2681,9 @@ _LANTERN_ART = [
     ".yyy.",
     "..y..",
 ]
+# A lantern that has gone out stays on the wall: in a dark room the ROM keeps
+# drawing its shape, all in #6f6f6f (measured 2026-09-28, level 5 room 1).
+_LANTERN_DARK_ART = [row.replace("M", "N").replace("y", "N") for row in _LANTERN_ART]
 
 # Trapped miner, 8 wide x 12 tall. Lifted pixel for pixel out of the ROM's
 # own level 1 room 1: forcing the room register parks the hero out of shot but
@@ -2678,8 +2706,44 @@ _MINER_ART = [
     ".SS..SS.",
 ]
 
-# A placed stick, exactly the ROM's bitmap (3x10):
-# a red body under a yellow fuse burning down.
+# A placed stick as the ROM draws it (measured 2026-09-28, level 1 room 0,
+# frame by frame): a 3x6 red body under a 5-row yellow fuse that flickers
+# between three shapes, 11 rows in all, its bottom row on the hero's feet
+# row. The fuse runs a fixed 12-frame loop from the moment it is planted
+# (_DYN_FUSE_SEQ).
+_DYN_FUSE_ART = [
+    ["Y..", "..Y", ".YY", ".Y.", ".Y.", "RRR", "RRR", "RRR", "RRR", "RRR", "RRR"],
+    [".Y.", "YY.", ".YY", ".Y.", ".Y.", "RRR", "RRR", "RRR", "RRR", "RRR", "RRR"],
+    ["..Y", "Y..", "YY.", ".Y.", ".Y.", "RRR", "RRR", "RRR", "RRR", "RRR", "RRR"],
+]
+_DYN_FUSE_SEQ = [0, 0, 0, 1, 2, 2, 2, 0, 1, 1, 1, 2]
+
+# The explosion, read off the same capture: one 8x12 canvas whose column 0 is
+# 3 px left of the stick and whose row 0 is 1 row above the stick's top. It
+# runs 8-frame rounds of pose 0 x2, 1 x2, 2 x2, 3 x2 (_BLAST_SEQ), four times,
+# the very last frame empty. Pose 0 - drawn on the two frames the screen
+# flashes - is what the ROM really shows there: the yellow digits "75" (no
+# wall need break and the score does not change; it is the flash picture).
+_BLAST_ART = [
+    ["........", "........", "........", "yyy.yyy.", "..y.y...", "..y.yyy.",
+     "..y...y.", "..y.yyy.", "........", "........", "........", "........"],
+    ["........", ".....y..", "y..y...y", ".y.yy.y.", ".yyyyyy.", "..yyyy..",
+     "...yyy.y", "y.yyy...", "..yyyy..", ".yyyyyy.", ".y.yy..y", "y...y..."],
+    ["........", ".y.y..y.", "...yy...", "..yyyy..", "..yyyy..", "y..yyy.y",
+     "..yyy...", ".yyyyy..", "..yyyyy.", "...yy...", "...yyy..", ".y...y.y"],
+    [".y...y.y", "........", "........", "........", "...yy...", "..yyyy..",
+     "..yyyy..", "...yy...", "..yyyy..", "..yyyy..", "...yy...", "........"],
+]
+_BLAST_SEQ = [0, 0, 1, 1, 2, 2, 3, 3]
+# While a stick burns or explodes in its room, a DARK room shows its rock in
+# this grey (the lantern is out but the walls can be seen again), and on the
+# two flash frames of each round every black pixel of the cave turns
+# _FLASH_GREY. Both measured on the ROM, rows 15-141 from x 8.
+_REVEAL_GREY = (74, 74, 74)
+_FLASH_GREY = (192, 192, 192)
+_FLASH_ROWS = (15, 142)
+
+# The earlier 3x10 stick with a still fuse (no longer drawn).
 _DYN_ART = [
     "..Y",
     ".YY",
@@ -2792,11 +2856,14 @@ _LETTER_FONT = {
 # of magma red and about 800 of trim grey, and nothing else.
 # ---------------------------------------------------------------------------
 _DARK_TRIM_ROWS = ((16, 20), (138, 142))               # [start, stop)
-_DARK_TRIM_GREYS = ((142, 142, 142), (170, 170, 170),  # #8e8e8e #aaaaaa
+_DARK_TRIM_GREYS = ((111, 111, 111),                    # #6f6f6f
+                    (142, 142, 142), (170, 170, 170),  # #8e8e8e #aaaaaa
                     (192, 192, 192), (214, 214, 214))  # #c0c0c0 #d6d6d6
-# the four shades of a level's own hue that the trim is drawn in, in the same
-# order as _DARK_TRIM_GREYS
-_TRIM_SHADE_KEYS = ("light", "hi1", "hi2", "hi3")
+# the five shades of a level's own hue that the trim is drawn in, in the same
+# order as _DARK_TRIM_GREYS. 'mid' is the bottom row of the ceiling trim (row
+# 19); the ROM draws it #6f6f6f in a dark room (measured 2026-09-28, level 5
+# room 1: 136 px) - without it that row went black.
+_TRIM_SHADE_KEYS = ("mid", "light", "hi1", "hi2", "hi3")
 _MAGMA_DARK = (167, 26, 26)                            # #a71a1a
 # magma alternates between these two frame to frame, which is the glow
 _MAGMA_COLORS = ((167, 26, 26), (184, 50, 50))
@@ -2871,9 +2938,14 @@ class HeroRenderer(JAXGameRenderer):
                'data': self._sprite(art)}
               for i, art in enumerate(_SNAKE_ARTS)),
             {'name': 'lantern', 'type': 'procedural', 'data': self._sprite(_LANTERN_ART)},
+            {'name': 'lantern_dark', 'type': 'procedural', 'data': self._sprite(_LANTERN_DARK_ART)},
             {'name': 'miner', 'type': 'procedural', 'data': self._sprite(_MINER_ART)},
             {'name': 'dynamite', 'type': 'procedural', 'data': self._sprite(_DYN_ART)},
             {'name': 'explosion', 'type': 'procedural', 'data': self._build_explosion(c.explosion_radius)},
+            *[{'name': f'dyn_fuse{i}', 'type': 'procedural', 'data': self._sprite(a)}
+              for i, a in enumerate(_DYN_FUSE_ART)],
+            *[{'name': f'blast{i}', 'type': 'procedural', 'data': self._sprite(a)}
+              for i, a in enumerate(_BLAST_ART)],
             {'name': 'laser_bolt', 'type': 'procedural',
              'data': self._solid(c.laser_height, c.laser_bolt_length, c.laser_color)},
             {'name': 'raft', 'type': 'procedural',
@@ -2906,6 +2978,7 @@ class HeroRenderer(JAXGameRenderer):
                 if col not in baked_colors:
                     baked_colors.append(col)
         for col in ((252, 232, 120), (184, 50, 50),      # flare flame tones
+                    _REVEAL_GREY, _FLASH_GREY,          # dynamite light
                     _MAGMA_DARK,                        # magma in a dark room
                     *_DARK_TRIM_GREYS):                 # trim in a dark room
             if col not in baked_colors:
@@ -2921,6 +2994,16 @@ class HeroRenderer(JAXGameRenderer):
             self.PALETTE, self.SHAPE_MASKS, self.BACKGROUND,
             self.COLOR_TO_ID, self.FLIP_OFFSETS,
         ) = self.jr.load_and_setup_assets(asset_config, sprite_path)
+
+        # the burning stick's three fuse shapes and the explosion's four
+        # poses, with the measured loops that pick them (_DYN_FUSE_SEQ,
+        # _BLAST_SEQ)
+        self.DYN_FUSE_FRAMES = jnp.stack(
+            [self.SHAPE_MASKS[f"dyn_fuse{i}"] for i in range(len(_DYN_FUSE_ART))])
+        self.DYN_FUSE_SEQ = jnp.array(_DYN_FUSE_SEQ, dtype=jnp.int32)
+        self.BLAST_FRAMES = jnp.stack(
+            [self.SHAPE_MASKS[f"blast{i}"] for i in range(len(_BLAST_ART))])
+        self.BLAST_SEQ = jnp.array(_BLAST_SEQ, dtype=jnp.int32)
 
         if c.rom_hero:
             # 0: standing; 1-5: the five walk poses; 6-8: airborne under the
@@ -3006,6 +3089,7 @@ class HeroRenderer(JAXGameRenderer):
                 bgs[li, ri] = lut[idx]
         self.BGS = jnp.asarray(bgs)  # (nL, nR, 142, 160)
         self.BGS_DARK = jnp.asarray(self._darken(bgs))
+        self.DYN_REVEAL = jnp.asarray(self._dyn_reveal(bgs))
         # a melted column is a 4 px hole through the ceiling and middle
         # bands (rows 16-98); the floor band is never eaten
         self.MELT_TOP, self.MELT_H = 16, 99 - 16
@@ -3100,6 +3184,27 @@ class HeroRenderer(JAXGameRenderer):
                         art[r, dx + col, 3] = 255
         return jnp.asarray(art)
 
+    def _dyn_reveal(self, bgs: np.ndarray) -> np.ndarray:
+        """Per room, the pixels a burning stick lights up in a DARK room.
+
+        Measured on the ROM (level 5 room 1, 2026-09-28): the rock the dark
+        room hides comes back in _REVEAL_GREY while the stick burns and
+        explodes - all of it except the trim rows and the one-row seams
+        between the rock bands (the level's 'edge' shade), which stay as the
+        dark room draws them.
+        """
+        black = self.COLOR_TO_ID[(0, 0, 0)]
+        dark = self._darken(bgs)
+        out = (dark == black) & (bgs != black)
+        # nor the trim rows, which the dark room already draws in its greys
+        for r0, r1 in _DARK_TRIM_ROWS:
+            out[:, :, r0:r1, :] = False
+        for li in range(bgs.shape[0]):
+            edge = self.COLOR_TO_ID.get(_hex_rgb(HL.SHADES[li + 1]["edge"]))
+            if edge is not None:
+                out[li] &= bgs[li] != edge
+        return out
+
     def _darken(self, bgs: np.ndarray) -> np.ndarray:
         """The dark version of every baked room, as colour ids.
 
@@ -3185,6 +3290,29 @@ class HeroRenderer(JAXGameRenderer):
             magma = jnp.take(raster, src, axis=1)
             raster = jnp.where(band[:, None] & covered[None, :], magma, raster)
 
+        # dynamite light (measured): while a stick burns or explodes in this
+        # room, a dark room shows its rock again in _REVEAL_GREY; and on the
+        # two flash frames of every 8-frame round of the explosion all black
+        # of the cave turns _FLASH_GREY - sprites are drawn over it as usual
+        dyn_here = state.dyn_room == room
+        blasting = (state.explosion_timer > 0) & dyn_here
+        blast_age = c.explosion_frames - state.explosion_timer
+        lit_by_dyn = dyn_here & (state.dyn_active | (state.explosion_timer > 0))
+        black = self.COLOR_TO_ID[(0, 0, 0)]
+        reveal = jax.lax.dynamic_update_slice(
+            jnp.zeros(raster.shape[:2], dtype=jnp.bool_), self.DYN_REVEAL[lvl, room], (0, 0))
+        raster = jnp.where(reveal & lit_by_dyn & state.room_dark[room],
+                           self.COLOR_TO_ID[_REVEAL_GREY], raster)
+        flash = blasting & (self.BLAST_SEQ[blast_age % self.BLAST_SEQ.shape[0]] == 0)
+        # the flash lights the AIR of the room only: in a dark room the rock
+        # and its seams stay as they are (measured)
+        air = jax.lax.dynamic_update_slice(
+            jnp.zeros(raster.shape[:2], dtype=jnp.bool_), self.BGS[lvl, room] == black, (0, 0))
+        in_cave = ((rows[:, None] >= _FLASH_ROWS[0]) & (rows[:, None] < _FLASH_ROWS[1]) &
+                   (cols[None, :] >= 8))
+        raster = jnp.where(flash & in_cave & air & (raster == black),
+                           self.COLOR_TO_ID[_FLASH_GREY], raster)
+
         def maybe(cond, x, y, mask, ras, flip=False):
             return jax.lax.cond(
                 cond,
@@ -3248,9 +3376,12 @@ class HeroRenderer(JAXGameRenderer):
         # lanterns (alive while their room is still lit)
         lan = c.LANTERN[lvl]
         for i in range(c.num_lanterns):
-            raster = maybe(c.LANTERN_VALID[lvl, i] & (lan[i, 0] == room) &
-                           (~state.room_dark[lan[i, 0]]),
-                           lan[i, 1], lan[i, 2], self.SHAPE_MASKS["lantern"], raster)
+            here = c.LANTERN_VALID[lvl, i] & (lan[i, 0] == room)
+            out = state.room_dark[lan[i, 0]]
+            raster = maybe(here & ~out, lan[i, 1], lan[i, 2],
+                           self.SHAPE_MASKS["lantern"], raster)
+            raster = maybe(here & out, lan[i, 1], lan[i, 2],
+                           self.SHAPE_MASKS["lantern_dark"], raster)
 
         # flare-ups (L7-10): drawn while their cycle is on
         flr = c.FLARES_T[lvl]
@@ -3266,15 +3397,24 @@ class HeroRenderer(JAXGameRenderer):
         raster = maybe(c.RAFT_IN[lvl, room], state.raft_x, c.raft_y,
                        self.SHAPE_MASKS["raft"], raster)
 
-        # dynamite + explosion flash
-        dyn_here = state.dyn_room == room
-        # drawn under the middle of the hero, not at dyn_x (see dyn_draw_dx)
+        # dynamite: the burning stick, then the explosion (measured, see
+        # _DYN_FUSE_ART / _BLAST_ART), drawn under the middle of the hero, not
+        # at dyn_x (see dyn_draw_dx); the 11-row stick ends on dyn_y's bottom row
         stick_x = state.dyn_x + c.dyn_draw_dx
-        raster = maybe(state.dyn_active & dyn_here, stick_x, state.dyn_y,
-                       self.SHAPE_MASKS["dynamite"], raster)
-        raster = maybe((state.explosion_timer > 0) & dyn_here,
-                       stick_x - c.explosion_radius, state.dyn_y - c.explosion_radius,
-                       self.SHAPE_MASKS["explosion"], raster)
+        fuse_age = c.dyn_fuse_playable - state.dyn_fuse
+        # the frame it is planted on (age 1) shows the loop's first shape
+        fuse_pose = self.DYN_FUSE_SEQ[jnp.maximum(fuse_age - 1, 0) % self.DYN_FUSE_SEQ.shape[0]]
+        # its top row: the ROM hero stands flush on the floor, 1 px lower
+        # than the earlier hero hovered, and the ROM draws the stick on rows
+        # 12-22 below his top (measured) - dyn_y itself, which the blast boxes
+        # are built on, is left as it was
+        stick_y = state.dyn_y - (2 if c.rom_hero else 1)
+        raster = maybe(state.dyn_active & dyn_here, stick_x, stick_y,
+                       self.DYN_FUSE_FRAMES[fuse_pose], raster)
+        blast_pose = self.BLAST_SEQ[blast_age % self.BLAST_SEQ.shape[0]]
+        raster = maybe(blasting & (blast_age < c.explosion_frames - 1),
+                       stick_x - 3, stick_y - 1,
+                       self.BLAST_FRAMES[blast_pose], raster)
 
         if c.rom_hero:
             # player (measured on the ROM): off the ground he is the airborne
@@ -3356,7 +3496,11 @@ class HeroRenderer(JAXGameRenderer):
 
         # dynamite sticks remaining
         raster = self.jr.render_indicator(raster, c.dyn_icons_x, c.dyn_icons_y,
-                                          state.dynamite_count, self.SHAPE_MASKS["dyn_icon"],
+                                          # the ROM takes the icon away when
+                                          # the stick EXPLODES, not when it is
+                                          # planted (measured; drawing only)
+                                          state.dynamite_count + state.dyn_active.astype(jnp.int32),
+                                          self.SHAPE_MASKS["dyn_icon"],
                                           spacing=c.dyn_icons_spacing,
                                           max_value=c.starting_dynamite)
 
