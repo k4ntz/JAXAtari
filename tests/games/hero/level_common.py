@@ -5,10 +5,8 @@ ale-py, no ROM, no reference database in the repository - so the repo can
 check itself. Each check takes the band strings the level is supposed to draw
 from its caller, because the expectation belongs in the test that states it.
 
-The ROM itself stays the source of truth, and lives outside this repository:
-``level_images/tools/hero_extract.py`` reads it and
-``level_images/tools/check_level.py N`` diffs this environment's rendering
-against it, room by room. Run that after changing a level; these checks
+The ROM itself stays the source of truth, and lives outside this repository.
+Re-check a level against it, room by room, after changing it; these checks
 cannot see the ROM and will happily agree with wrong data that is internally
 consistent.
 
@@ -16,7 +14,7 @@ Not a test module itself: ``test_levelN.py`` calls into it.
 """
 from jaxatari.games import hero_levels as HL
 
-# HERO_SPEC.md section 2: three bands of 38 cells of 4 px, first cell at x 8.
+# Three bands of 38 cells of 4 px, first cell at x 8.
 BANDS = {"A": (16, 59), "B": (60, 98), "C": (99, 141)}
 BAND_HEIGHT = {16: 44, 60: 39, 99: 43}
 CELLS, CELL_W, X0 = 38, 4, 8
@@ -47,8 +45,7 @@ def bands_of(image):
     middle may still be `~`, the lethal LIQUID surface: it is empty from row 99
     to about 135 and drawn only on rows 136-141, so the middle sample sees
     black and a reader that stops there calls a water room a row of holes. It
-    is a floor the hero dies on and it is not a way down (CORRECTIONS.md, the
-    second bug). Level 7 room 10 is the first room in this repository that has
+    is a floor the hero dies on and it is not a way down. Level 7 room 10 is the first room in this repository that has
     any, and it is twenty-four cells of it.
     """
     out = {}
@@ -100,7 +97,7 @@ def check_bands(level, want):
 def check_walls_on_the_grid(level):
     """Every rect starts on a 4 px column and fills exactly one band.
 
-    HERO_SPEC.md: a wall edge at an x that is not a multiple of 4, or a band
+    A wall edge at an x that is not a multiple of 4, or a band
     boundary on a row other than 16 / 60 / 99 / 142, is a bug.
 
     The LIQUID surface is the one exception, and it is not a band: a `~` cell
@@ -166,7 +163,7 @@ def check_destructibles(level, want):
     """Blastable walls sit on the grid, inside a band, and never on the edge.
 
     A stick takes a column of the ceiling and middle bands together and never
-    the floor band (HERO_SPEC.md section 6) - except in a room whose floor has
+    the floor band - except in a room whose floor has
     no hole at all, where blasting the floor is the only way down. And a run
     of rock that reaches the side of the screen never breaks, which is what
     keeps the hero inside the cave.

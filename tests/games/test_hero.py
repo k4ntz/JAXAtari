@@ -1,4 +1,9 @@
-"""Tests for the measured H.E.R.O. environment (jax_hero, levels 1-3).
+"""Tests for the measured H.E.R.O. environment (jax_hero, all 20 levels).
+
+These pin the environment's core rules across the levels: movement, power,
+the laser, dynamite, creature contact, lanterns, magma and water, rescuing
+the miner, level advance, lives and scoring, plus the level data and the
+renderer.
 
 The environment models the ROM's screen-flip world: each level is a stack of
 static rooms; geometry, physics and object positions were measured from ALE
@@ -222,10 +227,9 @@ def test_dynamite_breaks_level2_wall_and_scores():
     It stands at x 52-59, NOT at x 60-67. This test used to say 60, and to
     say that room 0's, room 1's and room 3's pillar were one wall drawn three
     times, because the first capture read a room by writing the room index
-    into RAM and so kept room 0's corridor for every room
-    (level_images/CORRECTIONS.md). The ROM gives all four rooms a different
-    corridor, so nothing in this level is shared and each wall pays its own
-    75.
+    into RAM and so kept room 0's corridor for every room. The ROM gives all
+    four rooms a different corridor, so nothing in this level is shared and
+    each wall pays its own 75.
     """
     env = _env()
     c = env.consts
@@ -555,10 +559,10 @@ def test_levels_4_to_16_data_present():
 def test_bat_killed_by_laser():
     """A bat dies to the bolt like a spider (+50).
 
-    Level 4 has exactly one, in room 4, sweeping 22 px about x 75 on row 64
-    (CHARACTERS.md). The superseded census put a bat at (120, 67) in room 2
-    and no bat in room 4 at all; the creature the ROM draws at x 120 in room
-    2 is a bobbing spider.
+    Level 4 has exactly one, in room 4, sweeping 22 px about x 75 on row 64.
+    The superseded census put a bat at (120, 67) in room 2 and no bat in room
+    4 at all; the creature the ROM draws at x 120 in room 2 is a bobbing
+    spider.
     """
     env = _env()
     c = env.consts
@@ -826,8 +830,8 @@ def test_levels_7_to_10_miners_on_the_measured_ledges():
     # draws him; L8 to x 25, two right of its 23. Level 8's was re-measured on
     # 2026-09-23 with the hero parked at the far right of room 13, clear of
     # him - his sprite runs rows 86-97 from column 25, pink face at x 26-27.
-    # The teleport scan is the method CORRECTIONS.md discredits, so where the
-    # two disagree the chained entry wins.
+    # The teleport scan is the discredited method, so where the two disagree
+    # the chained entry wins.
     assert HL.MINER_POS[6] == (11, 128, 86)
     assert HL.MINER_POS[7] == (13, 25, 86)
     assert HL.MINER_POS[8] == (15, 128, 86)   # ROM capture, 2026-09-23

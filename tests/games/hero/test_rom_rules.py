@@ -1,4 +1,4 @@
-"""The global rules of HERO_SPEC.md, the ones that hold on every level.
+"""The global rules of H.E.R.O., the ones that hold on every level.
 
 Level geometry lives in test_hero.py and the per-level files; this module
 pins the rules that a level rebuild must never quietly break: the level
@@ -28,7 +28,7 @@ def env():
 def test_twenty_levels_matching_the_rom_reference(env):
     assert HL.NUM_LEVELS == 20
     assert HL.ROOMS_PER_LEVEL == [2, 4, 6, 8, 8, 10, 12, 14] + [16] * 12, (
-        "the ROM's room counts (level_images/hero_rooms.py)")
+        "the ROM's room counts")
     assert int(env.consts.num_levels) == 20
     assert len(env.consts.LEVEL_ROOMS) == 20
 
@@ -432,10 +432,9 @@ def test_every_level_has_meltable_walls_and_keeps_its_edges(env):
 
 
 # --- the raft ---------------------------------------------------------------
-# Measured on the ROM 2026-09-24 (level_images CHARACTERS.md, "Raft"): a
-# yellow 8x2 platform on the liquid of level 10 room 13, level 11 room 12 and
-# level 12 room 14, which the recorded playthroughs ride under each room's
-# magma wall. Keyed (level, room): level 16 has two, in rooms 11 and 13.
+# Measured on the ROM 2026-09-24: a yellow 8x2 platform on the liquid of
+# level 10 room 13, level 11 room 12 and level 12 room 14, which the recorded
+# playthroughs ride under each room's magma wall. Keyed (level, room): level 16 has two, in rooms 11 and 13.
 RAFT_ROOMS = {(10, 13): 124, (11, 12): 28, (12, 14): 124, (13, 12): 124,
               (14, 12): 28, (15, 13): 124, (16, 11): 28, (16, 13): 28,
               (17, 14): 124, (18, 12): 28, (19, 12): 124,

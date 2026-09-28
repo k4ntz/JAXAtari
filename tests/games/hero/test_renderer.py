@@ -98,10 +98,10 @@ def test_flare_stamps_are_the_two_tone_flame_rectangles(env, monkeypatch):
 
 
 def test_the_hero_animates_at_the_three_rates_the_rom_uses(env):
-    """CHARACTERS.md, "Roderick Hero / Animation": standing on rock is ONE
-    still picture - the rotor does not turn on the ground, not even while UP
-    spins the thrust up. Off the ground the rotor cycles three poses at ONE
-    frame each, and walking runs its stride at FOUR frames a pose.
+    """Standing on rock is ONE still picture - the rotor does not turn on the
+    ground, not even while UP spins the thrust up. Off the ground the rotor
+    cycles three poses at ONE frame each, and walking runs its stride at FOUR
+    frames a pose.
     """
     import jax
     import jax.numpy as jnp

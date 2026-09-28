@@ -1,11 +1,7 @@
 """
 JAX implementation of H.E.R.O. (Helicopter Emergency Rescue Operation) —
-Activision, 1984. Twenty levels, measured from the real ROM. Levels 1 and 2
-have been rebuilt cell-for-cell against the reference pack in ../level_images
-by tools/hero_gen/build_level.py; levels 3-16 still come from the first
-capture pass and are wrong in the corridor band of nearly every room past
-room 0 (level_images/CORRECTIONS.md), and 17-20 are placeholders. See
-hero_levels.py.
+Activision, 1984. Twenty levels, measured cell for cell from the real ROM.
+The level data lives in hero_levels.py.
 
 Ground truth / provenance
 -------------------------
@@ -40,9 +36,8 @@ Measured mechanics
     clears it from the ceiling and middle bands together (never the floor),
     for no points. The burn is remembered when the button is released. A
     wall run that reaches a screen edge never melts, so the hero cannot burn
-    his way out of the cave. HERO_SPEC.md says the laser "does not cut rock";
-    the ROM disagrees and the ROM wins - this is the slow, free alternative
-    to a stick of dynamite, which is instant but costs one of six and pays 75.
+    his way out of the cave. This is the slow, free alternative to a stick
+    of dynamite, which is instant but costs one of six and pays 75.
   * Touching a creature kills the HERO, and holding fire does not save him.
     Measured by walking into level 1 room 1's spider: not firing, he stops
     dead against it and loses a life 107 frames later (the ROM's death
@@ -103,7 +98,7 @@ from jaxatari.games import hero_levels as HL
 _NUM_LEVELS = HL.NUM_LEVELS
 _ROOMS = HL.ROOMS_PER_LEVEL
 _MAX_ROOMS = max(_ROOMS)
-_CELLS = 38          # 38 cells of 4 px per band (HERO_SPEC.md section 2)
+_CELLS = 38          # 38 cells of 4 px per band
 _RECTS = [getattr(HL, f"WALL_RECTS_L{i}") for i in range(1, _NUM_LEVELS + 1)]
 def _carve_room(rects, zones):
     """The static wall rects of one room with its blastable zones cut out.
@@ -114,7 +109,7 @@ def _carve_room(rects, zones):
     wider run. Level 2 room 1 is the case that matters - its blastable pillar
     is two cells of the corridor, but the ceiling above it is part of a
     16-cell slab, and a stick takes the ceiling column along with the corridor
-    one (HERO_SPEC.md section 6).
+    one.
 
     So each rect is cut on BOTH axes: the columns of it beside the zone
     survive at full height, and only the columns inside the zone lose the
@@ -482,8 +477,7 @@ def _build_level_arrays():
             # _carve_room, which runs once at import so the padded
             # array can be sized from what it produces.
     # --- cell grid -----------------------------------------------------
-    # The cave is 38 cells of 4 px in each of three bands (HERO_SPEC.md
-    # section 2). Rasterise every wall - static rects and destructible zones
+    # The cave is 38 cells of 4 px in each of three bands. Rasterise every wall - static rects and destructible zones
     # alike - into (band, cell) occupancy. The laser melt works on this grid;
     # it can only ever REMOVE collision, so a level with nothing melted
     # behaves exactly as its rects always did.
@@ -532,7 +526,7 @@ def _build_level_arrays():
                     cell = run
             # the floor band is never eaten, by the laser or by dynamite
             meltable[li, ri, 2, :] = False
-    # Magma is immune to the laser (HERO_SPEC.md section 3): the beam does
+    # Magma is immune to the laser: the beam does
     # nothing to a red block however long it is held. Dynamite still takes it,
     # which is a DESTRUCTIBLE zone and not this grid.
     BAND_OF = {16: 0, 60: 1, 99: 2}
@@ -659,7 +653,7 @@ class HeroConstants(AutoDerivedConstants):
     # did nothing - which is what keeps the hero inside the cave.
     laser_burn_frames: int = struct.field(pytree_node=False, default=256)
 
-    # --- Dynamite (HERO_SPEC.md section 6) ---
+    # --- Dynamite ---
     # A stick is placed with DOWN while standing on solid ground; DOWN in
     # mid-air only makes the hero sink faster. The blast takes the wall
     # column it touches and costs a life if the hero has not got clear.
@@ -705,7 +699,7 @@ class HeroConstants(AutoDerivedConstants):
     blast_safe_gap: int = struct.field(pytree_node=False, default=10)
     starting_dynamite: int = struct.field(pytree_node=False, default=6)
 
-    # --- Power / lives / scoring (HERO_SPEC.md sections 6 and 7) ---
+    # --- Power / lives / scoring ---
     # The gauge is 78 bar pixels wide and each pixel is 68 frames of MOVEMENT
     # (walking or hovering). Standing perfectly still costs nothing at all -
     # 3,000 idle frames were measured against an unmoved gauge.
@@ -751,7 +745,7 @@ class HeroConstants(AutoDerivedConstants):
     spider_width: int = struct.field(pytree_node=False, default=7)
     spider_height: int = struct.field(pytree_node=False, default=11)
     # the bat is 11 rows of wing throughout and has no thread above it, so
-    # its whole sprite is body (CHARACTERS.md, measured on level 3)
+    # its whole sprite is body (measured on level 3)
     bat_height: int = struct.field(pytree_node=False, default=11)
     # the snake has no thread either: all 7 rows of it are body. Its WIDTH is
     # not a constant at all - it is however far out of the rock the stretch
@@ -951,7 +945,7 @@ class HeroConstants(AutoDerivedConstants):
     score_y: int = struct.field(pytree_node=False, default=179)
     score_digit_pitch: int = struct.field(pytree_node=False, default=8)
 
-    # --- The level banner (HERO_SPEC.md section 5) ---
+    # --- The level banner ---
     # At the start of every level the score line is replaced by "LEVEL:  n"
     # in the power gauge's yellow. Measured on the ROM: the word sits at
     # x 59-86 on rows 179-186 and the number is right aligned into the
@@ -960,7 +954,7 @@ class HeroConstants(AutoDerivedConstants):
     # It stays up for exactly 111 frames, and the count does not depend on
     # what the player does - booting level 1 and holding NOOP, and booting it
     # and holding RIGHT, both show it on frames 0-110 and not on 111. That is
-    # 1.85 s, the "about 2 seconds" HERO_SPEC.md records, and it matches the
+    # 1.85 s, and it matches the
     # recorded playthroughs, which are 5 fps and show it on frames 1-8.
     level_banner_frames: int = struct.field(pytree_node=False, default=111)
     level_banner_x: int = struct.field(pytree_node=False, default=59)
@@ -1377,7 +1371,7 @@ class JaxHero(JaxEnvironment[HeroState, HeroObservation, HeroInfo, HeroConstants
                                     jnp.maximum(0, state.explosion_timer - 1)).astype(jnp.int32)
         dyn_active = dyn_active & (~explode_now)
 
-        # Blast boxes (measured, HERO_SPEC.md section 6).
+        # Blast boxes (measured).
         #   destruction: reaches a wall with up to blast_reach px of clear
         #     air between it and the hero's own edge at the moment he planted
         #     the stick (dyn_x is his left edge minus 2), nothing at 9 px;
@@ -1461,7 +1455,7 @@ class JaxHero(JaxEnvironment[HeroState, HeroObservation, HeroInfo, HeroConstants
         sp_here = state.spider_alive & (sp_room == new_room)
         # A spider's body hangs under a thread, so only the rows from
         # spider_body_top down are it. A BAT is body all the way: 11 rows of
-        # wing, top-aligned on the canvas (CHARACTERS.md), so its box is the
+        # wing, top-aligned on the canvas, so its box is the
         # whole sprite and not the spider's lower five rows.
         # A SNAKE has no thread either, and its box is only 7 rows, so it
         # is body from sp_y down like the bat - not sp_y + 6. Taking the
@@ -1580,7 +1574,7 @@ class JaxHero(JaxEnvironment[HeroState, HeroObservation, HeroInfo, HeroConstants
                                           c.player_height, de[:, 1] - 1,
                                           de[:, 2] - 1, de[:, 3] + 2,
                                           de[:, 4] + 2)))
-        # --- magma: cave rock that burns (HERO_SPEC.md section 3) ---
+        # --- magma: cave rock that burns ---
         # It is solid because it is in the wall rects, so the hero can never
         # be INSIDE it - the only way to meet it is to end up against it.
         # The lethal box is therefore the rect grown by one pixel at its sides
@@ -2009,7 +2003,7 @@ _ART_PALETTE = {
 # running stride (wide<->narrow stance); while airborne the rotor spins and
 # the legs dangle together.
 # The rotor has THREE widths and they cycle one per frame, standing or
-# hovering alike (CHARACTERS.md, "Roderick Hero / Animation"):
+# hovering alike:
 #
 #     .#....        ###...        #####..
 #     narrow        medium        wide
@@ -2086,7 +2080,7 @@ _HERO_LEGS_TOGETHER = [      # dangling (flight / idle)
 # Standing and hovering both cycle the three rotor poses over dangling legs,
 # a new pose every frame. Walking holds the wide rotor still and steps the
 # legs instead, four frames to a pose - the two states genuinely do not
-# animate at the same rate (CHARACTERS.md).
+# animate at the same rate.
 _PLAYER_STAND = [top + _HERO_HEAD + _HERO_SUIT + _HERO_LEGS_TOGETHER
                  for top in _HERO_ROTOR]
 _PLAYER_WALK0 = _HERO_TOP_WIDE + _HERO_HEAD + _HERO_SUIT + _HERO_LEGS_CONTACT
@@ -2129,7 +2123,7 @@ _SPIDER_ART2 = [
 ]
 
 # Bat: the ROM's own bitmap, read pixel for pixel off level 7 room 5 and
-# level 6 rooms 1 and 3 (tools/creature_atlas.py, 2026-09-23). 11 rows
+# level 6 rooms 1 and 3. 11 rows
 # throughout, 5 px wide with the wings closed and 7 with them spread, and
 # FOUR poses in the cycle - closed, straight, mid, spread - each held about
 # 4 frames. Row 0 is the top of the bat, so the y in HL.SPIDERS, which is the
@@ -2139,8 +2133,7 @@ _SPIDER_ART2 = [
 # and MIRRORED about the body: #8e8e8e #aaaaaa #c0c0c0 for the wings, then
 # #c3903d #b47a30 #a26221 for the body, then back out again. Drawing the
 # whole bat in one grey - which is what this art did - loses the warm body
-# CHARACTERS.md describes ("an orange body with grey wings above and below
-# it") and makes every bat in the game a flat slab.
+# (an orange body with grey wings above and below it) and makes every bat in the game a flat slab.
 #
 # The first three poses are 5 px wide and the spread one is 7; they are all
 # centred on the same body column, so the narrow ones are padded out to the
@@ -2206,10 +2199,10 @@ _BAT_ART4 = [                # spread
 # The UNTETHERED spider (kind 4). The same warm body as the hanging one and
 # no thread at all: it floats in mid-corridor and flips between two poses,
 # legs spread below the body and legs gathered above it. Read off the ROM at
-# level 6 rooms 1, 5 and 7 and level 7 room 11 (tools/creature_atlas.py,
-# 2026-09-23); levels 2, 3 and 4 carry it too.
+# level 6 rooms 1, 5 and 7 and level 7 room 11; levels 2, 3 and 4 carry it
+# too.
 #
-# It is the creature CHARACTERS.md's per-room tables cannot name: the census
+# It is the creature a thread-based census cannot name: the census
 # tells a spider from a bat by whether a 1 px thread is drawn above the body,
 # so with no thread it called this one a "Bat" where it sits still (level 7
 # room 6) and a "Spider" where it bobs (level 6 rooms 1, 5, 7) - the same
@@ -2344,7 +2337,7 @@ _SNAKE_ARTS = ([_snake_art(0, False)] +
                [_snake_art(n, False) for n in range(1, _SNAKE_REACH + 1)] +
                [_snake_art(n, True) for n in range(1, _SNAKE_REACH + 1)])
 
-# Lantern lamp, exactly the ROM's bitmap (bestiary.json `lamp`, 5x8): a
+# Lantern lamp, exactly the ROM's bitmap (5x8): a
 # silver bracket over two bright yellow bands. Touching it (or blasting it)
 # darkens the room for the rest of the level.
 _LANTERN_ART = [
@@ -2360,8 +2353,8 @@ _LANTERN_ART = [
 
 # Trapped miner, 8 wide x 12 tall. Lifted pixel for pixel out of the ROM's
 # own level 1 room 1: forcing the room register parks the hero out of shot but
-# leaves the miner in the capture, and what is left matches the bitmap in
-# HERO_SPEC.md section 4. The sprite's own origin is its top-left pixel, so
+# leaves the miner in the capture, and what is left matches the ROM's
+# bitmap. The sprite's own origin is its top-left pixel, so
 # it sits flush with the measured MINER_POS (level 1: x 25, y 86) instead of
 # the 1 px inset the earlier art carried.
 _MINER_ART = [
@@ -2379,7 +2372,7 @@ _MINER_ART = [
     ".SS..SS.",
 ]
 
-# A placed stick, exactly the ROM's bitmap (bestiary.json `dynamite`, 3x10):
+# A placed stick, exactly the ROM's bitmap (3x10):
 # a red body under a yellow fuse burning down.
 _DYN_ART = [
     "..Y",
@@ -2480,7 +2473,7 @@ _LETTER_FONT = {
 
 
 # ---------------------------------------------------------------------------
-# Darkness (HERO_SPEC.md section 3, measured frame by frame)
+# Darkness (measured frame by frame)
 #
 # A room whose lamp has been knocked out is NOT dimmed and NOT washed grey.
 # The three bands of rock are simply not drawn at all. What is left on the
@@ -2627,7 +2620,7 @@ class HeroRenderer(JAXGameRenderer):
         self.PLAYER_WALK_FRAME0 = 3
         # Standing on rock is ONE still picture: the rotor does not turn on
         # the ground, not even while UP spins the thrust up (measured on the
-        # ROM, CHARACTERS.md "Roderick Hero / Animation"). The medium rotor
+        # ROM). The medium rotor
         # is the one the ROM's standing bitmap carries (3 px wide).
         self.PLAYER_STAND_FRAME = 1
         # sprite per (kind, animation frame): 0 spider, 1 bat, 2 magma,
@@ -2636,7 +2629,7 @@ class HeroRenderer(JAXGameRenderer):
         #
         # The kinds do not have the same NUMBER of poses either, not just the
         # same rate: the ROM's spider swaps between two, its bat runs a
-        # four-pose wing cycle (CHARACTERS.md), so a bat animated over two
+        # four-pose wing cycle, so a bat animated over two
         # poses skips half its flap, and a snake has one bitmap per pixel of
         # stretch per head flutter (_snake_art). CREATURE_POSES says how many
         # of the slots below are real; the rest repeat so the gather is still
@@ -2771,7 +2764,7 @@ class HeroRenderer(JAXGameRenderer):
     def _darken(self, bgs: np.ndarray) -> np.ndarray:
         """The dark version of every baked room, as colour ids.
 
-        Measured (HERO_SPEC.md section 3): rock is not drawn at all, the trim
+        Measured: rock is not drawn at all, the trim
         on rows 16-19 and 138-141 keeps its shape but is recoloured to the
         grey family, and magma stays at full red. Everything else goes black.
         """
@@ -2885,7 +2878,7 @@ class HeroRenderer(JAXGameRenderer):
         # creatures: bob/patrol per creature; sprite selected by kind and by
         # its own pose cycle. Neither the rate nor the number of poses is
         # shared - a spider swaps between two poses every 8 frames and a bat
-        # flaps through four every 4 (CHARACTERS.md). A SNAKE does not run a
+        # flaps through four every 4. A SNAKE does not run a
         # pose cycle at all: its bitmap is how far out of the rock it is on
         # this frame, so it reads its stretch clock instead of SPIDER_HOLD
         # and draws nothing at all while it is pulled in.
@@ -2946,7 +2939,7 @@ class HeroRenderer(JAXGameRenderer):
 
         # player: hovering and flying cycle the three rotor poses one frame
         # each; walking holds each of its two strides for four frames
-        # (CHARACTERS.md - the states do not share a rate). Standing on the
+        # (the states do not share a rate). Standing on the
         # ground is one still picture, below.
         airborne = (jnp.abs(state.player_vy) > 0.5) | (state.thrust_timer > 0)
         rotor_frame = state.step_counter % self.PLAYER_ROTOR_POSES
