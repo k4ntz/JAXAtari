@@ -1532,6 +1532,7 @@ class JaxCrazyClimber(JaxEnvironment[CrazyClimberState, CrazyClimberObservation,
             )
 
         def try_spawn_flowerpot_enemy(s: CrazyClimberState) -> CrazyClimberState:
+            falling = s.tower_state.is_falling
             candidates = self.consts.FLOWERPOT_CANDIDATE_WINDOWS
             candidate_rows = candidates[:, 0]
             candidate_cols = candidates[:, 1]
@@ -1582,7 +1583,7 @@ class JaxCrazyClimber(JaxEnvironment[CrazyClimberState, CrazyClimberObservation,
                 return protect_flowerpot_row(s)
 
             return jax.lax.cond(
-                has_valid_candidate,
+                has_valid_candidate & (~falling),
                 spawn_from_valid_candidate,
                 lambda s: s,
                 s,
