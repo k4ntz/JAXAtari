@@ -3,7 +3,8 @@ from jaxatari.modification import JaxAtariModController
 from jaxatari.games.mods.montezuma_revenge.montezuma_revenge_mod_plugins import (
     InfiniteAmuletMod, SuperJumpMod, FastPlayerMod, NoFallDamageMod,
     RevealMapMod, DebugHudMod, NoEnemiesMod, CenterBouncingSkullMod,
-    RollingSkullsMod, MovingSnakesMod, JumpingSpidersMod, SwordKillBonusMod, ThreeSwordsMod
+    RollingSkullsMod, MovingSnakesMod, JumpingSpidersMod, SwordKillBonusMod,
+    ThreeSwordsMod, DifferentStart, ChangeEnemyActivity, ChangeCollision, LadderPits
 )
 
 # --- The Registry ---
@@ -22,7 +23,13 @@ MONTEZUMA_REVENGE_MOD_REGISTRY = {
     "sword_kill_bonus": SwordKillBonusMod,
     "three_swords": ThreeSwordsMod,
     "alternative_enemies": ["center_bouncing_skull", "rolling_skulls", "moving_snakes", "jumping_spiders"],
-    "god_mode": ["infinite_amulet", "no_fall_damage", "no_enemies", "super_jump", "fast_player"]
+    "god_mode": ["infinite_amulet", "no_fall_damage", "no_enemies", "super_jump", "fast_player"],
+    "start": DifferentStart,
+    "change": ChangeEnemyActivity,
+    "change_col": ChangeCollision,
+    "ladder": LadderPits,
+    "quick_game": ["start", "change", "change_col", "ladder"]
+
 }
 
 class MontezumaRevengeEnvMod(JaxAtariModController):
