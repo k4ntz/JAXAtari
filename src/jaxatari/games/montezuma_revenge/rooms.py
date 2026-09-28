@@ -121,8 +121,9 @@ def load_room(room_id: jnp.ndarray, state: MontezumaRevengeState, consts: Montez
         ia = config.items_active
         lax = config.lasers_x
         laa = config.lasers_active
+
         lx = lx.at[0].set(72)
-        lt = lt.at[0].set(48)
+        lt = lt.at[0].set(50)
         lb = lb.at[0].set(149)
         la = la.at[0].set(1)
         
@@ -167,15 +168,15 @@ def load_room(room_id: jnp.ndarray, state: MontezumaRevengeState, consts: Montez
         emaxx = config.enemies_max_x.at[0].set(100)
         
         lx = lx.at[0].set(72)
-        lt = lt.at[0].set(49)
+        lt = lt.at[0].set(50)
         lb = lb.at[0].set(88)
         la = la.at[0].set(1)
         lx = lx.at[1].set(128)
-        lt = lt.at[1].set(92)
+        lt = lt.at[1].set(93)
         lb = lb.at[1].set(130)
         la = la.at[1].set(1)
         lx = lx.at[2].set(16)
-        lt = lt.at[2].set(92)
+        lt = lt.at[2].set(93)
         lb = lb.at[2].set(130)
         la = la.at[2].set(1)
 
@@ -249,7 +250,7 @@ def load_room(room_id: jnp.ndarray, state: MontezumaRevengeState, consts: Montez
         emaxx = emaxx.at[1].set(118)
 
         lx = lx.at[0].set(72)
-        lt = lt.at[0].set(48)
+        lt = lt.at[0].set(50)
         lb = lb.at[0].set(149)
         la = la.at[0].set(1)
 
@@ -284,7 +285,7 @@ def load_room(room_id: jnp.ndarray, state: MontezumaRevengeState, consts: Montez
         emaxx = config.enemies_max_x.at[0].set(156)
 
         lx = lx.at[0].set(72)
-        lt = lt.at[0].set(48)
+        lt = lt.at[0].set(50)
         lb = lb.at[0].set(149)
         la = la.at[0].set(1)
         lx = lx.at[1].set(72)
@@ -326,7 +327,7 @@ def load_room(room_id: jnp.ndarray, state: MontezumaRevengeState, consts: Montez
         emaxx = emaxx.at[1].set(155)
 
         lx = lx.at[0].set(72)
-        lt = lt.at[0].set(48)
+        lt = lt.at[0].set(50)
         lb = lb.at[0].set(149)
         la = la.at[0].set(1)
 
@@ -364,7 +365,7 @@ def load_room(room_id: jnp.ndarray, state: MontezumaRevengeState, consts: Montez
         emaxx = config.enemies_max_x.at[0].set(105)
 
         lx = lx.at[0].set(72)
-        lt = lt.at[0].set(126)
+        lt = lt.at[0].set(128)
         lb = lb.at[0].set(150)
         la = la.at[0].set(1)
 
@@ -437,7 +438,7 @@ def load_room(room_id: jnp.ndarray, state: MontezumaRevengeState, consts: Montez
         # Sword room from Montezuma1 (ROOM_1_3)
         lx = lx.at[0].set(72)
         lt = lt.at[0].set(6)
-        lb = lb.at[0].set(48)
+        lb = lb.at[0].set(47)
         la = la.at[0].set(1)
 
         # item: sword
@@ -467,7 +468,7 @@ def load_room(room_id: jnp.ndarray, state: MontezumaRevengeState, consts: Montez
         laa = config.lasers_active
 
         lx = lx.at[0].set(72)
-        lt = lt.at[0].set(48)
+        lt = lt.at[0].set(51)
         lb = lb.at[0].set(149)
         la = la.at[0].set(1)
 
@@ -504,7 +505,7 @@ def load_room(room_id: jnp.ndarray, state: MontezumaRevengeState, consts: Montez
 
         lx = lx.at[0].set(72)
         lt = lt.at[0].set(6)
-        lb = lb.at[0].set(48)
+        lb = lb.at[0].set(47)
         la = la.at[0].set(1)
 
         ex = config.enemies_x.at[0].set(18)
@@ -646,11 +647,11 @@ def load_room(room_id: jnp.ndarray, state: MontezumaRevengeState, consts: Montez
         # Two ladders: one to top, one to bottom
         lx = lx.at[0].set(72)
         lt = lt.at[0].set(6)
-        lb = lb.at[0].set(44)
+        lb = lb.at[0].set(46)
         la = la.at[0].set(1)
 
         lx = lx.at[1].set(72)
-        lt = lt.at[1].set(48)
+        lt = lt.at[1].set(50)
         lb = lb.at[1].set(149)
         la = la.at[1].set(1)
 
@@ -713,10 +714,10 @@ def load_room(room_id: jnp.ndarray, state: MontezumaRevengeState, consts: Montez
         # 2 Ladders
         lx = lx.at[0].set(72)
         lt = lt.at[0].set(6)
-        lb = lb.at[0].set(44)
+        lb = lb.at[0].set(46)
         la = la.at[0].set(1)
         lx = lx.at[1].set(72)
-        lt = lt.at[1].set(48)
+        lt = lt.at[1].set(50)
         lb = lb.at[1].set(149)
         la = la.at[1].set(1)
 
@@ -800,7 +801,7 @@ def load_room(room_id: jnp.ndarray, state: MontezumaRevengeState, consts: Montez
         # Ladder to top
         lx = lx.at[0].set(72)
         lt = lt.at[0].set(6)
-        lb = lb.at[0].set(44)
+        lb = lb.at[0].set(47)
         la = la.at[0].set(1)
 
         # Snake enemy
@@ -944,7 +945,7 @@ def load_room(room_id: jnp.ndarray, state: MontezumaRevengeState, consts: Montez
         
         lx = lx.at[0].set(72)
         lt = lt.at[0].set(6)
-        lb = lb.at[0].set(44)
+        lb = lb.at[0].set(47)
         la = la.at[0].set(1)
 
         return config.replace(
@@ -973,7 +974,7 @@ def load_room(room_id: jnp.ndarray, state: MontezumaRevengeState, consts: Montez
 
         lx = lx.at[0].set(72)
         lt = lt.at[0].set(6)
-        lb = lb.at[0].set(44)
+        lb = lb.at[0].set(47)
         la = la.at[0].set(1)
 
         return config.replace(

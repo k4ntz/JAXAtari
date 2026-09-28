@@ -18,7 +18,7 @@ Total:  🥇: 1   |   🥈: 2   |   🥉: 0   |   ❌: 2
 ## Atari 57
 | Game                         | Status  | Mods available |
 |------------------------------|---------|----------------|
-| alien                        | 🥈       | 0 |
+| alien                        | 🥈       | 2 |
 | amidar                       | 🥇       | 0 |
 | assault                      | 🥉       | 0 |
 | asterix                      | 🥇       | 0 |

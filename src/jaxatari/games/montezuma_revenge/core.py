@@ -9,6 +9,9 @@ class MontezumaRevengeConstants(struct.PyTreeNode):
     # Improves throughput, but increases memory usage and initialization time.
     RENDERER_PRELOAD_ROOMS: bool = struct.field(pytree_node=False, default=False)
 
+    # Play in custom rooms
+    CUSTOM_ROOMS: bool = False
+
     # Homogeneous Padding Limits
     MAX_ENEMIES_PER_ROOM: int = struct.field(pytree_node=False, default=3)
     MAX_LADDERS_PER_ROOM: int = struct.field(pytree_node=False, default=4)
@@ -54,7 +57,7 @@ class MontezumaRevengeConstants(struct.PyTreeNode):
     
     # Gameplay Rules
     OUT_OF_LADDER_DELAY: int = struct.field(pytree_node=False, default=5)
-    MAX_FALL_DISTANCE: int = struct.field(pytree_node=False, default=33) # ladder_height (39) - 6
+    MAX_FALL_DISTANCE: int = struct.field(pytree_node=False, default=20) # ladder_height (39) - 6
     BOUNCE_OFFSETS: jnp.ndarray = struct.field(pytree_node=False, default_factory=lambda: jnp.array([0, 3, 6, 9, 12, 15, 18, 21, 24, 27, 27, 27, 27, 24, 21, 18, 15, 12, 9, 6, 3, 0], dtype=jnp.int32))
     DEATH_TIMER_FRAMES: int = struct.field(pytree_node=False, default=70)
     PLATFORM_ACTIVE_DURATION: int = struct.field(pytree_node=False, default=90) # For spawning and disappearing platform
@@ -91,6 +94,7 @@ class MontezumaRevengeState:
     out_of_ladder_delay: jnp.ndarray
     last_rope: jnp.ndarray
     last_ladder: jnp.ndarray
+    prev_is_fire: jnp.ndarray
     
     # Homogeneous Entities for the CURRENT room
     enemies_x: jnp.ndarray

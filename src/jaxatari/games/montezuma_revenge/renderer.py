@@ -2,11 +2,13 @@ import jax
 import jax.numpy as jnp
 from functools import partial
 import os
+import sys
 
 from jaxatari.renderers import JAXGameRenderer
 from jaxatari.rendering import jax_rendering_utils as render_utils
 from jaxatari.games.montezuma_revenge.core import MontezumaRevengeConstants, MontezumaRevengeState
 from jaxatari.games.montezuma_revenge.rooms import load_room
+from jaxatari.games.mods.montezuma_revenge.custom_rooms import load_custom_room
 
 class MontezumaRevengeRenderer(JAXGameRenderer):
     def __init__(self, consts: MontezumaRevengeConstants = None, config: render_utils.RendererConfig = None):
@@ -272,6 +274,8 @@ class MontezumaRevengeRenderer(JAXGameRenderer):
         )
 
     def _load_room_geometry(self, room_id: int, template_state: MontezumaRevengeState) -> MontezumaRevengeState:
+        if self.consts.CUSTOM_ROOMS:
+            return load_custom_room(jnp.array(room_id, dtype=jnp.int32), template_state, self.consts)
         return load_room(jnp.array(room_id, dtype=jnp.int32), template_state, self.consts)
     
     def _build_room_background(self, room_id: int, room_state: MontezumaRevengeState) -> jnp.ndarray:
@@ -394,7 +398,7 @@ class MontezumaRevengeRenderer(JAXGameRenderer):
         # Draw ladders as static room geometry.
         def draw_ladder_accurate(i, r):
             x = room_state.ladders_x[i]
-            top = room_state.ladders_top[i] + 47
+            top = room_state.ladders_top[i] + 45
             bottom = room_state.ladders_bottom[i] + 47
             bottom = jnp.where(jnp.logical_and(room_id == 4, room_state.ladders_bottom[i] == 130), bottom + 3, bottom)
             bottom = jnp.where(jnp.logical_and(room_id == 23, room_state.ladders_bottom[i] == 150), bottom - 3, bottom)
@@ -635,26 +639,20 @@ class MontezumaRevengeRenderer(JAXGameRenderer):
 
                 # 2. Setup Static Dimensions
                 # Based on your previous code, max width seems to be 12 tiles
-                MAX_TILES = 12 
                 tile_h, tile_w = mask.shape
 
-                # 3. Create the tiled "Super Mask" (Horizontal)
-                # Shape: (tile_h, tile_w * 12)
-                total_mask = jnp.tile(mask, (1, MAX_TILES))
-
-                # 4. Calculate Dynamic Visibility
+                # 3. Calculate Dynamic Visibility
                 # Original tile width was 12. We find how many tiles, then map to scaled width.
                 num_tiles = state.platforms_width[i] // 12
                 actual_width_px = num_tiles * tile_w
                 
                 # Create the x-axis index mask
-                x_indices = jnp.arange(total_mask.shape[1])
+                x_indices = jnp.arange(mask.shape[1])
                 is_visible = x_indices < actual_width_px
                 
                 # Mask out the inactive tiles
-                full_mask = jnp.where(is_visible[None, :], total_mask, self.jr.TRANSPARENT_ID)
-
-                # 5. Render in one shot
+                full_mask = jnp.where(is_visible[None, :], mask, self.jr.TRANSPARENT_ID)
+                # 4. Render in one shot
                 return self.jr.render_at(r, state.platforms_x[i], state.platforms_y[i] + 47, full_mask)
 
             def _draw_active(r):
@@ -673,6 +671,7 @@ class MontezumaRevengeRenderer(JAXGameRenderer):
             lambda r: r,
             raster
         )
+
 
         # Draw Conveyors
         # Pre-compute room state check and animation (same for all conveyors in this frame)
