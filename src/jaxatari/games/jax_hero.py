@@ -52,7 +52,9 @@ Measured mechanics
     laser-melt a raw-ROM artefact and dropped it; it is genuine - measured
     again 2026-09-20 - and is now implemented.)
   * Death (creature touch, blast, power depletion): lose a life and respawn
-    at the top of the CURRENT room (measured); power refills.
+    in the CURRENT room, in the column of death (measured); power refills.
+    The creature in the band he died in dies with him, for no points, and
+    stays dead for the level (measured).
   * Miner rescue: +1000 plus an end-of-level tally of 20 points per power-bar
     pixel still lit (measured: a clean level-1 clear pays ~1300-1600).
   * Lives: start 4 (measured), +1 every 20000 points, capped at 6 heroes in
@@ -1771,6 +1773,18 @@ class JaxHero(JaxEnvironment[HeroState, HeroObservation, HeroInfo, HeroConstants
         cand = dead_x + offs
         died_low = died_to_floor_creature | died_deadly
         rs_row = jnp.where(died_low, c.respawn_low_y, c.respawn_y).astype(jnp.int32)
+        # A death takes the creature of its band with it: the frame the life
+        # is lost the ROM deletes the creature in the band he died in - the
+        # floor's after a floor creature or the liquid, the corridor's after
+        # anything else (a corridor creature, magma, a blast) - for no points,
+        # and it stays gone for the rest of the level like a shot one; the
+        # other band's creature is left. Measured 2026-09-28 on levels 1, 2,
+        # 5, 9 and 17, with real room re-entries. The tentacle is left alone:
+        # it cannot be killed (the ROM hides it after a floor death, but only
+        # until the room is re-entered - not modelled).
+        death_clear = (died & (sp_room == new_room) & ~is_tent & ~is_magma &
+                       ((c.SPIDER_Y[lvl] >= 99) == died_low))
+        spider_alive = spider_alive & (~death_clear)
         cand_ok = ((cand >= 8) & (cand <= 160 - c.player_width) &
                    ~jax.vmap(lambda x: self._hits_wall(rs_state, x, rs_row))(cand))
         any_ok = jnp.any(cand_ok)

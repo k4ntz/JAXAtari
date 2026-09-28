@@ -626,3 +626,73 @@ def test_a_column_solid_at_corridor_height_takes_the_nearest_free_one(env):
     x = int(s.player_x)
     assert not bool(env._hits_wall(s, jnp.int32(x), jnp.int32(env.consts.respawn_y)))
     assert abs(x - 64) <= 24
+
+
+# --- a death takes the creature of its band with it -------------------------
+# Measured on the ROM 2026-09-28 (ALE, real room entries, lives pinned): the
+# frame the life counter drops, the ROM deletes the creature in the band the
+# hero died in, pays nothing for it, and it never comes back - flying up out
+# of the room and down again (level 2 room 2, level 9 room 1, level 17 room 1)
+# finds it gone exactly like a creature shot with the laser. The OTHER band's
+# creature is untouched. The band is the one the respawn drop stops in: a
+# corridor creature or magma -> the corridor's creature; a floor creature or
+# the liquid -> the floor's. Level 1 room 1: walked into the spider, it went
+# and he came back in his own column (x 55); level 5 room 1: burnt on the
+# right-hand magma, the corridor bat at the far left went with him.
+def _slot(level, room, low):
+    return next(i for i, s in enumerate(HL.SPIDERS[level - 1])
+                if s[0] == room and (s[2] >= 99) == low)
+
+
+def _touch(env, level, room, x, y):
+    _, s = env.reset(jax.random.PRNGKey(0))
+    s = s.replace(level=jnp.int32(level - 1), room=jnp.int32(room),
+                  player_x=jnp.int32(x), player_y=jnp.int32(y),
+                  player_vy=jnp.float32(0), banner_timer=jnp.int32(0),
+                  invuln_timer=jnp.int32(0),
+                  spider_alive=env.consts.SPIDER_VALID[level - 1])
+    lives, score = int(s.lives), int(s.score)
+    _, s, *_ = env.step(s, NOOP)
+    assert int(s.lives) == lives - 1, "the touch must kill him"
+    assert int(s.score) == score, "the creature that goes with him pays nothing"
+    return s
+
+
+def test_the_spider_he_walks_into_dies_with_him(env):
+    slot = _slot(1, 1, low=False)
+    x, y = HL.SPIDERS[0][slot][1], HL.SPIDERS[0][slot][2]
+    s = _touch(env, 1, 1, x - 2, y)
+    assert not bool(s.spider_alive[slot])
+    assert abs(int(s.player_x) - (x - 2)) <= 1, "back in the column he died in"
+    assert int(s.player_y) == env.consts.respawn_y
+
+
+def test_a_corridor_death_leaves_the_floor_creature(env):
+    mid, low = _slot(2, 2, low=False), _slot(2, 2, low=True)
+    s = _touch(env, 2, 2, HL.SPIDERS[1][mid][1] - 2, HL.SPIDERS[1][mid][2] - 4)
+    assert not bool(s.spider_alive[mid])
+    assert bool(s.spider_alive[low])
+
+
+def test_a_floor_death_leaves_the_corridor_creature(env):
+    mid, low = _slot(2, 2, low=False), _slot(2, 2, low=True)
+    s = _touch(env, 2, 2, HL.SPIDERS[1][low][1] - 2, 100)
+    assert not bool(s.spider_alive[low])
+    assert bool(s.spider_alive[mid])
+    assert int(s.player_y) == env.consts.respawn_low_y
+
+
+def test_a_magma_death_takes_the_corridor_creature_across_the_room(env):
+    bat = _slot(5, 1, low=False)
+    s = _touch(env, 5, 1, 146, 62)
+    assert not bool(s.spider_alive[bat])
+
+
+def test_the_creature_stays_gone_after_the_respawn(env):
+    slot = _slot(1, 1, low=False)
+    s = _touch(env, 1, 1, HL.SPIDERS[0][slot][1] - 2, HL.SPIDERS[0][slot][2])
+    lives = int(s.lives)
+    for _ in range(200):
+        _, s, *_ = env.step(s, NOOP)
+    assert not bool(s.spider_alive[slot])
+    assert int(s.lives) == lives, "nothing left there to kill him again"
