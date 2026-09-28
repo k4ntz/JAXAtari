@@ -1,6 +1,7 @@
 from jaxatari.modification import JaxAtariModController
 from jaxatari.games.mods.hero.hero_mod_plugins import (
     START_LEVEL_MODS,
+    SlowHeroMod,
     UnlimitedDynamiteMod,
     UnlimitedLivesMod,
 )
@@ -14,11 +15,13 @@ class HeroEnvMod(JaxAtariModController):
     The mods here are debugging aids (see hero/hero_mod_plugins.py):
     ``start_level_N`` (N = 1..20), ``unlimited_lives`` and ``unlimited_dynamite``.
     ``scripts/play.py -g hero -l N -lifes -granades`` maps onto them.
+    ``slow`` swaps the ROM hero (the default) for the earlier one.
     """
 
     REGISTRY = {
         "unlimited_lives": UnlimitedLivesMod,
         "unlimited_dynamite": UnlimitedDynamiteMod,
+        "slow": SlowHeroMod,
         **START_LEVEL_MODS,
     }
 

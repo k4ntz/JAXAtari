@@ -192,8 +192,16 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--fps",
         type=int,
-        default=30,
-        help="Frame rate for the game.",
+        default=None,
+        help="Frame rate for the game (default 30; H.E.R.O. 60 like the Atari, "
+             "30 with its 'slow' mod).",
+    )
+    parser.add_argument(
+        "--pixel-aspect",
+        type=float,
+        default=None,
+        help="Width/height of one game pixel on screen (default 1.0; H.E.R.O. "
+             "1.75, the Atari's wide TV pixel, which gives a 4:3 picture).",
     )
     parser.add_argument(
         "-v",
@@ -268,6 +276,15 @@ def main():
     if debug_mods:
         args.mods = merge_debug_mods(args.mods, args)
         print(f"Debug flags selected mods {debug_mods}; loading with mods: {args.mods}")
+
+    # Frame rate and pixel shape. H.E.R.O. plays at the Atari's own 60 fps
+    # and with its wide TV pixels; its 'slow' mod keeps the earlier 30 fps.
+    is_hero = str(args.game).lower() == "hero"
+    if args.fps is None:
+        args.fps = 60 if is_hero and "slow" not in (args.mods or []) else 30
+    if args.pixel_aspect is None:
+        args.pixel_aspect = 1.75 if is_hero else 1.0
+    upscale_x = UPSCALE_FACTOR * args.pixel_aspect
 
     execute_without_rendering = False
 
@@ -353,7 +370,7 @@ def main():
         pygame.display.set_caption(f"JAXAtari Game {args.game}")
         env_render_shape = jitted_render(state).shape[:2]
         window = pygame.display.set_mode(
-            (env_render_shape[1] * UPSCALE_FACTOR, env_render_shape[0] * UPSCALE_FACTOR)
+            (int(round(env_render_shape[1] * upscale_x)), env_render_shape[0] * UPSCALE_FACTOR)
         )
         clock = pygame.time.Clock()
 
@@ -417,7 +434,7 @@ def main():
             obs, state, reward, done, info = jitted_step(state, action)
             if not execute_without_rendering:
                 image = jitted_render(state)
-                update_pygame(window, image, UPSCALE_FACTOR, 160, 210)
+                update_pygame(window, image, UPSCALE_FACTOR, 160, 210, SCALING_FACTOR_X=upscale_x)
                 clock.tick(frame_rate)
 
                 # Check for quit event
@@ -435,7 +452,7 @@ def main():
     # display the first frame (reset frame) -> purely for aesthetics
     if not execute_without_rendering:
         image = jitted_render(state)
-        update_pygame(window, image, UPSCALE_FACTOR, 160, 210)
+        update_pygame(window, image, UPSCALE_FACTOR, 160, 210, SCALING_FACTOR_X=upscale_x)
         clock.tick(frame_rate)
 
     def running_fn():
@@ -480,7 +497,7 @@ def main():
 
                 if pause or (frame_by_frame and not next_frame_asked):
                     image = jitted_render(state)
-                    update_pygame(window, image, UPSCALE_FACTOR, 160, 210)
+                    update_pygame(window, image, UPSCALE_FACTOR, 160, 210, SCALING_FACTOR_X=upscale_x)
                     clock.tick(frame_rate)
                     continue
             
@@ -525,7 +542,7 @@ def main():
             # Render the environment
             if not execute_without_rendering:
                 image = jitted_render(state)
-                update_pygame(window, image, UPSCALE_FACTOR, 160, 210)
+                update_pygame(window, image, UPSCALE_FACTOR, 160, 210, SCALING_FACTOR_X=upscale_x)
                 clock.tick(frame_rate)
             
             # Handle loop for no-rendering execution

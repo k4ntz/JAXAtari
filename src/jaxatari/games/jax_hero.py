@@ -615,7 +615,38 @@ class HeroConstants(AutoDerivedConstants):
     side_enter_right_x: int = struct.field(pytree_node=False,
                                            default=HL.SIDE_ENTER_X[1])
 
-    # --- Flight physics (measured) ---
+    # --- Which hero: the ROM's (default) or the earlier one (the ``slow`` mod) ---
+    # True: the hero read pixel for pixel off the ROM - one standing bitmap,
+    # five walk poses, the 12-frame airborne rotor - flying on the ROM's rotor
+    # thrust (thrust_max below), hovering until the first input of a life.
+    # False: the earlier hero - the 9 px art, two strides, a rotor turning one
+    # pose per frame in the air - on the constant-fall / spin-up flight model
+    # (fall_speed ... sink_speed). mods/hero ``slow`` switches to it.
+    rom_hero: bool = struct.field(pytree_node=False, default=True)
+
+    # --- Flight physics of the ROM hero (measured on the ROM, 2026-09-23) ---
+    # The hoverpack is ONE number, the rotor thrust T in RAM 105 (0-63). It
+    # climbs 1 per frame while UP is held and falls 1 per frame otherwise,
+    # and the hero's vertical speed is a step function of it - nothing else:
+    #
+    #     T 56-63  up 2 px/frame        T 16-47  hover, no vertical motion
+    #     T 48-55  up 1 px/frame        T  8-15  down 1 px/frame
+    #                                   T  0- 7  down 2 px/frame
+    #
+    # That one rule gives every measured timing: a take-off needs 48 frames
+    # of UP from a standstill; released at the top of a climb he HOVERS 47
+    # frames (63 -> 16) before sinking; walking off a ledge he drops 1 px/frame
+    # first and then 2. The first input of a life starts the rotor at 32, which
+    # is why the first take-off of a level waits only 17 frames. DOWN in
+    # mid-air does nothing a release does not. In this model thrust_timer IS T.
+    thrust_max: int = struct.field(pytree_node=False, default=63)
+    thrust_kick: int = struct.field(pytree_node=False, default=31)
+    thrust_up_fast: int = struct.field(pytree_node=False, default=56)
+    thrust_up_slow: int = struct.field(pytree_node=False, default=48)
+    thrust_hover: int = struct.field(pytree_node=False, default=16)
+    thrust_down_slow: int = struct.field(pytree_node=False, default=8)
+
+    # --- Flight physics of the earlier hero (rom_hero=False) ---
     fall_speed: float = struct.field(pytree_node=False, default=1.0)
     thrust_accel: float = struct.field(pytree_node=False, default=0.125)
     thrust_spinup: int = struct.field(pytree_node=False, default=16)
@@ -981,7 +1012,7 @@ class HeroState:
     player_x: chex.Array          # sprite-left, screen px
     player_y: chex.Array          # sprite-top, screen px (room-local)
     player_vy: chex.Array         # <0 rising, >0 falling
-    thrust_timer: chex.Array      # frames UP has been held (rotor spin-up)
+    thrust_timer: chex.Array      # ROM hero: rotor thrust T 0-63 (RAM 105); earlier hero: frames UP held
     room: chex.Array              # current room within the level
     facing: chex.Array            # -1 left, +1 right
     walk_timer: chex.Array
@@ -1232,18 +1263,38 @@ class JaxHero(JaxEnvironment[HeroState, HeroObservation, HeroInfo, HeroConstants
         new_x = jnp.where(x_blocked, state.player_x, cand_x).astype(jnp.int32)
         new_facing = jnp.where(right, 1, jnp.where(left, -1, state.facing)).astype(jnp.int32)
 
-        # --- vertical: constant fall; thrust cancels the fall instantly,
-        # hovers through the measured 16-frame rotor spin-up, then ramps ---
-        thrust_timer = jnp.where(up, state.thrust_timer + 1, 0).astype(jnp.int32)
-        vy_up = jnp.where(thrust_timer <= c.thrust_spinup, 0.0,
-                          jnp.maximum(jnp.minimum(state.player_vy, 0.0) - c.thrust_accel,
-                                      c.max_rise_speed))
-        # DOWN in mid-air is not a dynamite press: it makes him sink faster
-        # (measured). On the ground it plants a stick and does nothing here.
-        sink = down & (~up) & (~on_ground)
-        new_vy = jnp.where(up, vy_up,
-                           jnp.where(sink, c.sink_speed, c.fall_speed)).astype(jnp.float32)
-        dy = jnp.round(new_vy).astype(jnp.int32)
+        if c.rom_hero:
+            # --- vertical: the ROM's rotor thrust (see thrust_max). A fresh
+            # life HOVERS where it was put until the first input (the ROM
+            # holds him 200+ frames at the level start); that input starts
+            # the rotor at 32 ---
+            any_input = up | left | right | down
+            waiting = (~state.has_moved) & (~any_input)
+            first_input = any_input & (~state.has_moved)
+            thrust_timer = jnp.where(
+                first_input, c.thrust_kick,
+                jnp.where(waiting, state.thrust_timer,
+                          jnp.clip(state.thrust_timer + jnp.where(up, 1, -1),
+                                   0, c.thrust_max))).astype(jnp.int32)
+            dy = jnp.where(thrust_timer >= c.thrust_up_fast, -2,
+                 jnp.where(thrust_timer >= c.thrust_up_slow, -1,
+                 jnp.where(thrust_timer >= c.thrust_hover, 0,
+                 jnp.where(thrust_timer >= c.thrust_down_slow, 1, 2))))
+            dy = jnp.where(waiting, 0, dy).astype(jnp.int32)
+            new_vy = dy.astype(jnp.float32)
+        else:
+            # --- vertical: constant fall; thrust cancels the fall instantly,
+            # hovers through the measured 16-frame rotor spin-up, then ramps ---
+            thrust_timer = jnp.where(up, state.thrust_timer + 1, 0).astype(jnp.int32)
+            vy_up = jnp.where(thrust_timer <= c.thrust_spinup, 0.0,
+                              jnp.maximum(jnp.minimum(state.player_vy, 0.0) - c.thrust_accel,
+                                          c.max_rise_speed))
+            # DOWN in mid-air is not a dynamite press: it makes him sink faster
+            # (measured). On the ground it plants a stick and does nothing here.
+            sink = down & (~up) & (~on_ground)
+            new_vy = jnp.where(up, vy_up,
+                               jnp.where(sink, c.sink_speed, c.fall_speed)).astype(jnp.float32)
+            dy = jnp.round(new_vy).astype(jnp.int32)
         cand_y = (state.player_y + dy).astype(jnp.int32)
         # ceiling of the topmost room: don't fly above the level start screen
         cand_y = jnp.where((state.room == 0) & (cand_y < 8), jnp.int32(8), cand_y)
@@ -1996,6 +2047,9 @@ _ART_PALETTE = {
     't': (101, 183, 217),     # the water tentacle (level 17, measured)
 }
 
+# Two heroes live here; HeroConstants.rom_hero picks one (default: the ROM's).
+#
+# The EARLIER hero (rom_hero=False, the ``slow`` mod):
 # Roderick (facing right), 9 wide x 24 tall. Built from stacked sections:
 # rotor (3) + helmet/prop-pack (5) + suit (6) + legs (10). The visual sprite
 # is wider than the 6-px collision box (player_width) and is drawn centred
@@ -2085,6 +2139,258 @@ _PLAYER_STAND = [top + _HERO_HEAD + _HERO_SUIT + _HERO_LEGS_TOGETHER
                  for top in _HERO_ROTOR]
 _PLAYER_WALK0 = _HERO_TOP_WIDE + _HERO_HEAD + _HERO_SUIT + _HERO_LEGS_CONTACT
 _PLAYER_WALK1 = _HERO_TOP_WIDE + _HERO_HEAD + _HERO_SUIT + _HERO_LEGS_PASS
+
+# The ROM hero (rom_hero=True, the default):
+# Roderick, facing right, read pixel for pixel off the ROM (2026-09-23): the
+# hero was located by his RAM position and cut out by HIS OWN colours, not by
+# differencing frames, in level 1 room 1, standing, walking and flying. Every
+# bitmap is on one 8 px canvas whose column 0 is player_x - 1, top-aligned on
+# player_y; facing left is the exact mirror (measured, walking left).
+# (The earlier art above is 9 px wide with a different helmet and two walk
+# strides.) What the ROM does:
+#   standing   ONE bitmap. The rotor does not turn on the ground, not even
+#              while UP is held and the hoverpack is spinning up.
+#   walking    FIVE poses held 4 frames each (a 20-frame cycle); the knees
+#              bend, so the sprite is 24, 23, 19, 23, 24 rows tall, and each
+#              pose carries its own rotor width.
+#   airborne   ONE body with dangling legs under three rotor widths, on a
+#              fixed 12-frame pattern off the frame clock:
+#                  narrow x1, medium x3, wide x1, narrow x3, medium x1, wide x3
+#
+_HERO_STAND = [   # on the ground, not walking: ONE bitmap, the rotor does not turn
+    ".YYY....",
+    "..Y.....",
+    "..Y.....",
+    "..R..RR.",
+    "..r.r...",
+    "..R.R...",
+    "..R.RRR.",
+    "..R..RR.",
+    ".BB.BB..",
+    ".BBBBBB.",
+    ".BBB.BB.",
+    ".BBB.BB.",
+    "..B.BBB.",
+    "..B...B.",
+    "...WWW..",
+    "....WW..",
+    "....WW..",
+    "....WW..",
+    "....WW..",
+    "....WW..",
+    "....WW..",
+    "....WW..",
+    "....WW..",
+    "....WWW.",
+]
+_HERO_WALK0 = [   # walk pose 0, 24 rows
+    "..Y.....",
+    "..Y.....",
+    "..Y.....",
+    "..R..RR.",
+    "..r.r...",
+    "..R.R...",
+    "..R.RRR.",
+    "..R..RR.",
+    ".BB.BB..",
+    ".BBBBBB.",
+    ".BBB.BB.",
+    ".BBB.BB.",
+    "..BB.B..",
+    "..BB..B.",
+    "...WWW..",
+    "...WWW..",
+    "...WWWW.",
+    "...W.WW.",
+    "..WW..W.",
+    "..WW.W..",
+    "..W..W..",
+    "..W...W.",
+    "..W.....",
+    "...W....",
+]
+_HERO_WALK1 = [   # walk pose 1, 23 rows
+    ".YYY....",
+    "..Y.....",
+    "..Y.....",
+    "..R..RR.",
+    "..r.r...",
+    "..R.R...",
+    "..R.RRR.",
+    "..R..RR.",
+    ".BB.BB..",
+    ".BBBBBB.",
+    ".BBB.BB.",
+    ".BBB.BB.",
+    "..BB.B..",
+    "..BB..B.",
+    "...WWW..",
+    "...WWW..",
+    "..WWWWW.",
+    "..WW.WW.",
+    ".WW...W.",
+    ".WW...W.",
+    "WW....WW",
+    "W.......",
+    "W.......",
+    "........",
+]
+_HERO_WALK2 = [   # walk pose 2, 19 rows
+    "YYYYY...",
+    "..Y.....",
+    "..Y.....",
+    "..R..RR.",
+    "..r.r...",
+    "..R.R...",
+    "..R.RRR.",
+    "..R..RR.",
+    ".BB.BB..",
+    ".BBBBBB.",
+    ".BBB.BB.",
+    ".BBB.BB.",
+    "..B.BBB.",
+    "..B...B.",
+    "...WWW..",
+    "...WWWW.",
+    "WW.WW.W.",
+    ".WWW..W.",
+    "..WW..WW",
+    "........",
+    "........",
+    "........",
+    "........",
+    "........",
+]
+_HERO_WALK3 = [   # walk pose 3, 23 rows
+    "YYYYY...",
+    "..Y.....",
+    "..Y.....",
+    "..R..RR.",
+    "..r.r...",
+    "..R.R...",
+    "..R.RRR.",
+    "..R..RR.",
+    ".BB.BB..",
+    ".BBBBBB.",
+    ".BBB.BB.",
+    ".BBB.BB.",
+    "..B.BBB.",
+    "..B...B.",
+    "...WWW..",
+    "...WW...",
+    "...WWW..",
+    "...WWW..",
+    "...W.W..",
+    ".WWW.W..",
+    ".W...W..",
+    ".W....WW",
+    "......W.",
+    "........",
+]
+_HERO_WALK4 = [   # walk pose 4, 24 rows
+    ".YYY....",
+    "..Y.....",
+    "..Y.....",
+    "..R..RR.",
+    "..r.r...",
+    "..R.R...",
+    "..R.RRR.",
+    "..R..RR.",
+    ".BB.BB..",
+    ".BBBBBB.",
+    ".BBB.BB.",
+    ".BBB.BB.",
+    "..BB.B..",
+    "..BB..B.",
+    "...WWW..",
+    "...WW...",
+    "...WWW..",
+    "....WWW.",
+    "....W.W.",
+    "..WWWWW.",
+    "..W.W...",
+    "..W.W...",
+    "....W...",
+    "....WW..",
+]
+_HERO_FLY_NARROW = [   # airborne, narrow rotor
+    "..Y.....",
+    "..Y.....",
+    "..Y.....",
+    "..R..RR.",
+    "..r.r...",
+    "..R.R...",
+    "..R.RRR.",
+    "..R..RR.",
+    ".BB.BB..",
+    ".BBBBBB.",
+    ".BBB.BB.",
+    ".BBB.BB.",
+    "..BB.B..",
+    "..BB..B.",
+    "...WWW..",
+    "....WW..",
+    "....WW..",
+    "....W...",
+    "....W...",
+    "...WW...",
+    "...WW...",
+    "...W....",
+    "...W....",
+    "...W....",
+]
+_HERO_FLY_MEDIUM = [   # airborne, medium rotor
+    ".YYY....",
+    "..Y.....",
+    "..Y.....",
+    "..R..RR.",
+    "..r.r...",
+    "..R.R...",
+    "..R.RRR.",
+    "..R..RR.",
+    ".BB.BB..",
+    ".BBBBBB.",
+    ".BBB.BB.",
+    ".BBB.BB.",
+    "..BB.B..",
+    "..BB..B.",
+    "...WWW..",
+    "....WW..",
+    "....WW..",
+    "....W...",
+    "....W...",
+    "...WW...",
+    "...WW...",
+    "...W....",
+    "...W....",
+    "...W....",
+]
+_HERO_FLY_WIDE = [   # airborne, wide rotor
+    "YYYYY...",
+    "..Y.....",
+    "..Y.....",
+    "..R..RR.",
+    "..r.r...",
+    "..R.R...",
+    "..R.RRR.",
+    "..R..RR.",
+    ".BB.BB..",
+    ".BBBBBB.",
+    ".BBB.BB.",
+    ".BBB.BB.",
+    "..BB.B..",
+    "..BB..B.",
+    "...WWW..",
+    "....WW..",
+    "....WW..",
+    "....W...",
+    "....W...",
+    "...WW...",
+    "...WW...",
+    "...W....",
+    "...W....",
+    "...W....",
+]
 
 # Hanging spider, read pixel for pixel off the ROM in level 1 room 1
 # (x 49-55, y 70-81): a 1 px silver thread and a 5-row body. The two poses
@@ -2540,6 +2846,15 @@ class HeroRenderer(JAXGameRenderer):
             {'name': 'player_rotor2', 'type': 'procedural', 'data': self._sprite(_PLAYER_STAND[2])},
             {'name': 'player_walk0', 'type': 'procedural', 'data': self._sprite(_PLAYER_WALK0)},
             {'name': 'player_walk1', 'type': 'procedural', 'data': self._sprite(_PLAYER_WALK1)},
+            {'name': 'rom_stand', 'type': 'procedural', 'data': self._sprite(_HERO_STAND)},
+            {'name': 'rom_walk0', 'type': 'procedural', 'data': self._sprite(_HERO_WALK0)},
+            {'name': 'rom_walk1', 'type': 'procedural', 'data': self._sprite(_HERO_WALK1)},
+            {'name': 'rom_walk2', 'type': 'procedural', 'data': self._sprite(_HERO_WALK2)},
+            {'name': 'rom_walk3', 'type': 'procedural', 'data': self._sprite(_HERO_WALK3)},
+            {'name': 'rom_walk4', 'type': 'procedural', 'data': self._sprite(_HERO_WALK4)},
+            {'name': 'rom_fly_narrow', 'type': 'procedural', 'data': self._sprite(_HERO_FLY_NARROW)},
+            {'name': 'rom_fly_medium', 'type': 'procedural', 'data': self._sprite(_HERO_FLY_MEDIUM)},
+            {'name': 'rom_fly_wide', 'type': 'procedural', 'data': self._sprite(_HERO_FLY_WIDE)},
             {'name': 'spider', 'type': 'procedural', 'data': self._sprite(_SPIDER_ART)},
             {'name': 'spider2', 'type': 'procedural', 'data': self._sprite(_SPIDER_ART2)},
             {'name': 'spiderfree', 'type': 'procedural', 'data': self._sprite(_SPIDER_FREE_ART)},
@@ -2607,22 +2922,46 @@ class HeroRenderer(JAXGameRenderer):
             self.COLOR_TO_ID, self.FLIP_OFFSETS,
         ) = self.jr.load_and_setup_assets(asset_config, sprite_path)
 
-        # 0-2: the three rotor poses, used standing and hovering alike;
-        # 3-4: the two walking strides. See _PLAYER_STAND.
-        self.PLAYER_FRAMES = jnp.stack([
-            self.SHAPE_MASKS["player_rotor0"],
-            self.SHAPE_MASKS["player_rotor1"],
-            self.SHAPE_MASKS["player_rotor2"],
-            self.SHAPE_MASKS["player_walk0"],
-            self.SHAPE_MASKS["player_walk1"],
-        ])
-        self.PLAYER_ROTOR_POSES = 3
-        self.PLAYER_WALK_FRAME0 = 3
-        # Standing on rock is ONE still picture: the rotor does not turn on
-        # the ground, not even while UP spins the thrust up (measured on the
-        # ROM). The medium rotor
-        # is the one the ROM's standing bitmap carries (3 px wide).
-        self.PLAYER_STAND_FRAME = 1
+        if c.rom_hero:
+            # 0: standing; 1-5: the five walk poses; 6-8: airborne under the
+            # narrow, medium and wide rotor. See _HERO_STAND.
+            self.PLAYER_FRAMES = jnp.stack([
+                self.SHAPE_MASKS["rom_stand"],
+                self.SHAPE_MASKS["rom_walk0"],
+                self.SHAPE_MASKS["rom_walk1"],
+                self.SHAPE_MASKS["rom_walk2"],
+                self.SHAPE_MASKS["rom_walk3"],
+                self.SHAPE_MASKS["rom_walk4"],
+                self.SHAPE_MASKS["rom_fly_narrow"],
+                self.SHAPE_MASKS["rom_fly_medium"],
+                self.SHAPE_MASKS["rom_fly_wide"],
+            ])
+            self.PLAYER_STAND_FRAME = 0
+            self.PLAYER_WALK_FRAME0 = 1
+            self.PLAYER_WALK_POSES = 5
+            self.PLAYER_WALK_HOLD = 4
+            self.PLAYER_FLY_FRAME0 = 6
+            # the airborne rotor, one entry per frame of its 12-frame cycle
+            # (0 narrow, 1 medium, 2 wide), measured off the ROM
+            self.PLAYER_ROTOR_CYCLE = jnp.array([0, 1, 1, 1, 2, 0, 0, 0, 1, 2, 2, 2],
+                                                dtype=jnp.int32)
+        else:
+            # 0-2: the three rotor poses, used standing and hovering alike;
+            # 3-4: the two walking strides. See _PLAYER_STAND.
+            self.PLAYER_FRAMES = jnp.stack([
+                self.SHAPE_MASKS["player_rotor0"],
+                self.SHAPE_MASKS["player_rotor1"],
+                self.SHAPE_MASKS["player_rotor2"],
+                self.SHAPE_MASKS["player_walk0"],
+                self.SHAPE_MASKS["player_walk1"],
+            ])
+            self.PLAYER_ROTOR_POSES = 3
+            self.PLAYER_WALK_FRAME0 = 3
+            # Standing on rock is ONE still picture: the rotor does not turn on
+            # the ground, not even while UP spins the thrust up (measured on the
+            # ROM). The medium rotor
+            # is the one the ROM's standing bitmap carries (3 px wide).
+            self.PLAYER_STAND_FRAME = 1
         # sprite per (kind, animation frame): 0 spider, 1 bat, 2 magma,
         # 3 snake - all on the same 7x12 canvas, the height the ROM's spider
         # needs when its thread is at full stretch.
@@ -2937,19 +3276,33 @@ class HeroRenderer(JAXGameRenderer):
                        stick_x - c.explosion_radius, state.dyn_y - c.explosion_radius,
                        self.SHAPE_MASKS["explosion"], raster)
 
-        # player: hovering and flying cycle the three rotor poses one frame
-        # each; walking holds each of its two strides for four frames
-        # (the states do not share a rate). Standing on the
-        # ground is one still picture, below.
-        airborne = (jnp.abs(state.player_vy) > 0.5) | (state.thrust_timer > 0)
-        rotor_frame = state.step_counter % self.PLAYER_ROTOR_POSES
-        walk_frame = self.PLAYER_WALK_FRAME0 + (state.walk_timer // 4) % 2
-        frame = jnp.where(airborne | (state.walk_timer <= 0),
-                          rotor_frame, walk_frame)
-        # ...except standing on the ground, which never spins the rotor
-        frame = jnp.where(self._player_on_ground(state) & (state.walk_timer <= 0),
-                          self.PLAYER_STAND_FRAME, frame)
-        # the 9-px sprite is drawn centred over the 6-px collision box
+        if c.rom_hero:
+            # player (measured on the ROM): off the ground he is the airborne
+            # body under the 12-frame rotor pattern; on it he walks through
+            # five poses held 4 frames each, or stands as ONE still bitmap -
+            # the rotor does not turn on the ground, even while it spins up.
+            rotor = self.PLAYER_ROTOR_CYCLE[state.step_counter % 12]
+            walk_pose = (((state.walk_timer + 2) // self.PLAYER_WALK_HOLD)
+                         % self.PLAYER_WALK_POSES)
+            frame = jnp.where(
+                ~self._player_on_ground(state), self.PLAYER_FLY_FRAME0 + rotor,
+                jnp.where(state.walk_timer > 0, self.PLAYER_WALK_FRAME0 + walk_pose,
+                          self.PLAYER_STAND_FRAME))
+        else:
+            # player: hovering and flying cycle the three rotor poses one frame
+            # each; walking holds each of its two strides for four frames
+            # (the states do not share a rate). Standing on the
+            # ground is one still picture, below.
+            airborne = (jnp.abs(state.player_vy) > 0.5) | (state.thrust_timer > 0)
+            rotor_frame = state.step_counter % self.PLAYER_ROTOR_POSES
+            walk_frame = self.PLAYER_WALK_FRAME0 + (state.walk_timer // 4) % 2
+            frame = jnp.where(airborne | (state.walk_timer <= 0),
+                              rotor_frame, walk_frame)
+            # ...except standing on the ground, which never spins the rotor
+            frame = jnp.where(self._player_on_ground(state) & (state.walk_timer <= 0),
+                              self.PLAYER_STAND_FRAME, frame)
+        # the sprite (9 px earlier hero, 8 px ROM hero) is drawn centred over
+        # the 6-px collision box: the ROM's canvas starts at player_x - 1
         sprite_dx = (self.PLAYER_FRAMES.shape[2] - c.player_width) // 2
         raster = self.jr.render_at_clipped(
             raster, state.player_x - sprite_dx, state.player_y,

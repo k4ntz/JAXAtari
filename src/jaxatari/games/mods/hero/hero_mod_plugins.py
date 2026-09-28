@@ -12,8 +12,15 @@ They exist so one level can be checked without replaying everything before it:
                             costs a life, so the game cannot end by death.
 * ``unlimited_dynamite`` -- planting a stick never uses one up.
 
-All three are post-step plugins: the base step/reset run untouched and the
+Those three are post-step plugins: the base step/reset run untouched and the
 plugin patches the resulting state, so the measured physics stay as they are.
+
+One mod changes the game itself:
+
+* ``slow`` -- the earlier hero instead of the ROM's: the 9 px art with two
+  walk strides and a rotor turning one pose per frame in the air, on the
+  constant-fall / 16-frame spin-up flight model. ``scripts/play.py -g hero
+  -m slow`` also keeps the earlier 30 fps pace unless ``--fps`` is given.
 """
 from functools import partial
 
@@ -22,7 +29,18 @@ import jax.numpy as jnp
 
 from jaxatari.games.hero_levels import NUM_LEVELS
 from jaxatari.games.jax_hero import HeroState
-from jaxatari.modification import JaxAtariPostStepModPlugin
+from jaxatari.modification import JaxAtariInternalModPlugin, JaxAtariPostStepModPlugin
+
+
+class SlowHeroMod(JaxAtariInternalModPlugin):
+    """The earlier hero: its own art, animation and flight model.
+
+    The default game draws and flies the hero measured off the ROM
+    (HeroConstants.rom_hero). This switches back to the hero the game had
+    before that - the one levels 1-20 were first played and verified with.
+    """
+
+    constants_overrides = {"rom_hero": False}
 
 
 class UnlimitedLivesMod(JaxAtariPostStepModPlugin):
