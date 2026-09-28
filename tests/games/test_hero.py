@@ -465,7 +465,7 @@ def test_spiders_only_active_in_their_room():
 
 
 def test_levels_4_to_16_data_present():
-    """Twenty levels (16 measured, 17-20 still placeholders): room counts,
+    """Twenty levels (all 20 measured from the ROM): room counts,
     creature 5-tuples, lantern tables, deadly/flare tables, and every
     background blob decodes."""
     from jaxatari.games import hero_levels as HL
@@ -538,16 +538,17 @@ def test_levels_4_to_16_data_present():
                           (HL.BG_RLE_L16, HL.PALETTE_L16, 16),
                           (HL.BG_RLE_L17, HL.PALETTE_L17, 16),
                           (HL.BG_RLE_L18, HL.PALETTE_L18, 16),
-                          (HL.BG_RLE_L19, HL.PALETTE_L19, 16)]:
+                          (HL.BG_RLE_L19, HL.PALETTE_L19, 16),
+                          (HL.BG_RLE_L20, HL.PALETTE_L20, 16)]:
         assert len(blobs) == n
         for b in blobs:
             assert HL.decode_bg(b, pal).shape == (142, 160, 3)
     # Every level's way down starts with the room-0 central pillar. Levels
-    # 1-19 have been rebuilt from the ROM and state it on the band grid (rows
+    # 1-20 have been rebuilt from the ROM and state it on the band grid (rows
     # 16-98, the ceiling and middle cells a stick takes together).
-    for lv in range(19):
+    for lv in range(20):
         assert (0, 60, 16, 8, 83, 1) in HL.DESTRUCTIBLE[lv], f"level {lv + 1}"
-    for lv in range(19):
+    for lv in range(20):
         assert HL.MINER_POS[lv][0] < HL.ROOMS_PER_LEVEL[lv]
 
 

@@ -378,7 +378,7 @@ def test_nothing_flares():
 def test_rooms_7_and_9_are_the_levels_mouths():
     """The eight air cells 14-21 between their two magma walls. Room 6's
     eight-cell magma block at cells 14-21 and every other gap stand still on
-    the ROM. (Level 20 is a placeholder copy of this level.)"""
+    the ROM."""
     assert HL.MAGMA_MOUTHS[L - 1] == [(7, 64, 32, 8, 16), (9, 64, 32, 8, 16)]
     for room in MOUTH_ROOMS:
         band = BANDS[room]["B"]
@@ -386,7 +386,6 @@ def test_rooms_7_and_9_are_the_levels_mouths():
         assert band[13] == band[22] == "%"
         assert "." in BANDS[room]["C"][14:22], "the way down is under it"
     assert cells(14, 21) == (64, 32)
-    assert HL.MAGMA_MOUTHS[19] == HL.MAGMA_MOUTHS[L - 1]
 
 
 def test_the_mouth_cycle_is_the_roms():
