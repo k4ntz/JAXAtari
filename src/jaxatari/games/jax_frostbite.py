@@ -228,6 +228,17 @@ class FrostbiteConstants(struct.PyTreeNode):
 # ==========================================================================================
 
 
+def _clip_box_to_screen(x, y, w, h, width: int, height: int):
+    """Intersects a top-left (x, y, w, h) box with the screen, trimming it."""
+    x1 = jnp.clip(x, 0, width)
+    y1 = jnp.clip(y, 0, height)
+    x2 = jnp.clip(x + w, 0, width)
+    y2 = jnp.clip(y + h, 0, height)
+    cw = jnp.maximum(x2 - x1, 0)
+    ch = jnp.maximum(y2 - y1, 0)
+    return x1, y1, cw, ch, (cw > 0) & (ch > 0)
+
+
 def _compute_row_segments(
     consts: FrostbiteConstants,
     block_positions: jnp.ndarray,
@@ -437,7 +448,7 @@ class FrostbiteObservation:
     bailey: ObjectObservation
     obstacles: ObjectObservation
     bear: ObjectObservation
-    ice_grid: jnp.ndarray
+    ice_grid: ObjectObservation
     igloo_progress: jnp.ndarray
     temperature: jnp.ndarray
     score: jnp.ndarray
@@ -894,23 +905,51 @@ class JaxFrostbite(JaxEnvironment[FrostbiteState, FrostbiteObservation, Frostbit
             active=state.polar_grizzly_active.astype(jnp.int32)
         )
 
-        # --- Ice Grid (Procedural Generation) ---
-        # Generate a grid representation of where valid ice exists
-        # We sample the "active block" logic at regular intervals
-        grid_width = 16 # Discretize screen width into 16 chunks
-        sample_xs = jnp.linspace(self.consts.PLAYFIELD_LEFT, self.consts.PLAYFIELD_RIGHT, grid_width).astype(jnp.int32)
-        
-        pos = state.ice_segments_x # (4, 6)
-        widths = state.ice_segments_w # (4, 6)
-        mask = widths > 0 # (4, 6)
-        
-        px = sample_xs.reshape(1, 1, 16)
-        seg_x = pos.reshape(4, 6, 1)
-        seg_w = widths.reshape(4, 6, 1)
-        active = mask.reshape(4, 6, 1)
-        
-        hits = active & (px >= seg_x) & (px < seg_x + seg_w) # Shape: (4, 6, 16)
-        ice_grid = jnp.any(hits, axis=1).astype(jnp.int32) # Shape: (4, 16)
+        # --- Ice Floes ---
+        # One box per floe
+        seg_x = state.ice_segments_x.flatten()  # (24,)
+        seg_w = state.ice_segments_w.flatten()  # (24,)
+        seg_present = seg_w > 0
+
+        row_ys = jnp.array(self.consts.ICE_ROW_Y, dtype=jnp.int32)[:, None]
+        seg_y = jnp.broadcast_to(row_ys, (4, 6)).flatten()
+
+        # ice_directions and ice_colors are per-row state (4,): every floe of a
+        # row moves the same way and turns blue together, so broadcast per row.
+        row_dirs = jnp.broadcast_to(state.ice_directions[:, None], (4, 6)).flatten()
+        seg_ori = jnp.where(row_dirs == 0, 90.0, 270.0)
+        row_blue = jnp.broadcast_to(state.ice_colors[:, None], (4, 6)).flatten()
+        seg_visual = (row_blue == self.consts.COLOR_ICE_BLUE).astype(jnp.int32)
+
+        # The renderer draws every floe twice: once at seg_x and once shifted by
+        # a playfield width (_render_ice_segments_vectorized, and the three strip
+        # copies in _render_ice_strip_rows), so a floe leaving one edge is
+        # visible at the other and needs an active box there too.
+        wrap_x = jnp.where(
+            seg_x < self.consts.PLAYFIELD_WIDTH // 2,
+            seg_x + self.consts.PLAYFIELD_WIDTH,
+            seg_x - self.consts.PLAYFIELD_WIDTH,
+        )
+
+        ice_box_x = jnp.concatenate([seg_x, wrap_x])
+        ice_box_y = jnp.tile(seg_y, 2)
+        ice_box_w = jnp.tile(seg_w, 2)
+        ice_box_h = jnp.full((48,), 8, dtype=jnp.int32)
+
+        ice_x, ice_y, ice_w, ice_h, ice_on_screen = _clip_box_to_screen(
+            ice_box_x, ice_box_y, ice_box_w, ice_box_h,
+            self.consts.SCREEN_WIDTH, self.consts.SCREEN_HEIGHT,
+        )
+
+        ice_grid = ObjectObservation.create(
+            x=ice_x.astype(jnp.int32),
+            y=ice_y.astype(jnp.int32),
+            width=ice_w.astype(jnp.int32),
+            height=ice_h.astype(jnp.int32),
+            visual_id=jnp.tile(seg_visual, 2),
+            orientation=jnp.tile(seg_ori, 2).astype(jnp.float32),
+            active=(jnp.tile(seg_present, 2) & ice_on_screen).astype(jnp.int32)
+        )
 
         score_val = self._bcd_to_decimal(state.score)
         temp_val = self._bcd_to_decimal(jnp.array([0, 0, state.temperature], dtype=jnp.int32))
@@ -2908,8 +2947,8 @@ class JaxFrostbite(JaxEnvironment[FrostbiteState, FrostbiteObservation, Frostbit
             # Obstacles: Max 4 rows * 3 copies = 12 potential objects
             "obstacles": spaces.get_object_space(n=12, screen_size=(self.consts.SCREEN_HEIGHT, self.consts.SCREEN_WIDTH)),
             "bear": spaces.get_object_space(n=None, screen_size=(self.consts.SCREEN_HEIGHT, self.consts.SCREEN_WIDTH)),
-            # Ice Grid: 4 rows, discretized horizontally into ~10-12 pixel chunks (width 152 / 12 ~= 12 blocks)
-            "ice_grid": spaces.Box(low=0, high=1, shape=(4, 16), dtype=jnp.int32),
+            # Ice floes: 4 rows * 6 slots, each with its wrap copy = 48 potential objects
+            "ice_grid": spaces.get_object_space(n=48, screen_size=(self.consts.SCREEN_HEIGHT, self.consts.SCREEN_WIDTH)),
             "igloo_progress": spaces.Box(low=0, high=16, shape=(), dtype=jnp.int32),
             "temperature": spaces.Box(low=0, high=99, shape=(), dtype=jnp.int32),
             "score": spaces.Box(low=0, high=999999, shape=(), dtype=jnp.int32),
