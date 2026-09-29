@@ -1400,8 +1400,8 @@ class StarGunnerRenderer:
         for f in range(5):
             fx = state.player_explosion_x + offsets_x[f] * spread
             fy = state.player_explosion_y + offsets_y[f] * spread
-            w = jnp.where(state.player_explosion_active, 7, 0)
-            h = jnp.where(state.player_explosion_active, 2, 0)
+            w = jnp.where(state.player_explosion_active, 10, 0)
+            h = jnp.where(state.player_explosion_active, 1, 0)
             img = draw_rect(img, fx, fy, w, h, jnp.array([214, 92, 92], jnp.uint8))
 
         show = ((state.invuln_timer <= 0) | ((state.step_counter // 4) % 2 == 0)) & (~state.player_explosion_active)
