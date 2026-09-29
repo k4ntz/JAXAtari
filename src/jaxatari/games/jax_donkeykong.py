@@ -204,6 +204,29 @@ class DonkeyKongConstants(AutoDerivedConstants):
     MAX_FIRES: int = struct.field(pytree_node=False, default=4)
     MAX_TRAPS: int = struct.field(pytree_node=False, default=8)
     MAX_LADDERS: int = struct.field(pytree_node=False, default=16)
+    OBS_MARIO_WIDTH: int = struct.field(pytree_node=False, default=8)
+    OBS_MARIO_HEIGHT_STAND: int = struct.field(pytree_node=False, default=17)
+    OBS_MARIO_HEIGHT_WALK_2: int = struct.field(pytree_node=False, default=16)
+    OBS_MARIO_HEIGHT_JUMP: int = struct.field(pytree_node=False, default=14)
+    OBS_MARIO_HEIGHT_CLIMB: int = struct.field(pytree_node=False, default=15)
+    OBS_HAMMER_UP_SIZE: Tuple[int, int] = struct.field(pytree_node=False, default=(4, 7))
+    OBS_HAMMER_DOWN_SIZE: Tuple[int, int] = struct.field(pytree_node=False, default=(6, 6))
+    OBS_BARREL_SIZE: Tuple[int, int] = struct.field(pytree_node=False, default=(8, 8))
+    OBS_BARREL_FALL_HEIGHT: int = struct.field(pytree_node=False, default=7)
+    OBS_FIRE_SIZE: Tuple[int, int] = struct.field(pytree_node=False, default=(8, 8))
+    OBS_TRAP_SIZE: Tuple[int, int] = struct.field(pytree_node=False, default=(4, 1))
+    OBS_LADDER_BOXES_LEVEL_1: Tuple = struct.field(pytree_node=False, default=(
+        (76, 40, 4, 17), (76, 68, 4, 13), (108, 68, 4, 13), (48, 96, 4, 13),
+        (68, 92, 4, 17), (100, 92, 4, 21), (64, 120, 4, 21), (88, 120, 4, 17),
+        (108, 124, 4, 13), (48, 152, 4, 13), (80, 148, 4, 17), (72, 176, 4, 17),
+        (108, 180, 4, 13), (-1, -1, 0, 0), (-1, -1, 0, 0), (-1, -1, 0, 0),
+    ))
+    OBS_LADDER_BOXES_LEVEL_2: Tuple = struct.field(pytree_node=False, default=(
+        (40, 152, 4, 17), (60, 152, 4, 17), (96, 152, 4, 17), (116, 152, 4, 17),
+        (40, 124, 4, 17), (60, 124, 4, 17), (96, 124, 4, 17), (116, 124, 4, 17),
+        (40, 96, 4, 17), (60, 96, 4, 17), (96, 96, 4, 17), (116, 96, 4, 17),
+        (40, 68, 4, 17), (60, 68, 4, 17), (96, 68, 4, 17), (116, 68, 4, 17),
+    ))
     
 # To prevent Mario to walk outside the game spaces, set invisible wall on the left and right side of each stage
 # stage means not level = 1 or 2, rather the bars on which Mario will walk during game play
@@ -348,7 +371,6 @@ class JaxDonkeyKong(JaxEnvironment[DonkeyKongState, DonkeyKongObservation, Donke
         super().__init__(consts)
         self.renderer = DonkeyKongRenderer(self.consts)
         self.frame_stack_size = 4
-        self.obs_size = 0
 
     # Bars as lienar functions - given y position of anything (can be Mario, Barrel, Fire) and the stage, it calculates the corresponding x position
     # That function is needed because some bars on level 1 are crooked
@@ -2139,59 +2161,85 @@ class JaxDonkeyKong(JaxEnvironment[DonkeyKongState, DonkeyKongObservation, Donke
     
     @partial(jax.jit, static_argnums=(0,))
     def _get_observation(self, state: DonkeyKongState):
-        # Internal state uses row/col style coordinates; expose standard screen
-        # coordinates here: x=horizontal (col), y=vertical (row).
+        mario_x = jnp.round(state.mario_x).astype(jnp.int32)
+        mario_y = jnp.round(state.mario_y).astype(jnp.int32)
+        mario_jump = jnp.logical_or(state.mario_jumping, state.mario_jumping_wide)
+        mario_side = jnp.logical_or(
+            state.mario_view_direction == self.consts.MOVING_RIGHT,
+            state.mario_view_direction == self.consts.MOVING_LEFT,
+        )
+        mario_walk_2 = mario_side & jnp.logical_not(mario_jump) & (state.mario_walk_sprite == self.consts.MARIO_WALK_SPRITE_3)
+        mario_climb = (state.mario_view_direction == self.consts.MOVING_UP) & jnp.logical_or(
+            state.mario_climb_sprite == self.consts.MARIO_CLIMB_SPRITE_0,
+            state.mario_climb_sprite == self.consts.MARIO_CLIMB_SPRITE_1,
+        )
+        mario_height = jnp.where(
+            mario_side & mario_jump,
+            self.consts.OBS_MARIO_HEIGHT_JUMP,
+            jnp.where(
+                mario_walk_2,
+                self.consts.OBS_MARIO_HEIGHT_WALK_2,
+                jnp.where(mario_climb, self.consts.OBS_MARIO_HEIGHT_CLIMB, self.consts.OBS_MARIO_HEIGHT_STAND),
+            ),
+        )
         mario = ObjectObservation.create(
-            x=jnp.round(state.mario_x).astype(jnp.int32),
-            y=jnp.round(state.mario_y).astype(jnp.int32),
-            width=jnp.array(self.consts.MARIO_HIT_BOX_Y, dtype=jnp.int32),
-            height=jnp.array(self.consts.MARIO_HIT_BOX_X, dtype=jnp.int32),
+            x=mario_x,
+            y=mario_y + mario_walk_2.astype(jnp.int32),
+            width=jnp.array(self.consts.OBS_MARIO_WIDTH, dtype=jnp.int32),
+            height=mario_height.astype(jnp.int32),
             active=jnp.array(1, dtype=jnp.int32),
             orientation=state.mario_view_direction.astype(jnp.float32),
             state=jnp.where(state.mario_climbing, 1, jnp.where(state.mario_jumping, 2, 0)).astype(jnp.int32) 
         )
+        hammer_down = jnp.asarray(state.hammer_can_hit, dtype=bool)
         hammer = ObjectObservation.create(
-            x=state.hammer_x.astype(jnp.int32),
-            y=state.hammer_y.astype(jnp.int32),
-            width=jnp.array(self.consts.HAMMER_HIT_BOX_Y, dtype=jnp.int32),
-            height=jnp.array(self.consts.HAMMER_HIT_BOX_X, dtype=jnp.int32),
-            active=state.hammer_can_hit.astype(jnp.int32),
-            state = jnp.where(state.hammer_taken, 1, 0).astype(jnp.int32),
+            x=jnp.asarray(state.hammer_x).astype(jnp.int32),
+            y=jnp.asarray(state.hammer_y).astype(jnp.int32),
+            width=jnp.where(hammer_down, self.consts.OBS_HAMMER_DOWN_SIZE[0], self.consts.OBS_HAMMER_UP_SIZE[0]).astype(jnp.int32),
+            height=jnp.where(hammer_down, self.consts.OBS_HAMMER_DOWN_SIZE[1], self.consts.OBS_HAMMER_UP_SIZE[1]).astype(jnp.int32),
+            active=jnp.logical_not(state.hammer_usage_expired).astype(jnp.int32),
+            state=jnp.where(state.hammer_taken, 1, 0).astype(jnp.int32),
         )
         nums_barrels = self.consts.MAX_BARRELS
-        barrel_active = jnp.where(state.barrels.reached_the_end, 0, 1).astype(jnp.int32)
         barrels = ObjectObservation.create(
             x=state.barrels.barrel_x.astype(jnp.int32),
             y=state.barrels.barrel_y.astype(jnp.int32),
-            width=jnp.full((nums_barrels,), self.consts.BARREL_HIT_BOX_Y, dtype=jnp.int32),
-            height=jnp.full((nums_barrels,), self.consts.BARREL_HIT_BOX_X, dtype=jnp.int32),
-            active=barrel_active,
+            width=jnp.full((nums_barrels,), self.consts.OBS_BARREL_SIZE[0], dtype=jnp.int32),
+            height=jnp.where(
+                state.barrels.sprite == self.consts.BARREL_SPRITE_FALL,
+                self.consts.OBS_BARREL_FALL_HEIGHT,
+                self.consts.OBS_BARREL_SIZE[1],
+            ).astype(jnp.int32),
+            active=jnp.logical_not(state.barrels.reached_the_end).astype(jnp.int32),
         )
         nums_fires = self.consts.MAX_FIRES
-        fire_active = jnp.where(state.fires.destroyed, 0, 1).astype(jnp.int32)
         fires = ObjectObservation.create(
             x=jnp.round(state.fires.fire_x).astype(jnp.int32),
             y=jnp.round(state.fires.fire_y).astype(jnp.int32),
-            width=jnp.full((nums_fires,), self.consts.FIRE_HIT_BOX_Y, dtype=jnp.int32),
-            height=jnp.full((nums_fires,), self.consts.FIRE_HIT_BOX_X, dtype=jnp.int32),
-            active=fire_active,
+            width=jnp.full((nums_fires,), self.consts.OBS_FIRE_SIZE[0], dtype=jnp.int32),
+            height=jnp.full((nums_fires,), self.consts.OBS_FIRE_SIZE[1], dtype=jnp.int32),
+            active=jnp.logical_not(state.fires.destroyed).astype(jnp.int32),
         )
         nums_traps = self.consts.MAX_TRAPS
         traps = ObjectObservation.create(
             x=state.traps.trap_x.astype(jnp.int32),
             y=state.traps.trap_y.astype(jnp.int32),
-            width=jnp.full((nums_traps,), self.consts.TRAP_WIDTH, dtype=jnp.int32),
-            height=jnp.full((nums_traps,), self.consts.TRAP_WIDTH, dtype=jnp.int32),
-            active=jnp.ones((nums_traps,), dtype=jnp.int32),
+            width=jnp.full((nums_traps,), self.consts.OBS_TRAP_SIZE[0], dtype=jnp.int32),
+            height=jnp.full((nums_traps,), self.consts.OBS_TRAP_SIZE[1], dtype=jnp.int32),
+            active=jnp.full((nums_traps,), state.level == 2).astype(jnp.int32),
             state=state.traps.triggered.astype(jnp.int32),
         )
-        ladder_active = jnp.where(state.ladders.start_y != -1, 1, 0).astype(jnp.int32)
+        ladder_boxes = jnp.where(
+            state.level == 1,
+            jnp.array(self.consts.OBS_LADDER_BOXES_LEVEL_1, dtype=jnp.int32),
+            jnp.array(self.consts.OBS_LADDER_BOXES_LEVEL_2, dtype=jnp.int32),
+        )
         ladders = ObjectObservation.create(
-            x=jnp.minimum(state.ladders.start_x, state.ladders.end_x).astype(jnp.int32),
-            y=jnp.minimum(state.ladders.start_y, state.ladders.end_y).astype(jnp.int32),
-            width=(jnp.abs(state.ladders.end_x - state.ladders.start_x) + self.consts.LADDER_WIDTH).astype(jnp.int32),
-            height=(jnp.abs(state.ladders.end_y - state.ladders.start_y) + self.consts.LADDER_WIDTH).astype(jnp.int32),
-            active=ladder_active,
+            x=ladder_boxes[:, 0],
+            y=ladder_boxes[:, 1],
+            width=ladder_boxes[:, 2],
+            height=ladder_boxes[:, 3],
+            active=(ladder_boxes[:, 3] > 0).astype(jnp.int32),
             state=state.ladders.climbable.astype(jnp.int32),
         )
         
