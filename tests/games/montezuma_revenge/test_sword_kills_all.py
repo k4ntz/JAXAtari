@@ -1,9 +1,8 @@
 import jax
 import jax.numpy as jnp
-from jaxatari.games.jax_montezumarevenge import JaxMontezumaRevenge
 
-def test_kill_spider_with_sword():
-    env = JaxMontezumaRevenge()
+def test_kill_spider_with_sword(montezuma_env):
+    env = montezuma_env
     key = jax.random.PRNGKey(0)
     obs, state = env.reset(key)
     
@@ -34,8 +33,8 @@ def test_kill_spider_with_sword():
     # Sword should be GONE from inventory
     assert state.inventory[1] == 0
 
-def test_kill_snake_with_sword():
-    env = JaxMontezumaRevenge()
+def test_kill_snake_with_sword(montezuma_env):
+    env = montezuma_env
     key = jax.random.PRNGKey(0)
     obs, state = env.reset(key)
     

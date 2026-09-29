@@ -54,12 +54,16 @@ jobs:
         with:
           ref: ${{ inputs.pr_head_sha }}
           path: pr_head
+          # Required by checkout@v6 when fetching fork code under pull_request_target.
+          allow-unsafe-pr-checkout: true
 
       - name: Check out PR head (full repo)
         if: ${{ inputs.pr_head_sha != '' && inputs.pr_overlay_scope == 'full_repo' }}
         uses: actions/checkout@v6
         with:
           ref: ${{ inputs.pr_head_sha }}
+          # Required by checkout@v6 when fetching fork code under pull_request_target.
+          allow-unsafe-pr-checkout: true
 
       - name: Override games with PR changes
         if: ${{ inputs.pr_head_sha != '' && inputs.pr_overlay_scope == 'games_only' }}
