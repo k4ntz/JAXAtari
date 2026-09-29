@@ -197,7 +197,7 @@ class StarGunnerConstants(struct.PyTreeNode):
 
     DEATH_PENALTY: float = struct.field(pytree_node=False, default=0.0)
     PLAYER_EXPLOSION_SIZE: int = struct.field(pytree_node=False, default=14)
-    PLAYER_EXPLOSION_DURATION: int = struct.field(pytree_node=False, default=90)
+    PLAYER_EXPLOSION_DURATION: int = struct.field(pytree_node=False, default=140)
 
 
 class StarGunnerState(struct.PyTreeNode):
@@ -1381,18 +1381,28 @@ class StarGunnerRenderer:
                 w = jnp.where(active, 2, 0)
                 img = draw_rect(img, fx, fy, w, w, col)
 
-        # Player explosion — fragments spread, then merge back (ALE-style)
+        # Player explosion — three clear phases:
+        #   Phase 1 (0-35%):    explode outward (visible)
+        #   Phase 2 (35-65%):   invisible (fragments gone)
+        #   Phase 3 (65-100%):  reappear and merge to center (visible)
         p_t = state.player_explosion_timer
         elapsed = c.PLAYER_EXPLOSION_DURATION - p_t
         total = float(c.PLAYER_EXPLOSION_DURATION)
-        # Asymmetric arc: spread fast (first third), merge slow (last two thirds)
-        split = total * 0.08  # 33% spreading, 67% merging
-        arc = jnp.where(
-            elapsed < split,
-            elapsed / split,                       # 0 -> 1 quickly
-            (total - elapsed) / (total - split),   # 1 -> 0 slowly
+
+        phase1_end = total * 0.25
+        phase2_end = total * 0.60
+
+        # Spread factor and visibility
+        spread = jnp.where(
+            elapsed < phase1_end,
+            elapsed / phase1_end,                            # 0 -> 1
+            jnp.where(
+                elapsed < phase2_end,
+                1.0,                                          # still at max, but hidden
+                (total - elapsed) / (total - phase2_end),     # 1 -> 0 (merge)
+            ),
         )
-        spread = arc * 1.0
+        visible = ~((elapsed >= phase1_end) & (elapsed < phase2_end))
 
         offsets_x = jnp.array([-70.0, 70.0, -70.0, 70.0, 90.0])
         offsets_y = jnp.array([-80.0, -80.0, 80.0, 80.0, 0.0])
@@ -1400,8 +1410,9 @@ class StarGunnerRenderer:
         for f in range(5):
             fx = state.player_explosion_x + offsets_x[f] * spread
             fy = state.player_explosion_y + offsets_y[f] * spread
-            w = jnp.where(state.player_explosion_active, 10, 0)
-            h = jnp.where(state.player_explosion_active, 1, 0)
+            draw_now = state.player_explosion_active & visible
+            w = jnp.where(draw_now, 10, 0)
+            h = jnp.where(draw_now, 1, 0)
             img = draw_rect(img, fx, fy, w, h, jnp.array([214, 92, 92], jnp.uint8))
 
         show = ((state.invuln_timer <= 0) | ((state.step_counter // 4) % 2 == 0)) & (~state.player_explosion_active)
