@@ -214,6 +214,18 @@ class TimePilotConstants(AutoDerivedConstants):
     LEVEL_4: LevelConstants = struct.field(pytree_node=False, default=TimePilot_Level_4)
     LEVEL_5: LevelConstants = struct.field(pytree_node=False, default=TimePilot_Level_5)
 
+    # MOD COLORS (Optional overrides)
+    RGB_BACKGROUND: Optional[Tuple[int, int, int]] = struct.field(pytree_node=False, default=None)
+    RGB_PLAYER:     Optional[Tuple[int, int, int]] = struct.field(pytree_node=False, default=None)
+    RGB_ENEMY:      Optional[Tuple[int, int, int]] = struct.field(pytree_node=False, default=None)
+    RGB_BOSS:       Optional[Tuple[int, int, int]] = struct.field(pytree_node=False, default=None)
+    RGB_CLOUD:      Optional[Tuple[int, int, int]] = struct.field(pytree_node=False, default=None)
+    RGB_MISSILE:    Optional[Tuple[int, int, int]] = struct.field(pytree_node=False, default=None)
+    RGB_UI:         Optional[Tuple[int, int, int]] = struct.field(pytree_node=False, default=None)
+    RGB_SCORE:      Optional[Tuple[int, int, int]] = struct.field(pytree_node=False, default=None)
+    RGB_LIVES:      Optional[Tuple[int, int, int]] = struct.field(pytree_node=False, default=None)
+    RGB_BOTTOM_WALL:Optional[Tuple[int, int, int]] = struct.field(pytree_node=False, default=None)
+
     # Asset config baked into constants (immutable default) for asset overrides
     ASSET_CONFIG: tuple = struct.field(pytree_node=False, default=_get_default_asset_config())
 
@@ -1477,7 +1489,74 @@ class TimePilotRenderer(JAXGameRenderer):
         self.jr = render_utils.JaxRenderingUtils(self.config)
 
         # 2. Start from (possibly modded) asset config provided via constants
-        final_asset_config = list(self.consts.ASSET_CONFIG)
+        asset_config = list(self.consts.ASSET_CONFIG)
+
+        # Apply recoloring rules if any RGB overrides are present
+        has_recolorings = False
+        ui_source_colors = [
+            (51, 26, 163), (84, 92, 214), (167, 26, 26), (195, 144, 61), 
+            (214, 214, 214), (78, 50, 181), (142, 142, 142), (84, 138, 210), 
+            (135, 183, 84), (168, 48, 143)
+        ]
+        for i in range(len(asset_config)):
+            asset = asset_config[i]
+            asset_name = asset['name']
+            rules = []
+            
+            if asset_name == 'all_player_sprites':
+                if self.consts.RGB_PLAYER is not None:
+                    rules.append({'target': self.consts.RGB_PLAYER})
+            elif asset_name == 'all_enemy_sprites':
+                if self.consts.RGB_ENEMY is not None:
+                    rules.append({'target': self.consts.RGB_ENEMY})
+                elif self.consts.RGB_BOSS is not None:
+                    rules.append({'target': self.consts.RGB_BOSS})
+            elif asset_name == 'all_clouds':
+                if self.consts.RGB_CLOUD is not None:
+                    rules.append({'target': self.consts.RGB_CLOUD})
+            elif asset_name in ('all_player_missiles', 'all_enemy_missiles'):
+                if self.consts.RGB_MISSILE is not None:
+                    rules.append({'target': self.consts.RGB_MISSILE})
+            elif asset_name == 'digits':
+                if self.consts.RGB_SCORE is not None:
+                    rules.append({'target': self.consts.RGB_SCORE})
+                elif self.consts.RGB_UI is not None:
+                    rules.append({'target': self.consts.RGB_UI})
+            elif asset_name == 'player_life':
+                if self.consts.RGB_LIVES is not None:
+                    rules.append({'target': self.consts.RGB_LIVES})
+                elif self.consts.RGB_UI is not None:
+                    rules.append({'target': self.consts.RGB_UI})
+            elif asset_name in ('transition_bar', 'all_enemy_remaining'):
+                if self.consts.RGB_UI is not None:
+                    rules.append({'target': self.consts.RGB_UI})
+            elif asset_name in ('bottom_wall', 'respawn_bottom_wall'):
+                target_color = self.consts.RGB_BOTTOM_WALL if self.consts.RGB_BOTTOM_WALL is not None else self.consts.RGB_UI
+                if target_color is not None:
+                    for c in ui_source_colors:
+                        rules.append({'source': c, 'target': target_color})
+                if self.consts.RGB_BACKGROUND is not None:
+                    rules.append({'source': (0, 0, 0), 'target': self.consts.RGB_BACKGROUND})
+            elif asset_name in ('start_screen', 'top_wall', 'all_respawn_top_walls'):
+                if self.consts.RGB_UI is not None:
+                    for c in ui_source_colors:
+                        rules.append({'source': c, 'target': self.consts.RGB_UI})
+                if self.consts.RGB_BACKGROUND is not None:
+                    rules.append({'source': (0, 0, 0), 'target': self.consts.RGB_BACKGROUND})
+            elif asset_name == 'all_backgrounds':
+                if self.consts.RGB_BACKGROUND is not None:
+                    rules.append({'target': self.consts.RGB_BACKGROUND})
+            elif asset_name == 'background':
+                if self.consts.RGB_BACKGROUND is not None:
+                    # Background is procedural black in default config
+                    asset_config[i] = dict(asset)
+                    asset_config[i]['data'] = asset['data'].at[:, :, :3].set(jnp.array(self.consts.RGB_BACKGROUND, dtype=jnp.uint8))
+                    continue
+
+            if rules:
+                asset_config[i] = dict(asset)
+                asset_config[i]['recolorings'] = {'mods': rules}
+                has_recolorings = True
 
         # 3. Load, process, and set up all assets in one call
         (
@@ -1486,7 +1565,9 @@ class TimePilotRenderer(JAXGameRenderer):
             self.BACKGROUND, # This will be our empty (black) raster
             self.COLOR_TO_ID,
             self.FLIP_OFFSETS
-        ) = self.jr.load_and_setup_assets(final_asset_config, self.sprite_path)
+        ) = self.jr.load_and_setup_assets(asset_config, self.sprite_path)
+
+        self._mask_suffix = '_mods' if has_recolorings else ''
 
         # 4. Get specific color IDs we'll need for procedural drawing
         self.BLACK_ID = self.COLOR_TO_ID.get((0, 0, 0), 0)
@@ -1501,6 +1582,8 @@ class TimePilotRenderer(JAXGameRenderer):
         Organizes the flat SHAPE_MASKS and FLIP_OFFSETS from setup
         into the nested list[dict] structure that the render() method expects.
         """
+        def get_mask(key):
+            return self.SHAPE_MASKS.get(key + self._mask_suffix, self.SHAPE_MASKS[key])
 
         # --- General Sprites ---
         self.general_sprites = {}
@@ -1512,12 +1595,12 @@ class TimePilotRenderer(JAXGameRenderer):
             'player_life', 'black_line', 'transition_bar', 'digits'
         ]
         for key in simple_general_keys:
-            self.general_sprites[key] = self.SHAPE_MASKS[key]
+            self.general_sprites[key] = get_mask(key)
             self.general_offsets[key] = self.FLIP_OFFSETS[key]
 
         # Sliced mappings
-        self.general_sprites['transition_player_pos'] = self.SHAPE_MASKS['all_player_sprites'][50:58]
-        self.general_sprites['transition_player_death'] = self.SHAPE_MASKS['all_player_sprites'][58]
+        self.general_sprites['transition_player_pos'] = get_mask('all_player_sprites')[50:58]
+        self.general_sprites['transition_player_death'] = get_mask('all_player_sprites')[58]
         self.general_offsets['transition_player_pos'] = self.FLIP_OFFSETS['all_player_sprites']
         self.general_offsets['transition_player_death'] = self.FLIP_OFFSETS['all_player_sprites']
 
@@ -1530,34 +1613,34 @@ class TimePilotRenderer(JAXGameRenderer):
             level_dict_offsets = {}
 
             # Simple group slices
-            level_dict_masks['cloud'] = self.SHAPE_MASKS['all_clouds'][i]
+            level_dict_masks['cloud'] = get_mask('all_clouds')[i]
             level_dict_offsets['cloud'] = self.FLIP_OFFSETS['all_clouds']
             
-            level_dict_masks['background'] = self.SHAPE_MASKS['all_backgrounds'][i]
+            level_dict_masks['background'] = get_mask('all_backgrounds')[i]
             level_dict_offsets['background'] = self.FLIP_OFFSETS['all_backgrounds']
             
-            level_dict_masks['respawn_top_wall'] = self.SHAPE_MASKS['all_respawn_top_walls'][i]
+            level_dict_masks['respawn_top_wall'] = get_mask('all_respawn_top_walls')[i]
             level_dict_offsets['respawn_top_wall'] = self.FLIP_OFFSETS['all_respawn_top_walls']
             
-            level_dict_masks['player_missile'] = self.SHAPE_MASKS['all_player_missiles'][i]
+            level_dict_masks['player_missile'] = get_mask('all_player_missiles')[i]
             level_dict_offsets['player_missile'] = self.FLIP_OFFSETS['all_player_missiles']
             
-            level_dict_masks['enemy_missile'] = self.SHAPE_MASKS['all_enemy_missiles'][i]
+            level_dict_masks['enemy_missile'] = get_mask('all_enemy_missiles')[i]
             level_dict_offsets['enemy_missile'] = self.FLIP_OFFSETS['all_enemy_missiles']
 
             # Complex group slices
-            level_dict_masks['player_pos'] = self.SHAPE_MASKS['all_player_sprites'][i*10 : i*10+8]
-            level_dict_masks['player_death'] = self.SHAPE_MASKS['all_player_sprites'][i*10+8 : (i+1)*10]
+            level_dict_masks['player_pos'] = get_mask('all_player_sprites')[i*10 : i*10+8]
+            level_dict_masks['player_death'] = get_mask('all_player_sprites')[i*10+8 : (i+1)*10]
             level_dict_offsets['player_pos'] = self.FLIP_OFFSETS['all_player_sprites']
             level_dict_offsets['player_death'] = self.FLIP_OFFSETS['all_player_sprites']
 
-            level_dict_masks['enemy_pos'] = self.SHAPE_MASKS['all_enemy_sprites'][i*15 : i*15+10]
-            level_dict_masks['enemy_death'] = self.SHAPE_MASKS['all_enemy_sprites'][i*15+10]
+            level_dict_masks['enemy_pos'] = get_mask('all_enemy_sprites')[i*15 : i*15+10]
+            level_dict_masks['enemy_death'] = get_mask('all_enemy_sprites')[i*15+10]
             level_dict_offsets['enemy_pos'] = self.FLIP_OFFSETS['all_enemy_sprites']
             level_dict_offsets['enemy_death'] = self.FLIP_OFFSETS['all_enemy_sprites']
 
             # Boss sprites (4 per level)
-            boss_sprites = self.SHAPE_MASKS['all_enemy_sprites'][i*15+11 : i*15+15]
+            boss_sprites = get_mask('all_enemy_sprites')[i*15+11 : i*15+15]
             (
                 level_dict_masks['level_boss_left_right'],
                 level_dict_masks['level_boss_left_left'],
@@ -1570,13 +1653,14 @@ class TimePilotRenderer(JAXGameRenderer):
             level_dict_offsets['level_boss_right_right'] = self.FLIP_OFFSETS['all_enemy_sprites']
 
             # Enemy remaining indicators (2 per level)
-            level_dict_masks['enemy_remaining'] = self.SHAPE_MASKS['all_enemy_remaining'][i*2]
-            level_dict_masks['enemy_remaining_brown'] = self.SHAPE_MASKS['all_enemy_remaining'][i*2+1]
+            level_dict_masks['enemy_remaining'] = get_mask('all_enemy_remaining')[i*2]
+            level_dict_masks['enemy_remaining_brown'] = get_mask('all_enemy_remaining')[i*2+1]
             level_dict_offsets['enemy_remaining'] = self.FLIP_OFFSETS['all_enemy_remaining']
             level_dict_offsets['enemy_remaining_brown'] = self.FLIP_OFFSETS['all_enemy_remaining']
             
             self.level_sprites.append(level_dict_masks)
             self.level_offsets.append(level_dict_offsets)
+
 
     @partial(jax.jit, static_argnums=(0,))
     def render(self, state: TimePilotState) -> chex.Array:
@@ -1837,9 +1921,23 @@ class TimePilotRenderer(JAXGameRenderer):
         # --- 9. Render UI (Score, Lives) ---
         # Score
         digit_masks = general_sprites['digits']
-        digits = self.jr.int_to_digits(state.score, max_digits = 6)
+        abs_score = jnp.abs(state.score)
+        digits = self.jr.int_to_digits(abs_score, max_digits = 6)
         raster = self.jr.render_label_selective(raster, 57, 7, digits, digit_masks, 0, 6, spacing = 8, max_digits_to_render=6)
         
+        # Add negative sign if score < 0
+        is_negative = jnp.squeeze(state.score < 0)
+        minus_color_id = jnp.max(digit_masks[0])
+        minus_mask = jnp.zeros_like(digit_masks[0])
+        minus_mask = minus_mask.at[3, 1:5].set(minus_color_id)
+        
+        raster = jax.lax.cond(
+            is_negative,
+            lambda r: self.jr.render_at(r, 57 - 8 + 2, 7, minus_mask),
+            lambda r: r,
+            raster
+        )
+
         # Lives 
         raster = self.jr.render_indicator(
             raster, 88, 18, state.lives - 1, 

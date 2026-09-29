@@ -216,7 +216,7 @@ class AmidarConstants(AutoDerivedConstants):
     PATH_THICKNESS_VERTICAL: int = struct.field(pytree_node=False, default_factory=lambda: chosen_maze.PATH_THICKNESS_VERTICAL)
 
     # Points
-    PIXELS_PER_POINT_HORIZONTAL: int = struct.field(pytree_node=False, default_factory=lambda: 3) # Values to calculate how many points an Edge is worth based on how long it is
+    PIXELS_PER_POINT_HORIZONTAL: int = struct.field(pytree_node=False, default_factory=lambda: 4) # Values to calculate how many points an Edge is worth based on how long it is (ALE parity: horizontal paths score correctly)
     PIXELS_PER_POINT_VERTICAL: int = struct.field(pytree_node=False, default_factory=lambda: 30) # Each vertical edge is worth 1 point, since they are 30 pixels long
     BONUS_POINTS_PER_RECTANGLE: int = struct.field(pytree_node=False, default_factory=lambda: 48) # Bonus points for completing a rectangle
     BONUS_POINTS_PER_CHICKEN: int = struct.field(pytree_node=False, default_factory=lambda: 99) # Bonus points for catching a chicken
@@ -565,6 +565,10 @@ def player_step(constants: AmidarConstants, state: AmidarState, action: chex.Arr
 
 def enemies_step(constants: AmidarConstants, state: AmidarState, random_key: chex.Array) -> tuple[chex.Array, chex.Array, chex.Array]:
     """Updates the enemy positions based on their behavior."""
+
+    # No-enemies maze / mod (MAX_ENEMIES=0): skip enemy AI — empty vmaps break indexing.
+    if state.enemy_positions.shape[0] == 0:
+        return state.enemy_positions, state.enemy_directions
 
     enemy_keys = jax.random.split(random_key, state.enemy_positions.shape[0])  # Split the random key for each enemy
 
