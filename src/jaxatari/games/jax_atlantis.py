@@ -106,6 +106,8 @@ class AtlantisObservation(struct.PyTreeNode):
     enemy: ObjectObservation
     bullet: ObjectObservation
     plasma: ObjectObservation
+    cannons: ObjectObservation
+    installations: ObjectObservation
     score: jnp.ndarray
     installations_alive: jnp.ndarray
     command_post_alive: jnp.ndarray
@@ -162,6 +164,16 @@ class AtlantisConstants(struct.PyTreeNode):
 
     # Asset config baked into constants (immutable default) for asset overrides
     ASSET_CONFIG: tuple = struct.field(pytree_node=False, default_factory=_get_default_asset_config)
+
+
+def _clip_box_to_screen(x, y, w, h, width: int, height: int):
+    x1 = jnp.clip(x, 0, width)
+    y1 = jnp.clip(y, 0, height)
+    x2 = jnp.clip(x + w, 0, width)
+    y2 = jnp.clip(y + h, 0, height)
+    cw = jnp.maximum(x2 - x1, 0)
+    ch = jnp.maximum(y2 - y1, 0)
+    return x1, y1, cw, ch, (cw > 0) & (ch > 0)
 
 
 class JaxAtlantis(
@@ -1196,12 +1208,19 @@ class JaxAtlantis(
         enemy_dx = state.enemies[:, 2]
         enemy_angle = jnp.where(enemy_dx < 0, 180.0, 0.0).astype(jnp.float32)
 
-        # FIX: Use 0 instead of -1 for inactive objects to satisfy Box(low=0)
-        enemy_x = jnp.where(enemy_alive == 1, state.enemies[:, 0].astype(jnp.int32), 0)
-        enemy_y = jnp.where(enemy_alive == 1, state.enemies[:, 1].astype(jnp.int32), 0)
-        
-        enemy_w = jnp.where(enemy_alive == 1, cfg.enemy_width[type_ids].astype(jnp.int32), 0)
-        enemy_h = jnp.where(enemy_alive == 1, cfg.enemy_height[type_ids].astype(jnp.int32), 0)
+        enemy_x, enemy_y, enemy_w, enemy_h, enemy_on_screen = _clip_box_to_screen(
+            state.enemies[:, 0].astype(jnp.int32),
+            state.enemies[:, 1].astype(jnp.int32),
+            cfg.enemy_width[type_ids].astype(jnp.int32),
+            cfg.enemy_height[type_ids].astype(jnp.int32),
+            cfg.screen_width,
+            cfg.screen_height,
+        )
+        enemy_alive = enemy_alive * enemy_on_screen.astype(jnp.int32)
+        enemy_x = jnp.where(enemy_alive == 1, enemy_x, 0)
+        enemy_y = jnp.where(enemy_alive == 1, enemy_y, 0)
+        enemy_w = jnp.where(enemy_alive == 1, enemy_w, 0)
+        enemy_h = jnp.where(enemy_alive == 1, enemy_h, 0)
         
         enemy_pos = ObjectObservation.create(
             x=enemy_x, 
@@ -1254,27 +1273,19 @@ class JaxAtlantis(
             dx_i < 0, x_i + half_w, x_i + cfg.enemy_width[type_ids] - half_w
         ).astype(jnp.int32)
 
-        plasma_x = jnp.where(plasma_alive == 1, centers, 0)
-        plasma_y_val = jnp.array(cfg.start_beam, dtype=jnp.int32)
-        plasma_y = jnp.where(
-            plasma_alive == 1,
-            jnp.full_like(centers, plasma_y_val, dtype=jnp.int32),
-            0,
+        plasma_x, plasma_y, plasma_w, plasma_h, plasma_on_screen = _clip_box_to_screen(
+            centers,
+            jnp.full_like(centers, cfg.start_beam),
+            jnp.full_like(centers, 3),
+            jnp.full_like(centers, cfg.height_upper_beam + 50),
+            cfg.screen_width,
+            cfg.screen_height,
         )
-
-        # Use a narrow vertical beam; height from start_beam to bottom of screen
-        plasma_w_val = jnp.array(3, dtype=jnp.int32)
-        plasma_h_val = jnp.array(cfg.screen_height - cfg.start_beam, dtype=jnp.int32)
-        plasma_w = jnp.where(
-            plasma_alive == 1,
-            jnp.full_like(centers, plasma_w_val, dtype=jnp.int32),
-            0,
-        )
-        plasma_h = jnp.where(
-            plasma_alive == 1,
-            jnp.full_like(centers, plasma_h_val, dtype=jnp.int32),
-            0,
-        )
+        plasma_alive = plasma_alive * plasma_on_screen.astype(jnp.int32)
+        plasma_x = jnp.where(plasma_alive == 1, plasma_x, 0)
+        plasma_y = jnp.where(plasma_alive == 1, plasma_y, 0)
+        plasma_w = jnp.where(plasma_alive == 1, plasma_w, 0)
+        plasma_h = jnp.where(plasma_alive == 1, plasma_h, 0)
 
         # Fixed vertical orientation (downwards)
         plasma_orientation = jnp.where(
@@ -1295,6 +1306,26 @@ class JaxAtlantis(
             orientation=plasma_orientation,
         )
 
+        cannon_alive = jnp.array([True, False, True]).at[1].set(state.command_post_alive).astype(jnp.int32)
+        cannon_pos = ObjectObservation.create(
+            x=jnp.where(cannon_alive == 1, cfg.cannon_x, 0),
+            y=jnp.where(cannon_alive == 1, cfg.cannon_y, 0),
+            width=jnp.where(cannon_alive == 1, cfg.cannon_width, 0),
+            height=jnp.where(cannon_alive == 1, cfg.cannon_height, 0),
+            active=cannon_alive,
+            visual_id=jnp.arange(3, dtype=jnp.int32),
+        )
+
+        installation_alive = state.installations.astype(jnp.int32)
+        installation_pos = ObjectObservation.create(
+            x=jnp.where(installation_alive == 1, cfg.installations_x, 0),
+            y=jnp.where(installation_alive == 1, cfg.installations_y, 0),
+            width=jnp.where(installation_alive == 1, cfg.installations_width, 0),
+            height=jnp.where(installation_alive == 1, cfg.installations_height, 0),
+            active=installation_alive,
+            visual_id=jnp.arange(6, dtype=jnp.int32),
+        )
+
         # --- FIRE COOLDOWN (NORMALIZED) ---
         fire_cd_max = jnp.array(cfg.fire_cooldown_frames, dtype=jnp.float32)
         fire_cooldown_norm = state.fire_cooldown.astype(jnp.float32) / jnp.maximum(
@@ -1305,6 +1336,8 @@ class JaxAtlantis(
             enemy=enemy_pos,
             bullet=bullet_pos,
             plasma=plasma_pos,
+            cannons=cannon_pos,
+            installations=installation_pos,
             score=state.score,
             installations_alive=state.installations.astype(jnp.int32),
             command_post_alive=state.command_post_alive.astype(jnp.int32),
@@ -1319,6 +1352,8 @@ class JaxAtlantis(
                 "enemy": spaces.get_object_space(n=cfg.max_enemies, screen_size=(cfg.screen_height, cfg.screen_width), orientation_range=(0.0, 180.0)),
                 "bullet": spaces.get_object_space(n=cfg.max_bullets, screen_size=(cfg.screen_height, cfg.screen_width), orientation_range=(0.0, 360.0)),
                 "plasma": spaces.get_object_space(n=cfg.max_enemies, screen_size=(cfg.screen_height, cfg.screen_width), orientation_range=(0.0, 360.0)),
+                "cannons": spaces.get_object_space(n=3, screen_size=(cfg.screen_height, cfg.screen_width)),
+                "installations": spaces.get_object_space(n=6, screen_size=(cfg.screen_height, cfg.screen_width)),
                 "score": spaces.Box(
                     low=0,
                     high=(10**cfg.max_digits_for_score) - 1,
