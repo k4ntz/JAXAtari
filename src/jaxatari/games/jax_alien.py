@@ -184,8 +184,10 @@ class AlienObservation(struct.PyTreeNode):
     player: ObjectObservation
     enemies: ObjectObservation
     enemies_killable: jnp.ndarray
-    kill_item_position: jnp.ndarray
-    score_item_position: jnp.ndarray
+    flame: ObjectObservation
+    eggs: ObjectObservation
+    kill_items: ObjectObservation
+    score_items: ObjectObservation
     #collision_map: jnp.ndarray
 
 #Defines the Info of Alien, which is score, step counter and all rewards
@@ -1480,13 +1482,13 @@ class JaxAlien(JaxEnvironment[AlienState, AlienObservation, AlienInfo, AlienCons
         enemy_count = int(self.consts.ENEMY_AMOUNT_BONUS_STAGE)
         return spaces.Dict({
             "player": spaces.get_object_space(n=None, screen_size=(self.consts.HEIGHT, self.consts.WIDTH), orientation_range=(0.0, 17.0)),
-            "enemies": spaces.get_object_space(n=enemy_count, screen_size=(self.consts.HEIGHT, self.consts.WIDTH), orientation_range=(0.0, 17.0)),
+            "enemies": spaces.get_object_space(n=2 * enemy_count, screen_size=(self.consts.HEIGHT, self.consts.WIDTH), orientation_range=(0.0, 17.0)),
             "enemies_killable":
                 spaces.Box(low=0, high=1, shape=(enemy_count,), dtype=jnp.int32),
-            "kill_item_position":
-                spaces.Box(low=0, high=self.consts.HEIGHT, shape=(2,), dtype=jnp.int32),
-            "score_item_position":
-                spaces.Box(low=0, high=self.consts.HEIGHT, shape=(2,), dtype=jnp.int32),
+            "flame": spaces.get_object_space(n=None, screen_size=(self.consts.HEIGHT, self.consts.WIDTH)),
+            "eggs": spaces.get_object_space(n=self.consts.EGG_ARRAY.shape[0] * self.consts.EGG_ARRAY.shape[1], screen_size=(self.consts.HEIGHT, self.consts.WIDTH)),
+            "kill_items": spaces.get_object_space(n=self.consts.ITEM_ARRAY.shape[0] - 1, screen_size=(self.consts.HEIGHT, self.consts.WIDTH)),
+            "score_items": spaces.get_object_space(n=2, screen_size=(self.consts.HEIGHT, self.consts.WIDTH)),
             #"collision_map":
             #    spaces.Box(low=0, high=1, shape=(152, 188), dtype=jnp.bool_),
         })
@@ -1500,15 +1502,17 @@ class JaxAlien(JaxEnvironment[AlienState, AlienObservation, AlienInfo, AlienCons
         Returns:
             AlienObservation: observation for the ai agent
         """
-        # Get the position of the currently active "kill item" (first 2 coordinates: x, y)
-        new_kill_item_position = jnp.take(self.consts.ITEM_ARRAY, state.level.current_active_item_index, axis=0)[:2]
+        off_x = self.consts.RENDER_OFFSET_X
+        off_y = self.consts.RENDER_OFFSET_Y
+        in_bonus = state.level.bonus_flag == 1
+        in_primary = jnp.logical_not(in_bonus)
 
-        # Build object-centric observations
-        enemy_count = int(self.consts.ENEMY_AMOUNT_BONUS_STAGE)
+        def drawn_x(x, sprite_width):
+            return jnp.clip(x + off_x, 0, self.consts.WIDTH - sprite_width).astype(jnp.int32)
 
         player_obj = ObjectObservation.create(
-            x=jnp.array(state.player.x, dtype=jnp.int32),
-            y=jnp.array(state.player.y, dtype=jnp.int32),
+            x=drawn_x(state.player.x, 10) + 1,
+            y=jnp.array(state.player.y + off_y + 2, dtype=jnp.int32),
             width=jnp.array(self.consts.PLAYER_WIDTH, dtype=jnp.int32),
             height=jnp.array(self.consts.PLAYER_HEIGHT, dtype=jnp.int32),
             active=jnp.array(1, dtype=jnp.int32),
@@ -1516,22 +1520,78 @@ class JaxAlien(JaxEnvironment[AlienState, AlienObservation, AlienInfo, AlienCons
             orientation=jnp.array(state.player.orientation, dtype=jnp.int32),
         )
 
+        enemies = state.enemies.multiple_enemies
+        enemy_count = int(self.consts.ENEMY_AMOUNT_BONUS_STAGE)
+        spawn_frame = enemies.enemy_spawn_frame
+        in_maze = (
+            (enemies.active_enemy == 1)
+            & ((spawn_frame > 9) | (spawn_frame == 0))
+            & (jnp.arange(enemy_count) < self.consts.ENEMY_AMOUNT_PRIMARY_STAGE)
+        )
+        enemy_active = jnp.where(in_bonus, True, in_maze)
+        shadow_active = jnp.broadcast_to(in_bonus, (enemy_count,))
+        shadow_x = enemies.x - 35 * (2 * (enemies.last_horizontal_orientation % 2) - 1)
         enemies_obj = ObjectObservation.create(
-            x=state.enemies.multiple_enemies.x,
-            y=state.enemies.multiple_enemies.y,
-            width=jnp.full((enemy_count,), self.consts.PLAYER_WIDTH, dtype=jnp.int32),
-            height=jnp.full((enemy_count,), self.consts.PLAYER_HEIGHT, dtype=jnp.int32),
-            active=state.enemies.multiple_enemies.active_enemy,
-            visual_id=jnp.zeros((enemy_count,), dtype=jnp.int32),
-            orientation=state.enemies.multiple_enemies.orientation,
+            x=jnp.concatenate([drawn_x(enemies.x, 10), drawn_x(shadow_x, 10)]) + 1,
+            y=jnp.tile(enemies.y + off_y + 1, 2).astype(jnp.int32),
+            width=jnp.full((2 * enemy_count,), self.consts.PLAYER_WIDTH, dtype=jnp.int32),
+            height=jnp.full((2 * enemy_count,), self.consts.PLAYER_HEIGHT, dtype=jnp.int32),
+            active=jnp.concatenate([enemy_active, shadow_active]).astype(jnp.int32),
+            visual_id=jnp.zeros((2 * enemy_count,), dtype=jnp.int32),
+            orientation=jnp.tile(enemies.orientation, 2).astype(jnp.int32),
+        )
+
+        flame = state.player.flame
+        flame_obj = ObjectObservation.create(
+            x=drawn_x(flame.x, 8),
+            y=jnp.array(flame.y + off_y, dtype=jnp.int32),
+            width=jnp.array(8, dtype=jnp.int32),
+            height=jnp.array(5, dtype=jnp.int32),
+            active=(flame.flame_flag == 1).astype(jnp.int32),
+        )
+
+        eggs = state.eggs.reshape(-1, state.eggs.shape[-1])
+        egg_count = eggs.shape[0]
+        eggs_obj = ObjectObservation.create(
+            x=(eggs[:, 0] + off_x).astype(jnp.int32),
+            y=(eggs[:, 1] + off_y).astype(jnp.int32),
+            width=jnp.ones((egg_count,), dtype=jnp.int32),
+            height=jnp.full((egg_count,), 2, dtype=jnp.int32),
+            active=((eggs[:, 2] == 1) & in_primary).astype(jnp.int32),
+            visual_id=eggs[:, 3].astype(jnp.int32),
+        )
+
+        items = state.items
+        kill_item_count = items.shape[0] - 1
+        kill_items_obj = ObjectObservation.create(
+            x=(items[:kill_item_count, 0] + off_x + 2).astype(jnp.int32),
+            y=(items[:kill_item_count, 1] + off_y + 4).astype(jnp.int32),
+            width=jnp.full((kill_item_count,), 5, dtype=jnp.int32),
+            height=jnp.full((kill_item_count,), 5, dtype=jnp.int32),
+            active=((items[:kill_item_count, 2] == 1) & in_primary & (flame.flame_flag == 0)).astype(jnp.int32),
+        )
+
+        score_item = items[kill_item_count]
+        score_items_obj = ObjectObservation.create(
+            x=jnp.stack([score_item[0] + off_x + 1, self.consts.ENEMY_SPAWN_X + off_x + 2]).astype(jnp.int32),
+            y=jnp.stack([score_item[1] + off_y + 4, 10 + off_y + 4]).astype(jnp.int32),
+            width=jnp.array([8, 5], dtype=jnp.int32),
+            height=jnp.array([5, 5], dtype=jnp.int32),
+            active=jnp.stack([
+                (score_item[2] == 1) & in_primary,
+                in_bonus & (state.level.evil_item_frame_counter <= 0),
+            ]).astype(jnp.int32),
+            visual_id=jnp.stack([score_item[3], jnp.array(0, dtype=score_item.dtype)]).astype(jnp.int32),
         )
 
         return AlienObservation(
             player=player_obj,
             enemies=enemies_obj,
-            enemies_killable=state.enemies.multiple_enemies.killable,
-            kill_item_position=new_kill_item_position,
-            score_item_position=jnp.array([68, 56], dtype=jnp.int32), # Hardcoded position of the score item
+            enemies_killable=enemies.killable,
+            flame=flame_obj,
+            eggs=eggs_obj,
+            kill_items=kill_items_obj,
+            score_items=score_items_obj,
             #collision_map=BACKGROUND_COLLISION_MAP,
         )
 
