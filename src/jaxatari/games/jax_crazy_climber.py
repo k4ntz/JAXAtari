@@ -94,27 +94,32 @@ class PlayerMoveState:
 class TowerState:
     tower_step: int
     windows: jnp.ndarray
-    spawn_probability: float
+    spawn_prob: float
+    spawn_cycle_prob: float
+    open_prob: float
+    cycle_duration: int
     is_falling: bool
     lowest_level: int
     tower: jnp.ndarray
-    shut_counter: int
 
     @classmethod
-    def new(cls, key, level: chex.Array):
+    def new(cls, level: chex.Array):
         blind_left = jnp.zeros((11, 3))
-        blind_dirs_left = jax.random.choice(key, jnp.array([0, 1]), (11, 3), p=jnp.array([0.8, 0.2]))
-        windows_left = jnp.stack([blind_left, blind_dirs_left, blind_left], axis=2)
+        blind_dirs_left = jnp.zeros((11, 3)) 
+
+        windows_left = jnp.stack([blind_left, blind_dirs_left], axis=2)
         windows = jnp.concatenate([windows_left, jnp.fliplr(windows_left)], axis=1)
 
         return cls(
             tower_step=0,
             windows=windows,
-            spawn_probability=0.2,
+            spawn_prob=CrazyClimberConstants.TOWER_BLIND_SPAWN_PROB[level - 1],
+            spawn_cycle_prob=CrazyClimberConstants.TOWER_BLIND_SPAWN_CYCLE_PROB[level - 1],
+            open_prob=CrazyClimberConstants.TOWER_BLIND_OPEN_PROB[level - 1],
+            cycle_duration=CrazyClimberConstants.TOWER_BLIND_CYCLE_DURATIONS[level - 1],
             is_falling=False,
             lowest_level=0,
             tower=CrazyClimberConstants.TOWERS[level - 1],
-            shut_counter=CrazyClimberConstants.TOWER_BLIND_SHUT_DURATION[level - 1],
         )
 
 class HeliFlyAwayStates(IntEnum):
@@ -630,7 +635,11 @@ class CrazyClimberConstants(struct.PyTreeNode):
     TOWER3 = jnp.repeat(TowerLevelType.FULL, 163)
     TOWER4 = jnp.repeat(TowerLevelType.FULL, 163)
     TOWERS = jnp.stack([TOWER1, TOWER2, TOWER3, TOWER4])
-    TOWER_BLIND_SHUT_DURATION = jnp.array([1, 3, 5, 7])
+    TOWER_BLIND_SPAWN_CYCLE_PROB = jnp.array([0.5, 0.6, 0.6, 0.6])
+    TOWER_BLIND_SPAWN_PROB = jnp.array([0.15, 0.2, 0.2, 0.2])
+    TOWER_BLIND_OPEN_PROB = jnp.array([0.9, 0.7, 0.7, 0.7])
+    TOWER_BLIND_CYCLE_DURATIONS = jnp.array([60, 45, 45, 45])
+    TOWER_BLINDS_MAX: int = 18
 
     PIXEL_MASK_ONE_ROW = jnp.zeros((13, 13), dtype=bool).at[-1, :].set(True).reshape(169, 1)
     PIXEL_MASK_NOTHING = jnp.zeros((169, 1), dtype=bool)
@@ -700,6 +709,7 @@ class JaxCrazyClimber(JaxEnvironment[CrazyClimberState, CrazyClimberObservation,
         self.FLOWERPOT_DROP_BOTTOM_Y_OFFSETS = self.renderer.FLOWERPOT_DROP_BOTTOM_Y_OFFSETS
 
     def reset(self, key: chex.PRNGKey = jax.random.PRNGKey(42)) -> tuple[CrazyClimberObservation, CrazyClimberState]:
+        level = Level.LEVEL_2
         state_key, _step_key = jax.random.split(key)
         state = CrazyClimberState(
             key=state_key,
@@ -709,10 +719,10 @@ class JaxCrazyClimber(JaxEnvironment[CrazyClimberState, CrazyClimberObservation,
             lifes=jnp.array(5),
             reached_apex=jnp.array(False),
             player_move_state=PlayerMoveState.new(),
-            tower_state=TowerState.new(state_key, 2),
+            tower_state=TowerState.new(level),
 
             bird_state=BirdState.new(),
-            level_state=LevelState.new(Level.LEVEL_2),
+            level_state=LevelState.new(level),
 
             climbed_floors=jnp.array(0, dtype=jnp.int32),
             flowerpot_enemy_state=FlowerpotEnemyState.new(
@@ -836,7 +846,6 @@ class JaxCrazyClimber(JaxEnvironment[CrazyClimberState, CrazyClimberObservation,
         def update_blinds(windows: jnp.ndarray) -> jnp.ndarray:
             blinds_left = windows[:, :3, 0]
             blind_dirs_left = windows[:, :3, 1]
-            blind_shut_counter = windows[:, :3, 2]
 
             # make blinds close one step that should close
             blinds_left = jnp.where(
@@ -852,20 +861,6 @@ class JaxCrazyClimber(JaxEnvironment[CrazyClimberState, CrazyClimberObservation,
                 blinds_left
             )
 
-            # for all shut blinds decrease the step counter by one
-            blind_shut_counter = jnp.where(
-                (blind_shut_counter < 0) & (blinds_left == 6) & (blind_dirs_left == 0),
-                blind_shut_counter - 1,
-                0  
-            )
-
-            # set recently closed blinds' shut counter to the maximum for this level
-            blind_shut_counter = jnp.where(
-                (blind_dirs_left == 1) & (blinds_left == 6),
-                state.tower_state.shut_counter,
-                blind_shut_counter,
-            )
-
             # set recently closed blinds direction to 0
             blind_dirs_left = jnp.where(
                 (blind_dirs_left == 1) & (blinds_left == 6),
@@ -873,28 +868,55 @@ class JaxCrazyClimber(JaxEnvironment[CrazyClimberState, CrazyClimberObservation,
                 blind_dirs_left,
             )
 
-            # set blinds to open when counter is at 0
-            blind_dirs_left = jnp.where(
-                (blinds_left == 6) & (blind_shut_counter == 0),
-                -1,
-                blind_dirs_left
+            open_prob = state.tower_state.open_prob
+            should_open = jax.random.choice(state.key, jnp.array([True, False]), (1, ), p=jnp.array([open_prob, 1 - open_prob]))[0]
+            # set blinds to open when counter is at 0 if we sample should_open with p(should_open) = open_prob
+            
+            blind_dirs_left = jax.lax.cond(
+                should_open,
+                lambda: jnp.where(
+                    (blinds_left == 6) & (blind_dirs_left == 0),
+                    -1,
+                    blind_dirs_left
+                ),
+                lambda: blind_dirs_left,
             )
 
+            # set blind direction to 0 for recently closed blind
             blind_dirs_left = jnp.where(
                 (blinds_left == 0) & (blind_dirs_left == -1),
                 0,
                 blind_dirs_left
             )
+
+            spawn_cycle_prob = state.tower_state.spawn_cycle_prob * jnp.maximum(
+                jnp.minimum(CrazyClimberConstants.TOWER_BLINDS_MAX - jnp.count_nonzero(blinds_left), 1), 0)
+            spawn_prob = state.tower_state.spawn_prob
+            new_closing_blinds = jax.random.choice(state.key, jnp.array([1, 0]), (11, 3), p=jnp.array([spawn_prob, 1 - spawn_prob]))
+
+            # first we sample spawn_cycle with p(spawn_cycle) = spawn_cycle_prob, which is 0 when we already have TOWER_BLINDS_MAX blinds spawned
+            # if spawn_cycle is sampled we sample new_closing_blinds for each window blind 
+            # that is open currently with a probability of p(new_closing_blinds) = spawn_prob
+            spawn_cycle = jax.random.choice(state.key, jnp.array([True, False]), (1,), p=jnp.array([spawn_cycle_prob, 1 - spawn_cycle_prob]))[0]
+            blind_dirs_left = jax.lax.cond(
+                spawn_cycle,
+                lambda: jnp.where(
+                    (blinds_left == 0) & (blind_dirs_left == 0),
+                    new_closing_blinds,
+                    blind_dirs_left,
+                ),
+                lambda: blind_dirs_left,
+            )
             
-            windows_left = jnp.stack([blinds_left, blind_dirs_left, blind_shut_counter], axis=-1)
+            windows_left = jnp.stack([blinds_left, blind_dirs_left], axis=-1)
             return jnp.concatenate([windows_left, jnp.fliplr(windows_left)], axis=1)
         
         @partial(jax.jit)
-        def shift_windows(windows: jnp.ndarray, spawn_propability: float, key) -> jnp.ndarray:
+        def shift_windows(windows: jnp.ndarray) -> jnp.ndarray:
             windows = jnp.roll(windows, shift=1, axis=0)
-            new_blind_dirs_left = jax.random.choice(key, jnp.array([0, 1]), (1, 3), p=jnp.array([1 - spawn_propability, spawn_propability]))
+            new_blind_dirs_left = jnp.zeros((1, 3))
             new_blinds_left = jnp.zeros((1, 3))
-            new_row_left = jnp.stack([new_blinds_left, new_blind_dirs_left, new_blinds_left], axis=2)
+            new_row_left = jnp.stack([new_blinds_left, new_blind_dirs_left], axis=2)
             new_row = jnp.concatenate([new_row_left, jnp.fliplr(new_row_left)], axis=1) 
             windows = windows.at[:1, :, :].set(new_row)
             return windows
@@ -910,14 +932,14 @@ class JaxCrazyClimber(JaxEnvironment[CrazyClimberState, CrazyClimberObservation,
             )
 
             windows = jax.lax.cond(
-                state.step_counter % 59 == 0,
+                state.step_counter % state.tower_state.cycle_duration == 0,
                 lambda: update_blinds(state.tower_state.windows),
                 lambda: state.tower_state.windows
             )
 
             windows = jax.lax.cond(
                 (state.player_move_state.main_state == PlayerStableStates.NEUTRAL) & state.reached_apex,
-                lambda: shift_windows(windows, state.tower_state.spawn_probability, state.key),
+                lambda: shift_windows(windows),
                 lambda: windows,
             )
 
@@ -946,7 +968,7 @@ class JaxCrazyClimber(JaxEnvironment[CrazyClimberState, CrazyClimberObservation,
             branch_idx,
             [
                 lambda: update_tower(state.tower_state),
-                lambda: TowerState.new(state.key, state.level_state.current_level).replace(lowest_level=state.tower_state.lowest_level),
+                lambda: TowerState.new(state.level_state.current_level).replace(lowest_level=state.tower_state.lowest_level),
                 lambda: state.tower_state.replace(is_falling=True),
                 lambda: state.tower_state,
             ]
@@ -2005,7 +2027,7 @@ class JaxCrazyClimber(JaxEnvironment[CrazyClimberState, CrazyClimberObservation,
         player_reset_state = PlayerMoveState.new()
         next_level = (state.level_state.current_level % 4) + 1
         level_reset_state = LevelState.new(next_level)
-        tower_reset_state = TowerState.new(state.key, next_level) 
+        tower_reset_state = TowerState.new(next_level) 
         
         #TODO: do something with a new key?
         #I reckon the key gets renewed every step, so we dont have to generate a new key.
