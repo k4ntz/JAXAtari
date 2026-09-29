@@ -1,9 +1,8 @@
 import jax
 import jax.numpy as jnp
-from jaxatari.games.jax_montezumarevenge import JaxMontezumaRevenge
 
-def test_conveyor_movement():
-    env = JaxMontezumaRevenge()
+def test_conveyor_movement(montezuma_env):
+    env = montezuma_env
     key = jax.random.PRNGKey(0)
     obs, state = env.reset(key)
     
@@ -28,8 +27,8 @@ def test_conveyor_movement():
     assert state.player_x < initial_x
     assert state.player_y == 68
 
-def test_wall_collision():
-    env = JaxMontezumaRevenge()
+def test_wall_collision(montezuma_env):
+    env = montezuma_env
     key = jax.random.PRNGKey(0)
     obs, state = env.reset(key)
     
@@ -51,9 +50,9 @@ def test_wall_collision():
     # Player_x shouldn't exceed 149
     assert state.player_x <= 149
 
-def test_jump_off_ladder_impossible():
+def test_jump_off_ladder_impossible(montezuma_env):
     #It is not possible to move off of ladders
-    env = JaxMontezumaRevenge()
+    env = montezuma_env
     key = jax.random.PRNGKey(0)
     obs, state = env.reset(key)
     
@@ -83,8 +82,8 @@ def test_jump_off_ladder_impossible():
     assert state.is_jumping == 0
     assert state.is_falling == 0
 
-def test_transition_landing_overlap():
-    env = JaxMontezumaRevenge()
+def test_transition_landing_overlap(montezuma_env):
+    env = montezuma_env
     key = jax.random.PRNGKey(0)
     obs, state = env.reset(key)
     
@@ -110,8 +109,8 @@ def test_transition_landing_overlap():
     assert state.player_y == 36
     assert state.player_y + 19 == 55 # Feet at 55, platform at 56.
 
-def test_jump_descent_overlap():
-    env = JaxMontezumaRevenge()
+def test_jump_descent_overlap(montezuma_env):
+    env = montezuma_env
     key = jax.random.PRNGKey(0)
     obs, state = env.reset(key)
     

@@ -1,9 +1,8 @@
 import jax
 import jax.numpy as jnp
-from jaxatari.games.jax_montezumarevenge import JaxMontezumaRevenge
 
-def test_climb_ladder():
-    env = JaxMontezumaRevenge()
+def test_climb_ladder(montezuma_env):
+    env = montezuma_env
     key = jax.random.PRNGKey(0)
     obs, state = env.reset(key)
     
@@ -36,8 +35,8 @@ def test_climb_ladder():
     obs, state, reward, done, info = env.step(state, DOWN_ACTION)
     assert state.player_y == initial_y
     
-def test_climb_rope():
-    env = JaxMontezumaRevenge()
+def test_climb_rope(montezuma_env):
+    env = montezuma_env
     key = jax.random.PRNGKey(0)
     obs, state = env.reset(key)
     
@@ -64,8 +63,8 @@ def test_climb_rope():
     obs, state, reward, done, info = env.step(state, 2) # UP
     assert state.player_y < initial_y
 
-def test_no_drop_ladder_onto_platform():
-    env = JaxMontezumaRevenge()
+def test_no_drop_ladder_onto_platform(montezuma_env):
+    env = montezuma_env
     key = jax.random.PRNGKey(0)
     obs, state = env.reset(key)
     

@@ -32,11 +32,17 @@ class RendererConfig(struct.PyTreeNode):
 
     @property
     def width_scaling(self) -> float:
-        return self.downscale[1] / self.game_dimensions[1] if self.downscale else 1.0
+        # Cast to Python float so comparisons stay host-side under jax.jit.
+        # Some games (e.g. Sir Lancelot) store screen dims as jnp arrays.
+        if not self.downscale:
+            return 1.0
+        return float(self.downscale[1]) / float(self.game_dimensions[1])
 
     @property
     def height_scaling(self) -> float:
-        return self.downscale[0] / self.game_dimensions[0] if self.downscale else 1.0
+        if not self.downscale:
+            return 1.0
+        return float(self.downscale[0]) / float(self.game_dimensions[0])
 
 class JaxRenderingUtils:
     """
@@ -927,16 +933,20 @@ class JaxRenderingUtils:
 
         return jax.lax.fori_loop(0, max_digits, render_char, object_raster)
     
-    @partial(jax.jit, static_argnames=['self', 'spacing', 'max_digits_to_render'])
+    @partial(jax.jit, static_argnames=['self', 'spacing', 'max_digits_to_render', 'right_align'])
     def render_label_selective(self, object_raster: jnp.ndarray, x: int, y: int,
                                all_digits: jnp.ndarray,
                                digit_id_masks: jnp.ndarray, # Changed from digit_masks
                                start_index: int,
                                num_to_render: int,
                                spacing: int = 16,
-                               max_digits_to_render: int = 2) -> jnp.ndarray:
+                               max_digits_to_render: int = 2,
+                               right_align: bool = False) -> jnp.ndarray:
         """
         Renders a specified number of digits using pre-baked Object ID masks.
+
+        If right_align is True, ``x`` is the left edge of the least-significant
+        (rightmost) digit so extra digits grow leftward.
         """
         def render_char(i, current_raster):
             should_draw = (i < num_to_render)
@@ -947,8 +957,9 @@ class JaxRenderingUtils:
                 
                 # Select the correct INTEGER ID mask for the digit
                 char_id_mask = digit_id_masks[digit_value]
-                
-                render_x = x + i * spacing
+
+                offset_i = jnp.where(right_align, i - (num_to_render - 1), i)
+                render_x = x + offset_i * spacing
                 # Call the new render_at, which accepts the integer ID mask
                 return self.render_at(raster_in, render_x, y, char_id_mask)
 

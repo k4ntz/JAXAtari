@@ -5,6 +5,7 @@ from jaxatari.modification import JaxAtariPostStepModPlugin, JaxAtariInternalMod
 from jaxatari.games.jax_mspacman import JaxPacman, GhostMode, reset_game
 from jaxatari.games.mspacman_mazes import MsPacmanMaze
 
+
 class FruitGhostBonusMod(JaxAtariInternalModPlugin):
     """
     Mod that deactivates points for pellets and power pellets,
@@ -13,7 +14,7 @@ class FruitGhostBonusMod(JaxAtariInternalModPlugin):
     constants_overrides = {
         "PELLET_POINTS": 0,
         "POWER_PELLET_POINTS": 0,
-        "FRUIT_REWARDS": jnp.array([400, 800, 2000, 2800, 4000, 8000, 20000]),
+        "FRUIT_REWARDS": (400, 800, 2000, 2800, 4000, 8000, 20000),
         "EAT_GHOSTS_BASE_POINTS": 800,
     }
 
@@ -24,7 +25,7 @@ class CagedGhostsMod(JaxAtariPostStepModPlugin):
     @partial(jax.jit, static_argnums=(0,))
     def after_reset(self, obs, state):
         new_state = self._cage_ghosts(state)
-        new_obs = JaxPacman.get_observation(new_state)
+        new_obs = self._env._get_observation(new_state)
         return new_obs, new_state
 
     @partial(jax.jit, static_argnums=(0,))
@@ -57,7 +58,7 @@ class ConstantFruitsMod(JaxAtariPostStepModPlugin):
             timer=jnp.array(9999, dtype=jnp.uint16)
         )
         new_state = state.replace(fruit=new_fruit)
-        new_obs = JaxPacman.get_observation(new_state)
+        new_obs = self._env._get_observation(new_state)
         return new_obs, new_state
 
 
@@ -66,7 +67,7 @@ class SetMaze1Mod(JaxAtariPostStepModPlugin):
     @partial(jax.jit, static_argnums=(0,))
     def after_reset(self, obs, state):
         new_state = reset_game(self._env.consts, jnp.array(self.maze_level, dtype=jnp.uint8), state.lives, state.score, state.key)
-        new_obs = JaxPacman.get_observation(new_state)
+        new_obs = self._env._get_observation(new_state)
         return new_obs, new_state
 
     @partial(jax.jit, static_argnums=(0,))
@@ -83,7 +84,7 @@ class SetMaze2Mod(JaxAtariPostStepModPlugin):
     @partial(jax.jit, static_argnums=(0,))
     def after_reset(self, obs, state):
         new_state = reset_game(self._env.consts, jnp.array(self.maze_level, dtype=jnp.uint8), state.lives, state.score, state.key)
-        new_obs = JaxPacman.get_observation(new_state)
+        new_obs = self._env._get_observation(new_state)
         return new_obs, new_state
 
     @partial(jax.jit, static_argnums=(0,))
@@ -100,7 +101,7 @@ class SetMaze3Mod(JaxAtariPostStepModPlugin):
     @partial(jax.jit, static_argnums=(0,))
     def after_reset(self, obs, state):
         new_state = reset_game(self._env.consts, jnp.array(self.maze_level, dtype=jnp.uint8), state.lives, state.score, state.key)
-        new_obs = JaxPacman.get_observation(new_state)
+        new_obs = self._env._get_observation(new_state)
         return new_obs, new_state
 
     @partial(jax.jit, static_argnums=(0,))
@@ -117,7 +118,7 @@ class SetMaze4Mod(JaxAtariPostStepModPlugin):
     @partial(jax.jit, static_argnums=(0,))
     def after_reset(self, obs, state):
         new_state = reset_game(self._env.consts, jnp.array(self.maze_level, dtype=jnp.uint8), state.lives, state.score, state.key)
-        new_obs = JaxPacman.get_observation(new_state)
+        new_obs = self._env._get_observation(new_state)
         return new_obs, new_state
 
     @partial(jax.jit, static_argnums=(0,))
@@ -138,7 +139,7 @@ class Only1GhostMod(JaxAtariPostStepModPlugin):
     @partial(jax.jit, static_argnums=(0,))
     def after_reset(self, obs, state):
         new_state = self._initialize_ghosts(state)
-        new_obs = JaxPacman.get_observation(new_state)
+        new_obs = self._env._get_observation(new_state)
         return new_obs, new_state
 
     @partial(jax.jit, static_argnums=(0,))
@@ -202,7 +203,7 @@ class Only2GhostMod(JaxAtariPostStepModPlugin):
     @partial(jax.jit, static_argnums=(0,))
     def after_reset(self, obs, state):
         new_state = self._initialize_ghosts(state)
-        new_obs = JaxPacman.get_observation(new_state)
+        new_obs = self._env._get_observation(new_state)
         return new_obs, new_state
 
     @partial(jax.jit, static_argnums=(0,))
@@ -263,7 +264,7 @@ class Only3GhostMod(JaxAtariPostStepModPlugin):
     @partial(jax.jit, static_argnums=(0,))
     def after_reset(self, obs, state):
         new_state = self._initialize_ghosts(state)
-        new_obs = JaxPacman.get_observation(new_state)
+        new_obs = self._env._get_observation(new_state)
         return new_obs, new_state
 
     @partial(jax.jit, static_argnums=(0,))
@@ -325,7 +326,7 @@ class RandomGhostNavigationMod(JaxAtariPostStepModPlugin):
     @partial(jax.jit, static_argnums=(0,))
     def after_reset(self, obs, state):
         new_state = self._randomize_ghosts(state)
-        new_obs = JaxPacman.get_observation(new_state)
+        new_obs = self._env._get_observation(new_state)
         return new_obs, new_state
 
     @partial(jax.jit, static_argnums=(0,))
@@ -342,6 +343,13 @@ class RandomGhostNavigationMod(JaxAtariPostStepModPlugin):
         )
         new_ghosts = ghosts._replace(modes=new_modes)
         return state.replace(ghosts=new_ghosts)
+
+
+class NoStartDelayMod(JaxAtariInternalModPlugin):
+    """Removes the 260-frame ready delay so gameplay starts immediately."""
+    constants_overrides = {
+        "START_DELAY": 0,
+    }
 
 
 class MatrixMod(JaxAtariInternalModPlugin):
