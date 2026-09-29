@@ -1254,19 +1254,22 @@ class StarGunnerRenderer:
     def _draw_entities(self, img, state):
         c = self.consts
 
-        # Bobo = humanoid at top — cycles through 8 ALE colors
-        bobo_color_list = jnp.array([
-            [180, 122, 48],    # gold
-            [84, 92, 214],     # blue
-            [162, 98, 33],     # dark gold
-            [101, 111, 228],   # bright blue
-            [146, 70, 192],    # purple
-            [66, 72, 200],     # dark blue
-            [213, 130, 74],    # orange
-            [117, 128, 240],   # very bright blue
+                # Bobo colors: yellow, purple, pink, blue — same speed as enemy
+        BOBO_PALETTE = jnp.array([
+            # Yellows
+            [148, 116, 0], [181, 143, 0], [210, 164, 0], [232, 204, 99],
+            [252, 224, 112], [252, 240, 148],
+            # Purples
+            [80, 0, 132], [104, 25, 154], [125, 48, 173], [146, 70, 192],
+            [164, 89, 208], [181, 108, 224], [197, 124, 238],
+            # Pinks
+            [200, 72, 140], [212, 108, 195], [224, 124, 210],
+            [236, 140, 224], [240, 128, 200], [252, 144, 224],
+            # Blues
+            [0, 0, 148], [24, 26, 167], [45, 50, 184], [66, 72, 200],
+            [84, 92, 214], [101, 111, 228], [117, 128, 240],
         ], jnp.uint8)
-        bobo_phase = (state.step_counter // 240) % 8
-        bobo_current_color = bobo_color_list[bobo_phase]
+        bobo_cycle_color = BOBO_PALETTE[(state.step_counter // 18) % 26]
 
         # Bobo itself uses the same colour
         # Bobo shows 1 leg during the shooting window (after dropping a bomb)
@@ -1276,14 +1279,14 @@ class StarGunnerRenderer:
             BOBO_SPRITE_SHOOT,
             BOBO_SPRITE,
         )
-        img = draw_sprite(img, state.bobo_x, c.BOBO_Y, bobo_sprite, bobo_current_color)
+        img = draw_sprite(img, state.bobo_x, c.BOBO_Y, bobo_sprite, bobo_cycle_color)
 
         for i in range(c.MAX_BOMBS):
             def draw_bomb(active):
                 def draw(_):
                     bomb_sprite = jnp.array([[1, 1, 1, 1]], dtype=jnp.bool_)
                     return draw_sprite(img, state.bomb_x[i], state.bomb_y[i], bomb_sprite,
-                                       bobo_current_color)
+                                       bobo_cycle_color)
                 def skip(_):
                     return img
                 return jax.lax.cond(active, draw, skip, operand=None)
