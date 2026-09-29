@@ -3,7 +3,6 @@ from functools import partial
 from typing import Tuple
 import jax.lax
 
-import numpy as np
 import jax.numpy as jnp
 import chex
 import pygame
@@ -2341,30 +2340,6 @@ class JaxDonkeyKong(JaxEnvironment[DonkeyKongState, DonkeyKongObservation, Donke
 
 
 class DonkeyKongRenderer(JAXGameRenderer):
-    _LADDER_RUNGS_L1 = (
-        (76, (40, 44, 48, 52, 56)),
-        (76, (52, 56, 68, 80)),
-        (108, (68, 72, 76, 80)),
-        (48, (92, 96, 100, 104, 108)),
-        (68, (88, 92, 96, 100, 104, 108)),
-        (100, (84, 88, 92, 104, 108)),
-        (64, (120, 132, 136)),
-        (88, (116, 120, 124, 128, 132, 136)),
-        (108, (120, 124, 128, 132, 136)),
-        (48, (148, 152, 156, 160, 164)),
-        (80, (148, 152, 156, 160, 164)),
-        (72, (176, 188, 192)),
-        (108, (176, 180, 184, 188, 192)),
-    )
-    _LADDER_RUNGS_L2 = (
-        40, 44, 48, 52, 56,
-        68, 72, 76, 80, 84,
-        96, 100, 104, 108, 112,
-        124, 128, 132, 136, 140,
-        152, 156, 160, 164, 168,
-    )
-    _VISUAL_XS_L2 = (40, 60, 96, 116)
-
     def __init__(self, consts: DonkeyKongConstants = None, config: render_utils.RendererConfig = None):
         self.consts = consts or DonkeyKongConstants()
         super().__init__(self.consts)
@@ -2381,30 +2356,7 @@ class DonkeyKongRenderer(JAXGameRenderer):
         self.jr = render_utils.JaxRenderingUtils(self.config)
 
         sprite_path = os.path.join(render_utils.get_base_sprite_dir(), "donkeykong")
-
-        # Load raw backgrounds and clean original ladder rungs in-memory so procedural
-        # ladders can be placed dynamically without requiring separate pre-baked assets on disk.
-        bg1_raw = self.jr.loadFrame(os.path.join(sprite_path, "donkeyKong_background_level_1.npy"))
-        bg2_raw = self.jr.loadFrame(os.path.join(sprite_path, "donkeyKong_background_level_2.npy"))
-
-        bg1_clean = np.array(bg1_raw, copy=True)
-        for x, rungs in self._LADDER_RUNGS_L1:
-            for y in rungs:
-                bg1_clean[y, x : x + 4] = [0, 0, 0, 0]
-
-        bg2_clean = np.array(bg2_raw, copy=True)
-        for x in self._VISUAL_XS_L2:
-            for y in self._LADDER_RUNGS_L2:
-                bg2_clean[y, x : x + 4] = [0, 0, 0, 0]
-
-        asset_config = []
-        for entry in self.consts.ASSET_CONFIG:
-            if entry.get("name") == "background":
-                asset_config.append({"name": "background", "type": "background", "data": bg1_clean})
-            elif entry.get("name") == "background_level_2":
-                asset_config.append({"name": "background_level_2", "type": "single", "data": bg2_clean})
-            else:
-                asset_config.append(entry)
+        asset_config = self.consts.ASSET_CONFIG
 
         (
             self.PALETTE,
