@@ -51,16 +51,32 @@ PLAYER_SPRITE_RIGHT = jnp.array([
 PLAYER_SPRITE_LEFT = jnp.flip(PLAYER_SPRITE_RIGHT, axis=1)
 
 # BOBO = humanoid (person-like). Moves horizontally, drops bombs.
+# 7x10 walking sprite: top line, head with eyes, narrow body, two spread legs.
 BOBO_SPRITE = jnp.array([
+    [1, 1, 1, 1, 1, 1, 1],
     [1, 0, 0, 0, 0, 0, 1],
     [1, 0, 1, 0, 1, 0, 1],
     [1, 0, 0, 0, 0, 0, 1],
     [1, 1, 1, 1, 1, 1, 1],
-    [0, 0, 0, 1, 0, 0, 0],
-    [0, 0, 0, 1, 0, 0, 0],
-    [0, 0, 1, 0, 1, 0, 0],
-    [0, 1, 0, 0, 0, 1, 0],
+    [0, 0, 1, 1, 1, 0, 0],
+    [0, 0, 1, 1, 1, 0, 0],
+    [0, 1, 1, 0, 1, 1, 0],
+    [1, 1, 0, 0, 0, 1, 1],
     [1, 0, 0, 0, 0, 0, 1],
+], dtype=jnp.bool_)
+
+# 7x10 shooting sprite: same head/body, but one central leg.
+BOBO_SPRITE_SHOOT = jnp.array([
+    [1, 1, 1, 1, 1, 1, 1],
+    [1, 0, 0, 0, 0, 0, 1],
+    [1, 0, 1, 0, 1, 0, 1],
+    [1, 0, 0, 0, 0, 0, 1],
+    [1, 1, 1, 1, 1, 1, 1],
+    [0, 0, 1, 1, 1, 0, 0],
+    [0, 0, 1, 1, 1, 0, 0],
+    [0, 0, 1, 1, 1, 0, 0],
+    [0, 0, 0, 1, 0, 0, 0],
+    [0, 0, 0, 1, 0, 0, 0],
 ], dtype=jnp.bool_)
 
 # ENEMY = ring/UFO. Moves freely in all directions.
@@ -157,8 +173,8 @@ class StarGunnerConstants(struct.PyTreeNode):
     MAX_ENEMY_SPEED_MULTIPLIER: float = struct.field(pytree_node=False, default=2.0)
     ENEMY_AMP: float = struct.field(pytree_node=False, default=0.0)
 
-    BOBO_WIDTH: int = struct.field(pytree_node=False, default=14)
-    BOBO_HEIGHT: int = struct.field(pytree_node=False, default=18)
+    BOBO_WIDTH: int = struct.field(pytree_node=False, default=7)
+    BOBO_HEIGHT: int = struct.field(pytree_node=False, default=10)
     BOBO_Y: int = struct.field(pytree_node=False, default=40)
 
     ENEMY_Y_MAX: int = struct.field(pytree_node=False, default=165)
@@ -166,7 +182,7 @@ class StarGunnerConstants(struct.PyTreeNode):
     ENEMY_CHANGE_PROB: float = struct.field(pytree_node=False, default=0.04)
     ENEMY_SPAWN_X: int = struct.field(pytree_node=False, default=8)
     COLLISION_POINTS: int = struct.field(pytree_node=False, default=200)
-    BOBO_SPEED: float = struct.field(pytree_node=False, default=2.0)
+    BOBO_SPEED: float = struct.field(pytree_node=False, default=0.5)
     BOBO_BOMB_PERIOD: int = struct.field(pytree_node=False, default=30)
 
     MAX_BOMBS: int = struct.field(pytree_node=False, default=4)
@@ -1253,7 +1269,14 @@ class StarGunnerRenderer:
         bobo_current_color = bobo_color_list[bobo_phase]
 
         # Bobo itself uses the same colour
-        img = draw_sprite(img, state.bobo_x, c.BOBO_Y, BOBO_SPRITE, bobo_current_color)
+        # Bobo shows 1 leg during the shooting window (after dropping a bomb)
+        bobo_shooting = (state.step_counter % self.consts.BOBO_BOMB_PERIOD) < 15
+        bobo_sprite = jax.lax.select(
+            bobo_shooting,
+            BOBO_SPRITE_SHOOT,
+            BOBO_SPRITE,
+        )
+        img = draw_sprite(img, state.bobo_x, c.BOBO_Y, bobo_sprite, bobo_current_color)
 
         for i in range(c.MAX_BOMBS):
             def draw_bomb(active):
