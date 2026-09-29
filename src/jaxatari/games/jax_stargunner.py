@@ -734,9 +734,15 @@ class JaxStarGunner(
         return state.replace(bobo_x=bobo_x, bobo_vx=bobo_vx)
 
     def _bomb_step(self, state):
-        """Bobo drops horizontal bombs that fall straight down."""
+        """Bobo drops horizontal bombs that fall straight down.
+        No bomb while the player is exploding or invulnerable."""
         CYCLE_FRAMES = 80
-        drop = (state.step_counter % CYCLE_FRAMES) == (CYCLE_FRAMES - 1)
+        # Player is safe during explosion and invulnerability window
+        no_bomb = state.player_explosion_active | (state.invuln_timer > 0)
+        drop = (
+            ((state.step_counter % CYCLE_FRAMES) == (CYCLE_FRAMES - 1))
+            & (~no_bomb)
+        )
 
         free = jnp.argmax(~state.bomb_active)
         can_drop = drop & (~jnp.all(state.bomb_active))
@@ -1280,7 +1286,13 @@ class StarGunnerRenderer:
             BOBO_SPRITE_SHOOT,
             BOBO_SPRITE,
         )
-        img = draw_sprite(img, state.bobo_x, c.BOBO_Y, bobo_sprite, bobo_cycle_color)
+        # Bobo hidden while player is exploding
+        img = jax.lax.cond(
+            state.player_explosion_active,
+            lambda _: img,
+            lambda _: draw_sprite(img, state.bobo_x, c.BOBO_Y, bobo_sprite, bobo_cycle_color),
+            operand=None,
+        )
 
         for i in range(c.MAX_BOMBS):
             def draw_bomb(active):
@@ -1290,7 +1302,9 @@ class StarGunnerRenderer:
                                        bobo_cycle_color)
                 def skip(_):
                     return img
-                return jax.lax.cond(active, draw, skip, operand=None)
+                # Hide bombs while player is exploding
+                visible = active & (~state.player_explosion_active)
+                return jax.lax.cond(visible, draw, skip, operand=None)
             img = draw_bomb(state.bomb_active[i])
 
         # Enemies = ring/UFO, move freely
@@ -1335,7 +1349,12 @@ class StarGunnerRenderer:
                         state.enemy_type[i],
                         [lambda: SAUCER_SPRITE, lambda: BUZZIE_SPRITE, lambda: SQUEEZER_SPRITE],
                     )
-                    return draw_sprite(img, state.enemy_x[i], edy[i], sprite, color)
+                    return jax.lax.cond(
+                        state.player_explosion_active,
+                        lambda _: img,
+                        lambda _: draw_sprite(img, state.enemy_x[i], edy[i], sprite, color),
+                        operand=None,
+                    )
 
                 def reforming_fn(_):
                     progress = 1.0 - (timer_val / c.REFORM_FRAMES)
