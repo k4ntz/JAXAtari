@@ -27,7 +27,7 @@ Total:  🥇: 1   |   🥈: 2   |   🥉: 0   |   🚧: 2   |   ❌: 0
 | ----------------- | ------ | -------------- |
 | alien             | 🥈     | 8              |
 | amidar            | 🥇     | 0              |
-| assault           | 🥈     | 0              |
+| assault           | 🥉     | 0              |
 | asterix           | 🥇     | 0              |
 | asteroids         | 🥇     | 4              |
 | atlantis          | 🥈     | 6              |
@@ -84,7 +84,7 @@ Total:  🥇: 1   |   🥈: 2   |   🥉: 0   |   🚧: 2   |   ❌: 0
 | zaxxon            | ❌     | 0              |
 
 
-Total:  🥇: 19   |   🥈: 16   |   🥉: 3   |   🚧: 6   |   ❌: 13
+Total:  🥇: 19   |   🥈: 15   |   🥉: 4   |   🚧: 6   |   ❌: 13
 
 ## Remaining ALE games
 

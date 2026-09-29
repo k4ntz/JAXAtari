@@ -274,12 +274,6 @@ Environments
        <div class="env-name">Laser Gates</div>
      </a>
 
-     <a class="env-card" href="mariobros.html">
-       <img data-src="../../_static/gifs/mariobros.gif" alt="Mario Bros" onerror="this.style.display='none';this.nextElementSibling.style.display='flex'">
-       <div class="env-placeholder" style="display:none">🕹</div>
-       <div class="env-name">Mario Bros</div>
-     </a>
-
      <a class="env-card" href="miniaturegolf.html">
        <img data-src="../../_static/gifs/miniaturegolf.gif" alt="Miniature Golf" onerror="this.style.display='none';this.nextElementSibling.style.display='flex'">
        <div class="env-placeholder" style="display:none">🕹</div>
@@ -471,7 +465,6 @@ Environments
    kingkong
    klax
    lasergates
-   mariobros
    miniaturegolf
    montezuma
    mspacman
