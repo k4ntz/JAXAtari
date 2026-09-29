@@ -214,6 +214,12 @@ Environments
        <div class="env-name">Galaxian</div>
      </a>
 
+     <a class="env-card" href="gopher.html">
+       <img data-src="../../_static/gifs/gopher.gif" alt="Gopher" onerror="this.style.display='none';this.nextElementSibling.style.display='flex'">
+       <div class="env-placeholder" style="display:none">🕹</div>
+       <div class="env-name">Gopher</div>
+     </a>
+
      <a class="env-card" href="gravitar.html">
        <img data-src="../../_static/gifs/gravitar.gif" alt="Gravitar" onerror="this.style.display='none';this.nextElementSibling.style.display='flex'">
        <div class="env-placeholder" style="display:none">🕹</div>
@@ -236,6 +242,12 @@ Environments
        <img data-src="../../_static/gifs/human_cannonball.gif" alt="Human Cannonball" onerror="this.style.display='none';this.nextElementSibling.style.display='flex'">
        <div class="env-placeholder" style="display:none">🕹</div>
        <div class="env-name">Human Cannonball</div>
+     </a>
+
+     <a class="env-card" href="journeyescape.html">
+       <img data-src="../../_static/gifs/journeyescape.gif" alt="Journey Escape" onerror="this.style.display='none';this.nextElementSibling.style.display='flex'">
+       <div class="env-placeholder" style="display:none">🕹</div>
+       <div class="env-name">Journey Escape</div>
      </a>
 
      <a class="env-card" href="kaboom.html">
@@ -304,6 +316,12 @@ Environments
        <div class="env-name">River Raid</div>
      </a>
 
+     <a class="env-card" href="roadrunner.html">
+       <img data-src="../../_static/gifs/roadrunner.gif" alt="Road Runner" onerror="this.style.display='none';this.nextElementSibling.style.display='flex'">
+       <div class="env-placeholder" style="display:none">🕹</div>
+       <div class="env-name">Road Runner</div>
+     </a>
+
      <a class="env-card" href="sirlancelot.html">
        <img data-src="../../_static/gifs/sir_lancelot.gif" alt="Sir Lancelot" onerror="this.style.display='none';this.nextElementSibling.style.display='flex'">
        <div class="env-placeholder" style="display:none">🕹</div>
@@ -364,10 +382,22 @@ Environments
        <div class="env-name">Turmoil</div>
      </a>
 
+     <a class="env-card" href="upndown.html">
+       <img data-src="../../_static/gifs/upndown.gif" alt="Up N Down" onerror="this.style.display='none';this.nextElementSibling.style.display='flex'">
+       <div class="env-placeholder" style="display:none">🕹</div>
+       <div class="env-name">Up N Down</div>
+     </a>
+
      <a class="env-card" href="videocheckers.html">
        <img data-src="../../_static/gifs/video_checkers.gif" alt="Video Checkers" onerror="this.style.display='none';this.nextElementSibling.style.display='flex'">
        <div class="env-placeholder" style="display:none">🕹</div>
        <div class="env-name">Video Checkers</div>
+     </a>
+
+     <a class="env-card" href="videochess.html">
+       <img data-src="../../_static/gifs/videochess.gif" alt="Video Chess" onerror="this.style.display='none';this.nextElementSibling.style.display='flex'">
+       <div class="env-placeholder" style="display:none">🕹</div>
+       <div class="env-name">Video Chess</div>
      </a>
 
      <a class="env-card" href="videocube.html">
@@ -430,10 +460,12 @@ Environments
    freeway
    frostbite
    galaxian
+   gopher
    gravitar
    hangman
    hauntedhouse
    humancannonball
+   journeyescape
    kaboom
    kangaroo
    kingkong
@@ -450,6 +482,7 @@ Environments
    pong
    qbert
    riverraid
+   roadrunner
    seaquest
    sirlancelot
    skiing
@@ -462,8 +495,10 @@ Environments
    timepilot
    tron
    turmoil
+   upndown
    venture
    videocheckers
+   videochess
    videocube
    videopinball
    wizardofwor

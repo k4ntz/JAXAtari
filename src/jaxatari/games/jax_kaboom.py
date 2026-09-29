@@ -178,6 +178,8 @@ class KaboomObservation:
     mad_bomber_pos: ObjectObservation  # tuple[int, int]
     buckets_pos: ObjectObservation
     bombs: ObjectObservation
+    score: chex.Array
+    lives: chex.Array
 
 
 @struct.dataclass
@@ -287,7 +289,9 @@ class JaxKaboom(JaxEnvironment[KaboomState, KaboomObservation, KaboomInfo, Kaboo
         obs = KaboomObservation(
             mad_bomber_pos=mad_bomber_pos,
             buckets_pos=buckets_pos,
-            bombs=bombs
+            bombs=bombs,
+            score=state.score.astype(jnp.int32),
+            lives=state.lives.astype(jnp.int32),
         )
         return obs
 
@@ -926,6 +930,8 @@ class JaxKaboom(JaxEnvironment[KaboomState, KaboomObservation, KaboomInfo, Kaboo
                 n=15,
                 screen_size=(self.consts.SCREEN_HEIGHT, self.consts.SCREEN_WIDTH),
             ),
+            "score": spaces.Box(low=0, high=jnp.iinfo(jnp.int32).max, shape=(), dtype=jnp.int32),
+            "lives": spaces.Box(low=0, high=10, shape=(), dtype=jnp.int32),
         })
 
     def image_space(self) -> spaces.Box:

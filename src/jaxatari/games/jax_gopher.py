@@ -1,7 +1,6 @@
-from argparse import Action
 import os
 from functools import partial
-from typing import NamedTuple, Tuple, List
+from typing import Tuple
 from enum import IntEnum
 
 import jax
@@ -9,12 +8,14 @@ import jax.lax
 import jax.numpy as jnp
 import chex
 import flax.struct
+from flax import struct
 from jaxatari.environment import ObjectObservation
 
 import jaxatari.spaces as spaces
 from jaxatari.renderers import JAXGameRenderer
 from jaxatari.rendering import jax_rendering_utils as render_utils
 from jaxatari.environment import JaxEnvironment, JAXAtariAction as Action
+from jaxatari.modification import AutoDerivedConstants
 
 # ==========================================================================================
 #  ASSET CONFIGURATION
@@ -67,97 +68,130 @@ def _get_default_asset_config() -> tuple:
 #  GAME CONSTANTS
 # ==========================================================================================
 
-@flax.struct.dataclass
-class GopherConstants:
+class GopherConstants(AutoDerivedConstants):
     # --- Screen / Dimensions ---
-    WIDTH: int = 160                                   
-    HEIGHT: int = 210
-    NUM_TILES: int = 40
-    TILE_WIDTH: int = 4                                # Tunnel tile width
-    
+    WIDTH: int = struct.field(pytree_node=False, default=160)
+    HEIGHT: int = struct.field(pytree_node=False, default=210)
+    NUM_TILES: int = struct.field(pytree_node=False, default=40)
+    TILE_WIDTH: int = struct.field(pytree_node=False, default=4)  # Tunnel tile width
+    TUNNEL_TILE_HEIGHT: int = struct.field(pytree_node=False, default=12)
+    HOLE_TILE_SIZE: Tuple[int, int] = struct.field(
+        pytree_node=False, default_factory=lambda: (8, 7)
+    )
 
     # --- Entity Sizes ---
-    PLAYER_SIZE: Tuple[int, int] = (13, 50)
-    GOPHER_SIZE: Tuple[int, int] = (14, 12)
-    CARROT_SIZE: Tuple[int, int] = (7, 15)
-    SEED_SIZE: Tuple[int, int] = (1, 1)
-    DUCK_SIZE:Tuple[int, int] = (15, 15)
+    # Sprite is 13px wide; ALE OC player AABB is ~11px — keep sprite size for rendering,
+    # but clamp movement to ALE side bounds below.
+    PLAYER_SIZE: Tuple[int, int] = struct.field(
+        pytree_node=False, default_factory=lambda: (13, 50)
+    )
+    GOPHER_SIZE: Tuple[int, int] = struct.field(
+        pytree_node=False, default_factory=lambda: (14, 12)
+    )
+    CARROT_SIZE: Tuple[int, int] = struct.field(
+        pytree_node=False, default_factory=lambda: (7, 15)
+    )
+    SEED_SIZE: Tuple[int, int] = struct.field(
+        pytree_node=False, default_factory=lambda: (1, 1)
+    )
+    DUCK_SIZE: Tuple[int, int] = struct.field(
+        pytree_node=False, default_factory=lambda: (15, 15)
+    )
 
     # --- Positions / Layout ---
-    LEFT_WALL: int = 0
-    RIGHT_WALL: int = 160       
-    TUNNEL_TOP_Y: int = 182
-    TUNNEL_BOTTOM_Y: int = 194
-    WATER_Y_POS: int = 145
-    L3_BOTTOM_Y: float = 176.0
-    STEAL_Y_POS: float = 150.0
-    PEEK_DECISION_Y: float = 168.0
-    CEILING_Y: float = 148.0
-    
-    PLAYER_START_X: float = 72.0
-    PLAYER_START_Y: float = 95.0
-    GOPHER_START_X: float = 143.0
-    GOPHER_START_Y: float = 183.0
-    GOPHER_TOP_Y: float = 148.0
-    DUCK_Y_POS: float = 30                            
-    DUCK_SPAWN_MIN_X: float = 20.0          
-    DUCK_SPAWN_MAX_X: float = 140.0         
-    SCORE_Y_POS: int = 9
-    CARROT_Y_POS: int = 151
-    
-    CARROT_X_POSITION: Tuple[int, int, int] = (60, 76, 92)
-    HOLE_POSITION_X: Tuple = (12, 28, 44, 108, 124, 140)
-    HOLE_POSITION_Y: Tuple = (175, 168, 161)                                    # 3 layers
-    TUNNEL_POSITION: Tuple = (0, 4, 8, 12, 16, 20, 24, 28, 32, 36,               
-                             40, 44, 48, 52, 56, 60, 64, 68, 72, 76, 
-                             80, 84, 88, 92, 96, 100, 104, 108, 112, 116, 
-                             120, 124, 128, 132, 136, 140, 144, 148, 152, 156)
-    SCORE_X_POSITION: Tuple = (74, 81, 89, 97)
-    
+    # ALE OC player x ∈ [9, 138] after start delay (measured vs ALE/Gopher-v5).
+    LEFT_WALL: int = struct.field(pytree_node=False, default=9)
+    PLAYER_MAX_X: int = struct.field(pytree_node=False, default=138)
+    RIGHT_WALL: int = struct.field(pytree_node=False, default=151)  # PLAYER_MAX_X + 13
+    TUNNEL_TOP_Y: int = struct.field(pytree_node=False, default=182)
+    TUNNEL_BOTTOM_Y: int = struct.field(pytree_node=False, default=194)
+    WATER_Y_POS: int = struct.field(pytree_node=False, default=145)
+    L3_BOTTOM_Y: float = struct.field(pytree_node=False, default=176.0)
+    STEAL_Y_POS: float = struct.field(pytree_node=False, default=150.0)
+    PEEK_DECISION_Y: float = struct.field(pytree_node=False, default=168.0)
+    CEILING_Y: float = struct.field(pytree_node=False, default=148.0)
+
+    PLAYER_START_X: float = struct.field(pytree_node=False, default=72.0)
+    PLAYER_START_Y: float = struct.field(pytree_node=False, default=95.0)
+    GOPHER_START_X: float = struct.field(pytree_node=False, default=143.0)
+    GOPHER_START_Y: float = struct.field(pytree_node=False, default=183.0)
+    GOPHER_TOP_Y: float = struct.field(pytree_node=False, default=148.0)
+    DUCK_Y_POS: float = struct.field(pytree_node=False, default=30.0)
+    DUCK_SPAWN_MIN_X: float = struct.field(pytree_node=False, default=20.0)
+    DUCK_SPAWN_MAX_X: float = struct.field(pytree_node=False, default=140.0)
+    SCORE_Y_POS: int = struct.field(pytree_node=False, default=9)
+    CARROT_Y_POS: int = struct.field(pytree_node=False, default=151)
+
+    CARROT_X_POSITION: Tuple[int, int, int] = struct.field(
+        pytree_node=False, default_factory=lambda: (60, 76, 92)
+    )
+    HOLE_POSITION_X: Tuple = struct.field(
+        pytree_node=False, default_factory=lambda: (12, 28, 44, 108, 124, 140)
+    )
+    # Layer 0 (first dig) is lowest on screen; layer 2 is highest.
+    HOLE_POSITION_Y: Tuple = struct.field(
+        pytree_node=False, default_factory=lambda: (175, 168, 161)
+    )
+    TUNNEL_POSITION: Tuple = struct.field(
+        pytree_node=False,
+        default_factory=lambda: (
+            0, 4, 8, 12, 16, 20, 24, 28, 32, 36,
+            40, 44, 48, 52, 56, 60, 64, 68, 72, 76,
+            80, 84, 88, 92, 96, 100, 104, 108, 112, 116,
+            120, 124, 128, 132, 136, 140, 144, 148, 152, 156,
+        ),
+    )
+    SCORE_X_POSITION: Tuple = struct.field(
+        pytree_node=False, default_factory=lambda: (74, 81, 89, 97)
+    )
+
     # --- Speeds ---
-    PLAYER_SPEED: float = 1.0
-    GOPHER_SPEED_X: float = 4.0 / 3.0    
-    GOPHER_SPEED_Y: float = 1.0
-    GOPHER_SPEED_SMART_X: float = 8.0 / 3.0
-    STEAL_SPEED_X: float = 1.8 
-    DUCK_SPEED: float = 1.5 
-    SEED_DROP_SPEED: float = 1.0                             
-    
+    PLAYER_SPEED: float = struct.field(pytree_node=False, default=1.0)
+    # Slightly slower than the old 4/3 so the gopher reaches holes less often (ALE score parity).
+    GOPHER_SPEED_X: float = struct.field(pytree_node=False, default=1.15)
+    GOPHER_SPEED_Y: float = struct.field(pytree_node=False, default=1.0)
+    GOPHER_SPEED_SMART_X: float = struct.field(pytree_node=False, default=2.3)
+    STEAL_SPEED_X: float = struct.field(pytree_node=False, default=1.8)
+    DUCK_SPEED: float = struct.field(pytree_node=False, default=1.5)
+    SEED_DROP_SPEED: float = struct.field(pytree_node=False, default=1.0)
+
     # --- Setting ---
-    NUM_CARROTS: int = 3
+    NUM_CARROTS: int = struct.field(pytree_node=False, default=3)
+    # When False, renderer + OC hide the gopher while its Y is underground.
+    SHOW_GOPHER_UNDERGROUND: bool = struct.field(pytree_node=False, default=True)
 
     # --- Offset / Threshold ---
-    STAND_OFFSET: int = 8.0
-    PUSH_DOWN_OFFSET: int = 3.0
-    
-    BONK_X_TOLERANCE: float = 13.0
-    BONK_Y_THRESHOLD: float = 176.0
-    SPRITE_OFFSET_PLAYER_SEED: int = 3
+    STAND_OFFSET: float = struct.field(pytree_node=False, default=8.0)
+    PUSH_DOWN_OFFSET: float = struct.field(pytree_node=False, default=3.0)
 
-    # --- Timers(in frames) ---
-    TIME_TO_PREPARE_CLIMB: int = 5   
-    TIME_TO_RECOVER_DIG: int = 7            # Freeze after returning from digging up
-    TIME_TO_PEEK: int = 24
-    TIME_TO_PREPARE_STEAL: int = 5
-    TIME_TO_START_DELAY: int = 60           # 60 Frames freeze at start of round
-    TIME_DUCK_COOLDOWN: int = 600
-    
-    # --- Probabilities ---
-    PROB_TURN_AFTER_DIG_NORMAL: float = 0.5
-    PROB_DIG_L1: float = 0.4         
-    PROB_DIG_L2: float = 0.2        
-    PROB_DIG_L3: float = 0.6         
-    PROB_CONTINUE_AFTER_L3: float = 0.8  
-    PROB_PEEK_AT_SURFACE: float = 0.5    
-    PROB_STEAL_NORMAL: float = 0.7          
-    PROB_DUCK_SPAWN: float = 0.02
-    # Smarter gopher probabilities
-    PROB_STEAL_SMART: float = 0.9
-    PROB_TURN_AFTER_DIG_SMART: float = 0.2
+    BONK_X_TOLERANCE: float = struct.field(pytree_node=False, default=13.0)
+    BONK_Y_THRESHOLD: float = struct.field(pytree_node=False, default=176.0)
+    SPRITE_OFFSET_PLAYER_SEED: int = struct.field(pytree_node=False, default=3)
 
-    SCORE_FOR_DUCK: int = 500               # Threshold for bonus duck to show up
-    ASSET_CONFIG: tuple = _get_default_asset_config()
+    # --- Timers (in frames) ---
+    TIME_TO_PREPARE_CLIMB: int = struct.field(pytree_node=False, default=8)
+    TIME_TO_RECOVER_DIG: int = struct.field(pytree_node=False, default=10)
+    TIME_TO_PEEK: int = struct.field(pytree_node=False, default=24)
+    TIME_TO_PREPARE_STEAL: int = struct.field(pytree_node=False, default=5)
+    TIME_TO_START_DELAY: int = struct.field(pytree_node=False, default=60)
+    TIME_DUCK_COOLDOWN: int = struct.field(pytree_node=False, default=600)
 
+    # --- Probabilities (tuned down vs early drafts; ALE digs/holes appear slower) ---
+    PROB_TURN_AFTER_DIG_NORMAL: float = struct.field(pytree_node=False, default=0.5)
+    PROB_DIG_L1: float = struct.field(pytree_node=False, default=0.18)
+    PROB_DIG_L2: float = struct.field(pytree_node=False, default=0.14)
+    PROB_DIG_L3: float = struct.field(pytree_node=False, default=0.45)
+    PROB_CONTINUE_AFTER_L3: float = struct.field(pytree_node=False, default=0.65)
+    PROB_PEEK_AT_SURFACE: float = struct.field(pytree_node=False, default=0.5)
+    PROB_STEAL_NORMAL: float = struct.field(pytree_node=False, default=0.7)
+    PROB_DUCK_SPAWN: float = struct.field(pytree_node=False, default=0.02)
+    PROB_STEAL_SMART: float = struct.field(pytree_node=False, default=0.9)
+    PROB_TURN_AFTER_DIG_SMART: float = struct.field(pytree_node=False, default=0.2)
+
+    SCORE_FOR_DUCK: int = struct.field(pytree_node=False, default=500)
+    ASSET_CONFIG: tuple = struct.field(
+        pytree_node=False, default_factory=_get_default_asset_config
+    )
 @flax.struct.dataclass
 class GopherState:
     # --- Player ---
@@ -205,11 +239,11 @@ class GopherObservation:
     player: ObjectObservation
     gopher: ObjectObservation
     duck: ObjectObservation
-    holes: jnp.ndarray
-    carrots: jnp.ndarray
-    seeds: jnp.ndarray  
-    score_player: jnp.ndarray
-    gopher_state: jnp.ndarray 
+    carrots: ObjectObservation  # n=3
+    seed: ObjectObservation
+    holes: ObjectObservation  # n=18 (6 columns × 3 layers)
+    tunnels: ObjectObservation  # n=NUM_TILES dug tunnel tiles
+    score_player: jnp.ndarray 
 
 @flax.struct.dataclass       
 class GopherInfo:
@@ -264,9 +298,9 @@ class JaxGopher(JaxEnvironment[GopherState, GopherObservation, GopherInfo, Gophe
         right = jnp.logical_or(real_action == Action.RIGHT, real_action == Action.RIGHTFIRE)
         new_speed = jax.lax.select(left, -self.consts.PLAYER_SPEED, jax.lax.select(right, self.consts.PLAYER_SPEED, 0.0))
 
-        # Wall Collision
+        # Wall Collision — ALE side bounds (player left edge ∈ [LEFT_WALL, PLAYER_MAX_X])
         touch_left_wall = state.player_x <= self.consts.LEFT_WALL
-        touch_right_wall = state.player_x + self.consts.PLAYER_SIZE[0] >= self.consts.RIGHT_WALL
+        touch_right_wall = state.player_x >= self.consts.PLAYER_MAX_X
         final_speed = jax.lax.cond(
             jnp.logical_or(jnp.logical_and(left, touch_left_wall), jnp.logical_and(right, touch_right_wall)),
             lambda _: 0.0, lambda _: new_speed, operand = None
@@ -277,8 +311,8 @@ class JaxGopher(JaxEnvironment[GopherState, GopherObservation, GopherInfo, Gophe
         final_speed = jax.lax.select(is_frozen, 0.0, final_speed)
         proposed_player_x = jnp.clip(
             state.player_x + final_speed,
-            self.consts.LEFT_WALL,
-            self.consts.RIGHT_WALL - self.consts.PLAYER_SIZE[0],
+            float(self.consts.LEFT_WALL),
+            float(self.consts.PLAYER_MAX_X),
         )
 
         # --- Fire bonk logic ---
@@ -1029,39 +1063,96 @@ class JaxGopher(JaxEnvironment[GopherState, GopherObservation, GopherInfo, Gophe
     
     @partial(jax.jit, static_argnums=(0,))
     def _get_observation(self, state: GopherState) -> GopherObservation:
+        # Player: state encodes seed possession + bonk timer; orientation = facing from speed.
+        player_facing = jnp.where(state.player_speed < 0, jnp.int32(270), jnp.int32(90))
         player_obs = ObjectObservation.create(
-            x=jnp.array([state.player_x]), 
-            y=jnp.array([self.consts.PLAYER_START_Y]), 
-            width=jnp.array([self.consts.PLAYER_SIZE[0]]), 
-            height=jnp.array([self.consts.PLAYER_SIZE[1]])
+            x=jnp.array(state.player_x, dtype=jnp.int32),
+            y=jnp.array(self.consts.PLAYER_START_Y, dtype=jnp.int32),
+            width=jnp.array(self.consts.PLAYER_SIZE[0], dtype=jnp.int32),
+            height=jnp.array(self.consts.PLAYER_SIZE[1], dtype=jnp.int32),
+            active=jnp.array(1, dtype=jnp.int32),
+            visual_id=state.player_has_seed.astype(jnp.int32),
+            state=state.bonk_timer.astype(jnp.int32),
+            orientation=player_facing,
         )
-        
+
+        # Match renderer: hide gopher while underground unless SHOW_GOPHER_UNDERGROUND.
+        is_underground = state.gopher_position[1] > 150.0
+        gopher_visible = self.consts.SHOW_GOPHER_UNDERGROUND | jnp.logical_not(is_underground)
+        gopher_facing = jnp.where(state.gopher_direction_x > 0, jnp.int32(90), jnp.int32(270))
         gopher_obs = ObjectObservation.create(
-            x=jnp.array([state.gopher_position[0]]), 
-            y=jnp.array([state.gopher_position[1]]), 
-            width=jnp.array([self.consts.GOPHER_SIZE[0]]), 
-            height=jnp.array([self.consts.GOPHER_SIZE[1]])
+            x=jnp.array(state.gopher_position[0], dtype=jnp.int32),
+            y=jnp.array(state.gopher_position[1], dtype=jnp.int32),
+            width=jnp.array(self.consts.GOPHER_SIZE[0], dtype=jnp.int32),
+            height=jnp.array(self.consts.GOPHER_SIZE[1], dtype=jnp.int32),
+            active=gopher_visible.astype(jnp.int32),
+            visual_id=state.gopher_action.astype(jnp.int32),
+            state=state.gopher_action.astype(jnp.int32),
+            orientation=gopher_facing,
         )
-        
+
+        duck_facing = jnp.where(state.duck_dir > 0, jnp.int32(90), jnp.int32(270))
         duck_obs = ObjectObservation.create(
-            x=jnp.array([state.duck_x]), 
-            y=jnp.array([self.consts.DUCK_Y_POS]), 
-            width=jnp.array([self.consts.DUCK_SIZE[0]]), 
-            height=jnp.array([self.consts.DUCK_SIZE[1]]),
-            active=jnp.array([state.duck_active])
+            x=jnp.array(state.duck_x, dtype=jnp.int32),
+            y=jnp.array(self.consts.DUCK_Y_POS, dtype=jnp.int32),
+            width=jnp.array(self.consts.DUCK_SIZE[0], dtype=jnp.int32),
+            height=jnp.array(self.consts.DUCK_SIZE[1], dtype=jnp.int32),
+            active=state.duck_active.astype(jnp.int32),
+            orientation=duck_facing,
         )
-        
-        seeds_packed = jnp.array([state.seed_x, state.seed_y, state.seed_active]) 
+
+        carrot_xs = jnp.array(self.consts.CARROT_X_POSITION, dtype=jnp.int32)
+        carrots_obs = ObjectObservation.create(
+            x=carrot_xs,
+            y=jnp.full((3,), self.consts.CARROT_Y_POS, dtype=jnp.int32),
+            width=jnp.full((3,), self.consts.CARROT_SIZE[0], dtype=jnp.int32),
+            height=jnp.full((3,), self.consts.CARROT_SIZE[1], dtype=jnp.int32),
+            active=state.carrots_present.astype(jnp.int32),
+        )
+
+        seed_obs = ObjectObservation.create(
+            x=jnp.array(state.seed_x, dtype=jnp.int32),
+            y=jnp.array(state.seed_y, dtype=jnp.int32),
+            width=jnp.array(self.consts.SEED_SIZE[0], dtype=jnp.int32),
+            height=jnp.array(self.consts.SEED_SIZE[1], dtype=jnp.int32),
+            active=state.seed_active.astype(jnp.int32),
+        )
+
+        # 6 hole columns × 3 layers → 18 dig tiles (active when dug).
+        hole_xs = jnp.array(self.consts.HOLE_POSITION_X, dtype=jnp.int32)
+        hole_ys = jnp.array(self.consts.HOLE_POSITION_Y, dtype=jnp.int32)
+        # layout[col, layer]; flatten as col-major: col0-l0, col0-l1, col0-l2, ...
+        hole_x = jnp.repeat(hole_xs, 3)
+        hole_y = jnp.tile(hole_ys, 6)
+        hole_active = state.hole_layout.reshape(-1).astype(jnp.int32)
+        hole_w, hole_h = self.consts.HOLE_TILE_SIZE
+        holes_obs = ObjectObservation.create(
+            x=hole_x,
+            y=hole_y,
+            width=jnp.full((18,), hole_w, dtype=jnp.int32),
+            height=jnp.full((18,), hole_h, dtype=jnp.int32),
+            active=hole_active,
+        )
+
+        tunnel_xs = jnp.array(self.consts.TUNNEL_POSITION, dtype=jnp.int32)
+        n_tiles = self.consts.NUM_TILES
+        tunnels_obs = ObjectObservation.create(
+            x=tunnel_xs,
+            y=jnp.full((n_tiles,), self.consts.TUNNEL_TOP_Y, dtype=jnp.int32),
+            width=jnp.full((n_tiles,), self.consts.TILE_WIDTH, dtype=jnp.int32),
+            height=jnp.full((n_tiles,), self.consts.TUNNEL_TILE_HEIGHT, dtype=jnp.int32),
+            active=state.tunnel_layout.astype(jnp.int32),
+        )
 
         return GopherObservation(
             player=player_obs,
             gopher=gopher_obs,
             duck=duck_obs,
-            holes=state.hole_layout,
-            carrots=state.carrots_present,
-            seeds=seeds_packed,
-            score_player=jnp.atleast_1d(state.score),
-            gopher_state=jnp.array([state.gopher_action, state.gopher_direction_x])
+            carrots=carrots_obs,
+            seed=seed_obs,
+            holes=holes_obs,
+            tunnels=tunnels_obs,
+            score_player=jnp.atleast_1d(state.score.astype(jnp.int32)),
         )
         
     def step(self, state: GopherState, action: chex.Array) -> tuple[chex.Array, GopherState, jnp.ndarray, jnp.ndarray, dict]:
@@ -1106,40 +1197,32 @@ class JaxGopher(JaxEnvironment[GopherState, GopherObservation, GopherInfo, Gophe
     
     
     def observation_space(self) -> spaces.Space:
-        """
-        Helper to create a space for the new ObjectObservation format
-        """
-        def make_object_space():
-             return spaces.Dict({
-                "x": spaces.Box(low=0, high=self.consts.WIDTH, shape=(1,), dtype=jnp.float32),
-                "y": spaces.Box(low=0, high=self.consts.HEIGHT, shape=(1,), dtype=jnp.float32),
-                "width": spaces.Box(low=0, high=self.consts.WIDTH, shape=(1,), dtype=jnp.float32),
-                "height": spaces.Box(low=0, high=self.consts.HEIGHT, shape=(1,), dtype=jnp.float32),
-        
-                "active": spaces.Box(low=0, high=1, shape=(1,), dtype=jnp.int32),
-                "visual_id": spaces.Box(low=0, high=100, shape=(1,), dtype=jnp.int32),
-                "state": spaces.Box(low=0, high=100, shape=(1,), dtype=jnp.int32),
-                "orientation": spaces.Box(low=0, high=100, shape=(1,), dtype=jnp.int32),
-             })
-
+        screen = (self.consts.HEIGHT, self.consts.WIDTH)
         return spaces.Dict({
-            "player": make_object_space(),
-            "gopher": make_object_space(),
-            "duck": make_object_space(),
-            
-            "holes": spaces.Box(low=0, high=1, shape=(6, 3), dtype=jnp.int32),
-            "carrots": spaces.Box(low=0, high=1, shape=(3,), dtype=jnp.int32),
-            "seeds": spaces.Box(low=0, high=self.consts.HEIGHT, shape=(3,), dtype=jnp.float32),
+            "player": spaces.get_object_space(n=None, screen_size=screen),
+            "gopher": spaces.get_object_space(n=None, screen_size=screen),
+            "duck": spaces.get_object_space(n=None, screen_size=screen),
+            "carrots": spaces.get_object_space(n=3, screen_size=screen),
+            "seed": spaces.get_object_space(n=None, screen_size=screen),
+            "holes": spaces.get_object_space(n=18, screen_size=screen),
+            "tunnels": spaces.get_object_space(n=self.consts.NUM_TILES, screen_size=screen),
             "score_player": spaces.Box(low=0, high=1_000_000, shape=(1,), dtype=jnp.int32),
-            "gopher_state": spaces.Box(low=-1, high=20, shape=(2,), dtype=jnp.int32),
         })
     
     
     def image_space(self) -> spaces.Box:
+        # Prefer the active renderer config so native downscaling (PixelObsWrapper)
+        # is reflected even when callers reach the core env past the mod controller.
+        if getattr(self, "renderer", None) is not None and self.renderer.config.downscale:
+            h, w = self.renderer.config.downscale
+            channels = self.renderer.config.channels
+        else:
+            h, w = self.consts.HEIGHT, self.consts.WIDTH
+            channels = 3
         return spaces.Box(
             low=0,
             high=255,
-            shape=(210, 160, 3),
+            shape=(h, w, channels),
             dtype=jnp.uint8
         )
     
@@ -1155,11 +1238,16 @@ class GopherRenderer(JAXGameRenderer):
     def __init__(self, consts: GopherConstants = None, config=None, **kwargs):
         super().__init__(consts)
         self.consts = consts or GopherConstants()
-        self.config = config or render_utils.RendererConfig(game_dimensions=(210, 160), channels=3)
+        self.config = config or render_utils.RendererConfig(
+            game_dimensions=(self.consts.HEIGHT, self.consts.WIDTH), channels=3
+        )
         self.jr = render_utils.JaxRenderingUtils(self.config)
         final_asset_config = list(self.consts.ASSET_CONFIG)
         sprite_path = f"{os.path.dirname(os.path.abspath(__file__))}/sprites/gopher"
         (self.PALETTE, self.SHAPE_MASKS, self.BACKGROUND, self.COLOR_TO_ID, self.FLIP_OFFSETS) = self.jr.load_and_setup_assets(final_asset_config, sprite_path)
+        # Solid dug-tile color (tunnel / hole sprites are flat fills).
+        self.DUG_COLOR_ID = int(self.COLOR_TO_ID[(223, 183, 85)])
+        self.DUG_COLOR_MAP = jnp.array([0, self.DUG_COLOR_ID], dtype=jnp.int32)
 
     @partial(jax.jit, static_argnums=(0,))
     def render(self, state: GopherState):
@@ -1218,26 +1306,38 @@ class GopherRenderer(JAXGameRenderer):
         player_mask = self.SHAPE_MASKS["player"][final_player_idx]
         raster = self.jr.render_at(raster, jnp.int32(state.player_x), jnp.int32(self.consts.PLAYER_START_Y), player_mask)
 
-        # --- Tunnel dug ---
-        tunnel_mask = self.SHAPE_MASKS["tunnel_tile_dug"]
-        def draw_tunnel(i, r):
-            x = self.consts.LEFT_WALL + (i * self.consts.TILE_WIDTH)
-            y = self.consts.TUNNEL_TOP_Y 
-            return jax.lax.cond(state.tunnel_layout[i] == 1, lambda _r: self.jr.render_at(_r, jnp.int32(x), jnp.int32(y), tunnel_mask), lambda _r: _r, operand=r)
-        raster = jax.lax.fori_loop(0, self.consts.NUM_TILES, draw_tunnel, raster)
+        # --- Tunnel dug (1×N inverse grid) ---
+        tunnel_grid = state.tunnel_layout.astype(jnp.int32)[None, :]  # (1, NUM_TILES)
+        raster = self.jr.render_grid_inverse(
+            raster,
+            grid_state=tunnel_grid,
+            grid_origin=(0, self.consts.TUNNEL_TOP_Y),
+            cell_size=(self.consts.TILE_WIDTH, self.consts.TUNNEL_TILE_HEIGHT),
+            color_map=self.DUG_COLOR_MAP,
+        )
 
-        # --- Hole dug ---
-        hole_mask = self.SHAPE_MASKS["hole_tile_dug"][0]
-        hole_x_coords = jnp.array(self.consts.HOLE_POSITION_X)     
-        hole_y_coords = jnp.array(self.consts.HOLE_POSITION_Y) 
-        def draw_hole_column(i, r):
-            x = hole_x_coords[i]
-            def draw_segment(depth_idx, current_r):
-                is_dug = state.hole_layout[i, depth_idx] == 1
-                segment_y = hole_y_coords[depth_idx]
-                return jax.lax.cond(is_dug, lambda _r: self.jr.render_at(_r, jnp.int32(x), jnp.int32(segment_y), hole_mask), lambda _r: _r, operand=current_r)
-            return jax.lax.fori_loop(0, 3, draw_segment, r)
-        raster = jax.lax.fori_loop(0, 6, draw_hole_column, raster)
+        # --- Hole dug (two 3×3 inverse grids: left / right columns, spacing 16) ---
+        hole_w, hole_h = self.consts.HOLE_TILE_SIZE
+        # hole_layout[:, 0] is lowest layer (y=175); flip so row 0 is top (y=161).
+        left_grid = jnp.flip(state.hole_layout[:3, :], axis=1).T.astype(jnp.int32)
+        right_grid = jnp.flip(state.hole_layout[3:, :], axis=1).T.astype(jnp.int32)
+        top_hole_y = int(self.consts.HOLE_POSITION_Y[2])
+        raster = self.jr.render_grid_inverse(
+            raster,
+            grid_state=left_grid,
+            grid_origin=(int(self.consts.HOLE_POSITION_X[0]), top_hole_y),
+            cell_size=(hole_w, hole_h),
+            color_map=self.DUG_COLOR_MAP,
+            cell_padding=(8, 0),  # 8px tile + 8px gap = 16px pitch
+        )
+        raster = self.jr.render_grid_inverse(
+            raster,
+            grid_state=right_grid,
+            grid_origin=(int(self.consts.HOLE_POSITION_X[3]), top_hole_y),
+            cell_size=(hole_w, hole_h),
+            color_map=self.DUG_COLOR_MAP,
+            cell_padding=(8, 0),
+        )
         
         # --- Gopher ---
         is_start_delay = state.gopher_action == GopherAction.START_DELAY
@@ -1285,12 +1385,22 @@ class GopherRenderer(JAXGameRenderer):
         # Prepare steal: stand up pose
         is_prep_steal = state.gopher_action == GopherAction.PREPARE_STEAL
         final_gopher_idx = jax.lax.select(is_prep_steal, stand_idx, final_gopher_idx)
-        draw_y = jax.lax.select(is_prep_steal, draw_y, draw_y)          
-        raster = self.jr.render_at(raster, jnp.int32(state.gopher_position[0]), jnp.int32(draw_y), self.SHAPE_MASKS["gopher"][final_gopher_idx])
+
+        is_underground = state.gopher_position[1] > 150.0
+        should_draw_gopher = self.consts.SHOW_GOPHER_UNDERGROUND | jnp.logical_not(is_underground)
+        gopher_mask = self.SHAPE_MASKS["gopher"][final_gopher_idx]
+        raster = jax.lax.cond(
+            should_draw_gopher,
+            lambda r: self.jr.render_at(
+                r, jnp.int32(state.gopher_position[0]), jnp.int32(draw_y), gopher_mask
+            ),
+            lambda r: r,
+            operand=raster,
+        )
         
         
         # --- Gound bottom ---
-        raster = self.jr.render_at(raster, jnp.int32(self.consts.LEFT_WALL), jnp.int32(self.consts.TUNNEL_BOTTOM_Y), self.SHAPE_MASKS["bottom_ground"])
+        raster = self.jr.render_at(raster, jnp.int32(0), jnp.int32(self.consts.TUNNEL_BOTTOM_Y), self.SHAPE_MASKS["bottom_ground"])
         
 
        # --- Score ---
@@ -1312,5 +1422,4 @@ class GopherRenderer(JAXGameRenderer):
 
         raster = jax.lax.fori_loop(0, num_digits, draw_digit, raster)
         return self.jr.render_from_palette(raster, self.PALETTE)
-    
 

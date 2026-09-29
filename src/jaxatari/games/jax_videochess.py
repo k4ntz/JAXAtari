@@ -1,7 +1,6 @@
+from typing import Tuple, Optional
 import os
 from functools import partial
-from typing import Tuple, Callable, Optional
-import importlib
 
 import chex
 import jax
@@ -12,7 +11,7 @@ from flax import struct
 import jaxatari.spaces as spaces
 from jaxatari.renderers import JAXGameRenderer
 from jaxatari.rendering import jax_rendering_utils as render_utils
-from jaxatari.environment import JaxEnvironment, JAXAtariAction as Action
+from jaxatari.environment import JaxEnvironment, JAXAtariAction as Action, ObjectObservation
 from jaxatari.spaces import Space
 
 
@@ -73,6 +72,12 @@ class VideoChessConstants(struct.PyTreeNode):
     # Small noise for tie-breaking when picking moves (avoids deterministic repetition)
     TIE_BREAK_NOISE: float = struct.field(pytree_node=False, default=1e-3)
 
+    # Input: ALE-like edge trigger (True) vs hold-to-repeat cursor moves (False via instant_movement mod)
+    INPUT_EDGE_TRIGGERED: bool = struct.field(pytree_node=False, default=True)
+
+    # Black opponent: 0=off (play both sides), 1=random, 2=greedy, 3=minimax (default)
+    BLACK_BOT_KIND: int = struct.field(pytree_node=False, default=3)
+
     # one board + pieces
     ASSET_CONFIG: tuple = struct.field(pytree_node=False, default_factory=_get_videochess_asset_config)
 
@@ -98,8 +103,8 @@ class VideoChessState(struct.PyTreeNode):
 
 class VideoChessObservation(struct.PyTreeNode):
     board: chex.Array
-    cursor_pos: chex.Array
-    selected_square: chex.Array
+    cursor: ObjectObservation
+    selected: ObjectObservation
     to_move: chex.Array
 
 
@@ -682,7 +687,10 @@ class BoardHandler:
     @staticmethod
     def has_any_legal_moves_for_colour(board: jnp.ndarray, colour: chex.Array,
                                        en_passant_sq=None, castling_rights=None) -> bool:
-        """Return True if at least one piece of the given colour has any legal move."""
+        """Return True if at least one piece of the given colour has any legal move.
+
+        Short-circuits on the first piece that has a move (avoids scanning all 16).
+        """
         c = VideoChessConstants()
         ep_sq = jnp.array([-1, -1], dtype=jnp.int32) if en_passant_sq is None else en_passant_sq
         cr = jnp.zeros(4, dtype=jnp.bool_) if castling_rights is None else castling_rights
@@ -695,20 +703,27 @@ class BoardHandler:
             lambda: BoardHandler.is_black(flat),
         )
 
-        # A side can have at most 16 pieces alive at once.
         own_idx = jnp.where(own_mask, size=16, fill_value=-1)[0].astype(jnp.int32)  # (16,)
-        valid_idx = own_idx >= jnp.int32(0)
-        safe_idx = jnp.where(valid_idx, own_idx, jnp.int32(0))
-        from_sq = jnp.stack(
-            [safe_idx // jnp.int32(c.NUM_FILES), safe_idx % jnp.int32(c.NUM_FILES)],
-            axis=1,
-        ).astype(jnp.int32)
 
-        moves = jax.vmap(
-            lambda fs: BoardHandler.legal_moves_for_colour(board, fs, colour_i, ep_sq, cr)
-        )(from_sq)  # (16, 56, 2)
-        has_moves_per_piece = jnp.any(moves[..., 0] >= jnp.int32(0), axis=1)  # (16,)
-        return jnp.any(valid_idx & has_moves_per_piece)
+        def cond_fn(carry):
+            i, found = carry
+            return (i < 16) & (~found)
+
+        def body_fn(carry):
+            i, found = carry
+            idx = own_idx[i]
+            valid = idx >= jnp.int32(0)
+
+            def check_piece(_):
+                fs = jnp.array([idx // jnp.int32(c.NUM_FILES), idx % jnp.int32(c.NUM_FILES)], dtype=jnp.int32)
+                moves = BoardHandler.legal_moves_for_colour(board, fs, colour_i, ep_sq, cr)
+                return jnp.any(moves[:, 0] >= jnp.int32(0))
+
+            piece_has = jax.lax.cond(valid, check_piece, lambda _: jnp.bool_(False), operand=None)
+            return i + 1, found | piece_has
+
+        _, found = jax.lax.while_loop(cond_fn, body_fn, (jnp.int32(0), jnp.bool_(False)))
+        return found
 
 
 class JaxVideoChess(
@@ -787,9 +802,23 @@ class JaxVideoChess(
         bot_module: Optional[str] = None,
     ):
         consts = consts or VideoChessConstants()
+        # Legacy ctor knobs map onto BLACK_BOT_KIND (mods use constants_overrides).
+        if bot_mode == "random":
+            consts = consts.replace(BLACK_BOT_KIND=1)
+        elif bot_mode in ("none", "off", "both"):
+            consts = consts.replace(BLACK_BOT_KIND=0)
+        elif bot_mode == "greedy":
+            consts = consts.replace(BLACK_BOT_KIND=2)
+        elif bot_mode == "minimax":
+            consts = consts.replace(BLACK_BOT_KIND=3)
+        if bot_module is not None:
+            raise ValueError(
+                "bot_module is no longer supported; use VideochessEnvMod bot mods "
+                "(random_bot_black / greedy_bot_black / minimax_bot_black / play_both_sides)."
+            )
         super().__init__(consts)
         self.renderer = VideoChessRenderer(self.consts)
-
+        self.bot_mode = bot_mode
         self.action_set = {
             Action.NOOP,
             Action.FIRE,
@@ -797,44 +826,22 @@ class JaxVideoChess(
             Action.UPLEFT, Action.UPRIGHT, Action.DOWNLEFT, Action.DOWNRIGHT,
         }
 
-        # Optional bot hook (used by mods or local testing)
-        self.bot_mode = bot_mode  # None | "random" | "mods"
+    @partial(jax.jit, static_argnums=(0,))
+    def _run_black_bot(self, state: VideoChessState) -> VideoChessState:
+        """Dispatch black reply by BLACK_BOT_KIND (specialized per const value)."""
+        kind = int(self.consts.BLACK_BOT_KIND)
+        cursor = state.cursor_pos
+        if kind == 1:
+            moved = self._bot_random_move(state)
+        elif kind == 2:
+            moved = self._bot_greedy_move(state)
+        elif kind == 3:
+            moved = self._bot_minimax_move(state)
+        else:
+            return state
+        # Keep human cursor; bot moves invisibly
+        return moved.replace(cursor_pos=cursor)
 
-        @partial(jax.jit, static_argnums=(0,))
-        def _bot_noop(_self, s: VideoChessState) -> VideoChessState:
-            return s
-
-        self._bot_step: Callable[[VideoChessState], VideoChessState] = lambda s: s
-
-        # Built-in random bot (JAX-native)
-        if bot_mode == "random":
-            self._bot_step = lambda s: self._bot_random_move(s)
-
-        # External bot (mods) loaded from a module, e.g. `jaxatari.games.videochess_mods`
-        if bot_mode == "mods" or bot_module is not None:
-            module_name = bot_module or "jaxatari.games.videochess_mods"
-            mod = importlib.import_module(module_name)
-
-            # Preferred: factory that can close over constants
-            if hasattr(mod, "make_bot"):
-                bot_fn = mod.make_bot(self.consts)
-            elif hasattr(mod, "bot_step"):
-                bot_fn = mod.bot_step
-            else:
-                raise AttributeError(
-                    f"{module_name} must define either make_bot(consts) or bot_step(state, consts)"
-                )
-
-            # Normalize signature: bot_fn(state) -> state
-            if hasattr(mod, "make_bot"):
-                self._bot_step = bot_fn
-            else:
-                # Expect bot_step(state, consts)
-                self._bot_step = lambda s: bot_fn(s, self.consts)
-
-        # If no bot selected, keep a no-op (so step stays simple)
-        if self.bot_mode is None:
-            self._bot_step = lambda s: _bot_noop(self, s)
     @partial(jax.jit, static_argnums=(0,))
     def _bot_random_move(self, state: VideoChessState) -> VideoChessState:
         """One random move for the side to move."""
@@ -1229,13 +1236,7 @@ class JaxVideoChess(
             castling_rights=jnp.ones(4, dtype=jnp.bool_),
         )
 
-        obs = VideoChessObservation(
-            board=state.board,
-            cursor_pos=state.cursor_pos,
-            selected_square=state.selected_square,
-            to_move=jnp.array(state.to_move, dtype=jnp.int32),
-        )
-
+        obs = self._get_observation(state)
         return obs, state
 
     # ------------------------------------------------------------------
@@ -1281,7 +1282,7 @@ class JaxVideoChess(
     # ---- main step ----
     @partial(jax.jit, static_argnums=(0,))
     def step(self, state: VideoChessState, action: chex.Array):
-        """Step with edge-triggered input (held keys don’t repeat instantly)."""
+        """Step the env. Default input is edge-triggered; see ``instant_movement`` mod."""
         def run_phase(s):
             return jax.lax.switch(
                 s.game_phase,
@@ -1303,27 +1304,27 @@ class JaxVideoChess(
                 last_was_fire=is_fire,
             )
 
-        def maybe_apply_non_fire(s):
-            # Only apply movement if the key wasn't already held last frame
-            cond = is_move & (~s.last_was_move)
-            return jax.lax.cond(
-                cond,
-                apply_step,
-                lambda x: x,
-                s,
-            )
+        if self.consts.INPUT_EDGE_TRIGGERED:
+            def maybe_apply_non_fire(s):
+                cond = is_move & (~s.last_was_move)
+                return jax.lax.cond(cond, apply_step, lambda x: x, s)
 
-        # FIRE only triggers once per press
-        def fire_or_not(s):
-            cond = is_fire & (~s.last_was_fire)
-            return jax.lax.cond(
-                cond,
-                apply_step,
-                maybe_apply_non_fire,
-                s,
-            )
+            def fire_or_not(s):
+                cond = is_fire & (~s.last_was_fire)
+                return jax.lax.cond(cond, apply_step, maybe_apply_non_fire, s)
 
-        new_state = fire_or_not(state)
+            new_state = fire_or_not(state)
+        else:
+            # instant_movement: held directions repeat every frame; FIRE stays edge-triggered
+            def fire_or_move(s):
+                fire_edge = is_fire & (~s.last_was_fire)
+                return jax.lax.cond(
+                    fire_edge | is_move,
+                    apply_step,
+                    lambda x: x.replace(last_was_move=is_move, last_was_fire=is_fire),
+                    s,
+                )
+            new_state = fire_or_move(state)
 
         player_just_moved = (
             (state.to_move == self.consts.COLOUR_WHITE)
@@ -1332,12 +1333,14 @@ class JaxVideoChess(
             & (new_state.selected_square[0] < 0)
         )
 
-        new_state = jax.lax.cond(
-            player_just_moved,
-            lambda s: self._bot_step(s),
-            lambda s: s,
-            new_state,
-        )
+        # Specialize JIT per BLACK_BOT_KIND so play_both_sides does not compile minimax.
+        if int(self.consts.BLACK_BOT_KIND) > 0:
+            new_state = jax.lax.cond(
+                player_just_moved,
+                lambda s: self._run_black_bot(s),
+                lambda s: s,
+                new_state,
+            )
 
         def reset_flags(s):
             return s.replace(
@@ -1386,21 +1389,18 @@ class JaxVideoChess(
     def _step_select_piece_phase(self, state: VideoChessState, action: chex.Array) -> VideoChessState:
         """
         Phase 0: move cursor and select which piece (of the side to move) to select.
+        Legal-move highlights are filled by the ``legal_moves_display`` mod only.
         """
         def select_piece(s: VideoChessState) -> VideoChessState:
             row, col = s.cursor_pos
             piece = s.board[row, col]
             is_own = BoardHandler.is_same_colour(piece, s.to_move)
-
-            legal_targets = BoardHandler.legal_moves_for_colour(
-                s.board, s.cursor_pos, s.to_move, s.en_passant_sq, s.castling_rights
-            )
             return jax.lax.cond(
                 is_own,
                 lambda st: st.replace(
                     selected_square=st.cursor_pos,
                     game_phase=self.consts.PHASE_SELECT_TARGET,
-                    highlight_squares=legal_targets,
+                    highlight_squares=self._empty_highlights(),
                 ),
                 lambda st: st,
                 s,
@@ -1423,7 +1423,16 @@ class JaxVideoChess(
         FIRE on the original square deselects.
         """
         def try_move(st: VideoChessState) -> VideoChessState:
-            legal_targets = st.highlight_squares
+            # Prefer cached highlights (legal_moves_display mod); otherwise compute on demand.
+            has_hl = jnp.any(st.highlight_squares[:, 0] >= jnp.int32(0))
+            legal_targets = jax.lax.cond(
+                has_hl,
+                lambda: st.highlight_squares,
+                lambda: BoardHandler.legal_moves_for_colour(
+                    st.board, st.selected_square, st.to_move,
+                    st.en_passant_sq, st.castling_rights,
+                ),
+            )
             is_legal = jnp.any(jnp.all(legal_targets == st.cursor_pos, axis=1))
 
             def do_move(st_in: VideoChessState) -> VideoChessState:
@@ -1466,11 +1475,11 @@ class JaxVideoChess(
             is_own = BoardHandler.is_same_colour(piece, st.to_move)
 
             def reselect(st2: VideoChessState) -> VideoChessState:
-                # Simply change which piece is selected, stay in target phase
-                legal_targets = BoardHandler.legal_moves_for_colour(
-                    st2.board, st2.cursor_pos, st2.to_move, st2.en_passant_sq, st2.castling_rights
+                # Change selection; highlights filled by legal_moves_display mod if active
+                return st2.replace(
+                    selected_square=st2.cursor_pos,
+                    highlight_squares=self._empty_highlights(),
                 )
-                return st2.replace(selected_square=st2.cursor_pos, highlight_squares=legal_targets)
 
             # If cursor is back on the original square: deselect.
             # Otherwise: if on our own piece, reselect that piece; else, attempt a move.
@@ -1515,19 +1524,36 @@ class JaxVideoChess(
 
     def observation_space(self) -> Space:
         c = self.consts
+        # Grid coordinates use board file/rank indices (like VideoCheckers / Othello).
+        pointer = spaces.get_object_space(n=None, screen_size=(c.NUM_RANKS, c.NUM_FILES))
         return spaces.Dict({
             "board": spaces.Box(low=0, high=13, shape=(c.NUM_RANKS, c.NUM_FILES), dtype=jnp.int32),
-            "cursor_pos": spaces.Box(low=0, high=7, shape=(2,), dtype=jnp.int32),
-            "selected_square": spaces.Box(low=-1, high=7, shape=(2,), dtype=jnp.int32),
-            "to_move": spaces.Discrete(2),
+            "cursor": pointer,
+            "selected": pointer,
+            # Integer Box (not Discrete): FlattenObservationWrapper only expands Box leaves.
+            "to_move": spaces.Box(low=0, high=1, shape=(), dtype=jnp.int32),
         })
 
     @partial(jax.jit, static_argnums=(0,))
     def _get_observation(self, state: VideoChessState) -> VideoChessObservation:
+        c = self.consts
+        w, h = int(c.NUM_FILES), int(c.NUM_RANKS)
+
+        def make_pointer(pos):
+            # pos is (row, col); ObjectObservation uses (x=col, y=row).
+            active = jnp.logical_and(pos[0] >= 0, pos[1] >= 0).astype(jnp.int32)
+            return ObjectObservation.create(
+                x=jnp.clip(pos[1], 0, w - 1).astype(jnp.int32),
+                y=jnp.clip(pos[0], 0, h - 1).astype(jnp.int32),
+                width=jnp.array(1, dtype=jnp.int32),
+                height=jnp.array(1, dtype=jnp.int32),
+                active=active,
+            )
+
         return VideoChessObservation(
             board=state.board,
-            cursor_pos=state.cursor_pos,
-            selected_square=state.selected_square,
+            cursor=make_pointer(state.cursor_pos),
+            selected=make_pointer(state.selected_square),
             to_move=jnp.array(state.to_move, dtype=jnp.int32),
         )
 
@@ -1535,8 +1561,14 @@ class JaxVideoChess(
     def obs_to_flat_array(self, obs: VideoChessObservation) -> jnp.ndarray:
         return jnp.concatenate([
             obs.board.flatten(),
-            obs.cursor_pos.flatten(),
-            obs.selected_square.flatten(),
+            jnp.array([
+                obs.cursor.x, obs.cursor.y, obs.cursor.width, obs.cursor.height,
+                obs.cursor.active, obs.cursor.visual_id, obs.cursor.state, obs.cursor.orientation,
+            ], dtype=jnp.int32),
+            jnp.array([
+                obs.selected.x, obs.selected.y, obs.selected.width, obs.selected.height,
+                obs.selected.active, obs.selected.visual_id, obs.selected.state, obs.selected.orientation,
+            ], dtype=jnp.int32),
             obs.to_move[None],
         ])
 

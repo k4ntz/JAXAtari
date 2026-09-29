@@ -336,6 +336,7 @@ class AmidarObservation:
     player_paint_roller: ObjectObservation
     enemy: ObjectObservation
     lives: chex.Array
+    score: chex.Array
     paths: ObjectObservation
     walked_on_paths: ObjectObservation
     completed_rectangles: ObjectObservation
@@ -840,6 +841,7 @@ class JaxAmidar(JaxEnvironment[AmidarState, AmidarObservation, AmidarInfo, Amida
             "player_paint_roller": spaces.get_object_space(n=None, screen_size=screen_size),
             "enemy": spaces.get_object_space(n=max_enemies, screen_size=screen_size),
             "lives": spaces.Box(low=0, high=self.constants.MAX_LIVES, shape=(), dtype=jnp.int32),
+            "score": spaces.Box(low=0, high=jnp.iinfo(jnp.int32).max, shape=(), dtype=jnp.int32),
             "paths": spaces.get_object_space(n=path_count, screen_size=screen_size),
             "walked_on_paths": spaces.get_object_space(n=path_count, screen_size=screen_size),
             "completed_rectangles": spaces.get_object_space(n=rectangle_count, screen_size=screen_size),
@@ -1099,6 +1101,7 @@ class JaxAmidar(JaxEnvironment[AmidarState, AmidarObservation, AmidarInfo, Amida
             player_paint_roller=player_paint_roller,
             enemy=enemy,
             lives=state.lives,
+            score=state.score.astype(jnp.int32),
             paths=paths,
             walked_on_paths=walked_on_paths,
             completed_rectangles=completed_rectangles

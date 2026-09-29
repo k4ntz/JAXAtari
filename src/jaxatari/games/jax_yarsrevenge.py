@@ -9,8 +9,7 @@ import jax.numpy as jnp
 from jax import Array
 
 from jaxatari import spaces
-from jaxatari.environment import JAXAtariAction as Action
-from jaxatari.environment import JaxEnvironment
+from jaxatari.environment import JAXAtariAction as Action, JaxEnvironment, ObjectObservation
 from jaxatari.renderers import JAXGameRenderer
 from jaxatari.rendering import jax_rendering_utils as render_utils
 
@@ -380,24 +379,17 @@ class YarsRevengeState:
 
 @dataclass
 class YarsRevengeObservation:
-    """
-    The part of the state that is returned to the agent.
-    """
+    """Object-centric observation returned to the agent."""
 
-    yar: DirectionEntity
-    qotile: DirectionEntity
-    destroyer: Entity
-    swirl_exist: jnp.ndarray
-    swirl: Entity
-    swirl_dx: jnp.ndarray
-    swirl_dy: jnp.ndarray
-    energy_missile_exist: jnp.ndarray
-    energy_missile: DirectionEntity
-    cannon_exist: jnp.ndarray
-    cannon_fired: jnp.ndarray
-    cannon: DirectionEntity
-    energy_shield: Entity
-    energy_shield_state: jnp.ndarray
+    yar: ObjectObservation
+    qotile: ObjectObservation
+    destroyer: ObjectObservation
+    swirl: ObjectObservation
+    energy_missile: ObjectObservation
+    cannon: ObjectObservation
+    energy_shield: ObjectObservation
+    energy_shield_state: jnp.ndarray  # 16x8 cell grid (visible shield pattern)
+    score: jnp.ndarray
     lives: jnp.ndarray
 
 
@@ -1554,168 +1546,23 @@ class JaxYarsRevenge(
         return spaces.Discrete(len(self.ACTION_SET))
 
     def observation_space(self):
-        """
-        Return a `spaces.Dict` that matches `YarsRevengeObservation`.
-        """
+        """Return a `spaces.Dict` that matches `YarsRevengeObservation`."""
+        screen = (self.consts.HEIGHT, self.consts.WIDTH)
+        single = spaces.get_object_space(n=None, screen_size=screen)
         return spaces.Dict(
             {
-                "yar": spaces.Dict(
-                    {
-                        "x": spaces.Box(
-                            low=0.0, high=self.consts.WIDTH, shape=(), dtype=jnp.float32
-                        ),
-                        "y": spaces.Box(
-                            low=0.0,
-                            high=self.consts.HEIGHT,
-                            shape=(),
-                            dtype=jnp.float32,
-                        ),
-                        "w": spaces.Box(
-                            low=0, high=self.consts.WIDTH, shape=(), dtype=jnp.float32
-                        ),
-                        "h": spaces.Box(
-                            low=0, high=self.consts.HEIGHT, shape=(), dtype=jnp.float32
-                        ),
-                        "direction": spaces.Box(
-                            low=0, high=7, shape=(), dtype=jnp.float32
-                        ),
-                    }
-                ),
-                "qotile": spaces.Dict(
-                    {
-                        "x": spaces.Box(
-                            low=0.0, high=self.consts.WIDTH, shape=(), dtype=jnp.float32
-                        ),
-                        "y": spaces.Box(
-                            low=0.0,
-                            high=self.consts.HEIGHT,
-                            shape=(),
-                            dtype=jnp.float32,
-                        ),
-                        "w": spaces.Box(
-                            low=0, high=self.consts.WIDTH, shape=(), dtype=jnp.float32
-                        ),
-                        "h": spaces.Box(
-                            low=0, high=self.consts.HEIGHT, shape=(), dtype=jnp.float32
-                        ),
-                        "direction": spaces.Box(
-                            low=0, high=7, shape=(), dtype=jnp.float32
-                        ),
-                    }
-                ),
-                "destroyer": spaces.Dict(
-                    {
-                        "x": spaces.Box(
-                            low=0.0, high=self.consts.WIDTH, shape=(), dtype=jnp.float32
-                        ),
-                        "y": spaces.Box(
-                            low=0.0,
-                            high=self.consts.HEIGHT,
-                            shape=(),
-                            dtype=jnp.float32,
-                        ),
-                        "w": spaces.Box(
-                            low=0, high=self.consts.WIDTH, shape=(), dtype=jnp.float32
-                        ),
-                        "h": spaces.Box(
-                            low=0, high=self.consts.HEIGHT, shape=(), dtype=jnp.float32
-                        ),
-                    }
-                ),
-                "swirl_exist": spaces.Box(low=0, high=1, shape=(), dtype=jnp.float32),
-                "swirl": spaces.Dict(
-                    {
-                        "x": spaces.Box(
-                            low=0.0, high=self.consts.WIDTH, shape=(), dtype=jnp.float32
-                        ),
-                        "y": spaces.Box(
-                            low=0.0,
-                            high=self.consts.HEIGHT,
-                            shape=(),
-                            dtype=jnp.float32,
-                        ),
-                        "w": spaces.Box(
-                            low=0, high=self.consts.WIDTH, shape=(), dtype=jnp.float32
-                        ),
-                        "h": spaces.Box(
-                            low=0, high=self.consts.HEIGHT, shape=(), dtype=jnp.float32
-                        ),
-                    }
-                ),
-                "swirl_dx": spaces.Box(low=-3.0, high=3.0, shape=(), dtype=jnp.float32),
-                "swirl_dy": spaces.Box(low=-3.0, high=3.0, shape=(), dtype=jnp.float32),
-                "energy_missile_exist": spaces.Box(
-                    low=0, high=1, shape=(), dtype=jnp.float32
-                ),
-                "energy_missile": spaces.Dict(
-                    {
-                        "x": spaces.Box(
-                            low=0.0, high=self.consts.WIDTH, shape=(), dtype=jnp.float32
-                        ),
-                        "y": spaces.Box(
-                            low=0.0,
-                            high=self.consts.HEIGHT,
-                            shape=(),
-                            dtype=jnp.float32,
-                        ),
-                        "w": spaces.Box(
-                            low=0, high=self.consts.WIDTH, shape=(), dtype=jnp.float32
-                        ),
-                        "h": spaces.Box(
-                            low=0, high=self.consts.HEIGHT, shape=(), dtype=jnp.float32
-                        ),
-                        "direction": spaces.Box(
-                            low=0, high=7, shape=(), dtype=jnp.float32
-                        ),
-                    }
-                ),
-                "cannon_exist": spaces.Box(low=0, high=1, shape=(), dtype=jnp.float32),
-                "cannon_fired": spaces.Box(low=0, high=1, shape=(), dtype=jnp.float32),
-                "cannon": spaces.Dict(
-                    {
-                        "x": spaces.Box(
-                            low=0.0, high=self.consts.WIDTH, shape=(), dtype=jnp.float32
-                        ),
-                        "y": spaces.Box(
-                            low=0.0,
-                            high=self.consts.HEIGHT,
-                            shape=(),
-                            dtype=jnp.float32,
-                        ),
-                        "w": spaces.Box(
-                            low=0, high=self.consts.WIDTH, shape=(), dtype=jnp.float32
-                        ),
-                        "h": spaces.Box(
-                            low=0, high=self.consts.HEIGHT, shape=(), dtype=jnp.float32
-                        ),
-                        "direction": spaces.Box(
-                            low=0, high=7, shape=(), dtype=jnp.float32
-                        ),
-                    }
-                ),
-                "energy_shield": spaces.Dict(
-                    {
-                        "x": spaces.Box(
-                            low=0.0, high=self.consts.WIDTH, shape=(), dtype=jnp.float32
-                        ),
-                        "y": spaces.Box(
-                            low=0.0,
-                            high=self.consts.HEIGHT,
-                            shape=(),
-                            dtype=jnp.float32,
-                        ),
-                        "w": spaces.Box(
-                            low=0, high=self.consts.WIDTH, shape=(), dtype=jnp.float32
-                        ),
-                        "h": spaces.Box(
-                            low=0, high=self.consts.HEIGHT, shape=(), dtype=jnp.float32
-                        ),
-                    }
-                ),
+                "yar": single,
+                "qotile": single,
+                "destroyer": single,
+                "swirl": single,
+                "energy_missile": single,
+                "cannon": single,
+                "energy_shield": single,
                 "energy_shield_state": spaces.Box(
                     low=0, high=1, shape=(16, 8), dtype=jnp.float32
                 ),
-                "lives": spaces.Box(low=0, high=4, shape=(), dtype=jnp.float32),
+                "score": spaces.Box(low=0, high=jnp.iinfo(jnp.int32).max, shape=(), dtype=jnp.int32),
+                "lives": spaces.Box(low=0, high=4, shape=(), dtype=jnp.int32),
             }
         )
 
@@ -1728,25 +1575,50 @@ class JaxYarsRevenge(
             dtype=jnp.uint8,
         )
 
+    @staticmethod
+    def _dir_to_orientation(direction: jnp.ndarray) -> jnp.ndarray:
+        """Map Direction enum (-1..7) to degrees; CENTER (-1) -> 0."""
+        return jnp.where(direction < 0, jnp.float32(0.0), direction.astype(jnp.float32) * jnp.float32(45.0))
+
     @partial(jax.jit, static_argnums=(0,))
     def _get_observation(self, state: YarsRevengeState) -> YarsRevengeObservation:
-        """Return the observation structure for the agent."""
+        """Build ObjectObservation entities from internal Entity / DirectionEntity state."""
+        def from_dir_entity(ent, active=None, state_val=None):
+            return ObjectObservation.create(
+                x=ent.x.astype(jnp.int32),
+                y=ent.y.astype(jnp.int32),
+                width=ent.w.astype(jnp.int32),
+                height=ent.h.astype(jnp.int32),
+                active=jnp.array(1, dtype=jnp.int32) if active is None else active.astype(jnp.int32),
+                state=jnp.array(0, dtype=jnp.int32) if state_val is None else state_val.astype(jnp.int32),
+                orientation=self._dir_to_orientation(ent.direction),
+            )
+
+        def from_entity(ent, active=None, state_val=None):
+            return ObjectObservation.create(
+                x=ent.x.astype(jnp.int32),
+                y=ent.y.astype(jnp.int32),
+                width=ent.w.astype(jnp.int32),
+                height=ent.h.astype(jnp.int32),
+                active=jnp.array(1, dtype=jnp.int32) if active is None else active.astype(jnp.int32),
+                state=jnp.array(0, dtype=jnp.int32) if state_val is None else state_val.astype(jnp.int32),
+            )
+
         return YarsRevengeObservation(
-            yar=state.yar,
-            qotile=state.qotile,
-            destroyer=state.destroyer,
-            swirl_exist=state.swirl_exist,
-            swirl=state.swirl,
-            swirl_dx=state.swirl_dx,
-            swirl_dy=state.swirl_dy,
-            energy_missile_exist=state.energy_missile_exist,
-            energy_missile=state.energy_missile,
-            cannon_exist=state.cannon_exist,
-            cannon_fired=state.cannon_fired,
-            cannon=state.cannon,
-            energy_shield=state.energy_shield,
-            energy_shield_state=state.energy_shield_state,
-            lives=state.lives,
+            yar=from_dir_entity(state.yar),
+            qotile=from_dir_entity(state.qotile),
+            destroyer=from_entity(state.destroyer),
+            swirl=from_entity(state.swirl, active=state.swirl_exist),
+            energy_missile=from_dir_entity(state.energy_missile, active=state.energy_missile_exist),
+            cannon=from_dir_entity(
+                state.cannon,
+                active=state.cannon_exist,
+                state_val=state.cannon_fired.astype(jnp.int32),
+            ),
+            energy_shield=from_entity(state.energy_shield),
+            energy_shield_state=state.energy_shield_state.astype(jnp.float32),
+            score=state.score.astype(jnp.int32),
+            lives=state.lives.astype(jnp.int32),
         )
 
     @partial(jax.jit, static_argnums=(0,))

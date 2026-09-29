@@ -48,6 +48,12 @@ class EnduroGameState:
 
 @struct.dataclass
 class EnduroObservation:
+    # TODO(obs-parity): paper-claim / training freeze — keep this layout for now.
+    # Preferred ObjectObservation-centric replacement (do not enable without regenerating runs):
+    #   player: ObjectObservation
+    #   enemies: ObjectObservation  # n=7; visual_id=color; active when x>-1
+    #   cars_to_pass / day / level / level_passed: HUD scalars
+    #   road_left_dist / road_right_dist: float distances to track edges at player row
     enemy_positions: jnp.ndarray
     road_features: jnp.ndarray
 
@@ -1032,6 +1038,8 @@ class JaxEnduro(JaxEnvironment[EnduroGameState, EnduroObservation, EnduroInfo, E
         return spaces.Discrete(len(self.ACTION_SET))
 
     def observation_space(self) -> spaces.Space:
+        # TODO(obs-parity): see EnduroObservation — switch to ObjectObservation + HUD
+        # fields when regenerating Enduro training runs is acceptable.
         return spaces.Dict({
             "enemy_positions": spaces.Box(
                 low=jnp.array([[-1.0, -1.0]] * 7, dtype=jnp.float32),
@@ -1732,6 +1740,12 @@ class JaxEnduro(JaxEnvironment[EnduroGameState, EnduroObservation, EnduroInfo, E
     def render(self, state: EnduroGameState) -> jnp.ndarray:        return self.renderer.render(state)
 
     def _get_observation(self, state: EnduroGameState) -> EnduroObservation:
+        # TODO(obs-parity): paper-claim freeze. Proposed ObjectObservation build:
+        #   player = ObjectObservation.create(x=player_x, y=player_y, w=car_width_0, h=car_height_0,
+        #                                   visual_id=PLAYER_COLOR_INDEX)
+        #   enemies = ObjectObservation.create(x=opp[:,0], y=opp[:,1], w=car_widths, h=car_heights,
+        #                                     active=(opp[:,0]>-1), visual_id=opp[:,2])
+        #   + cars_to_pass, day, level, level_passed, road_left_dist, road_right_dist
         offset_int = jnp.clip(
             jnp.floor(state.track_top_x_curve_offset).astype(jnp.int32),
             -self.consts.curve_offset_base,

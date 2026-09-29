@@ -3,10 +3,10 @@ from functools import partial
 import chex
 import jax
 import jax.numpy as jnp
-from typing import Tuple, NamedTuple, List, Dict, Optional, Any
+from typing import Tuple, NamedTuple, List, Optional, Any
 from flax import struct
 
-from jaxatari.environment import JaxEnvironment, JAXAtariAction as Action
+from jaxatari.environment import JaxEnvironment, JAXAtariAction as Action, ObjectObservation
 import jaxatari.spaces as spaces
 from jaxatari.renderers import JAXGameRenderer
 from jaxatari.rendering import jax_rendering_utils as render_utils
@@ -71,6 +71,7 @@ def get_default_asset_config() -> tuple:
         {'name': 'dollar', 'type': 'single', 'file': 'dollar.npy'},
         {'name': 'timer_digits', 'type': 'digits', 'pattern': 'timer_{}.npy'},
         {'name': 'timer_colon', 'type': 'single', 'file': 'timer_colon.npy'},
+        {'name': 'escape_vehicle', 'type': 'single', 'file': 'escape_vehicle.npy'},
     ]
 
 class JourneyEscapeConstants(AutoDerivedConstants):
@@ -118,35 +119,21 @@ class JourneyEscapeConstants(AutoDerivedConstants):
     big_obstacle_height: int = struct.field(pytree_node=False, default=20)
 
     obstacle_frame_switch: int = struct.field(pytree_node=False, default=17)  # should match ALE
+    row_spawn_period_frames: int = struct.field(pytree_node=False, default=50)  # legacy; unused when scroll-based
+    # ALE front-hug run: median ~29 frames between rows at 2px/frame → ~58 px of scroll.
+    spawn_every_scroll_px: int = struct.field(pytree_node=False, default=58)
     obstacle_speed_px_per_frame: int = struct.field(pytree_node=False, default=1)
-    row_spawn_period_frames: int = struct.field(pytree_node=False, default=50)  # spawn every N frames # ToDo: calibrate
     hit_cooldown_frames: int = struct.field(pytree_node=False, default=17)
 
-    # Define the Width and Height for every ID (0 to 9)
-        #   0: Stage Barriers
-        #   1: Loyal Roadie
-        #   2: Love-Crazed Groupies
-        #   3: Shifty-Eyed Promoter
-        #   4: Sneaky Photographer
-        #   5: Big Loyal Roadie
-        #   6: Big Love-Crazed Groupies
-        #   7: Big Shifty-Eyed Promoter
-        #   8: Big Sneaky Photographer
-        #   9: Big Mighty Manager
-    TYPE_WIDTHS: Tuple[int, ...] = struct.field(pytree_node=False, default_factory=lambda: (32, 8, 8, 8, 8, 16, 16, 16, 16, 17))
-    TYPE_HEIGHTS: Tuple[int, ...] = struct.field(pytree_node=False, default_factory=lambda: (15, 15, 15, 15, 15, 15, 15, 15, 15, 15))
-
-    MAX_OBS: int = struct.field(pytree_node=False, default=64)
-
-    # Blinking Effect
-    photographer_on_duration: int = struct.field(pytree_node=False, default=17)
-    photographer_off_duration: int = struct.field(pytree_node=False, default=49)
-
     # Invincible Effect
-    INV_DURATION_ROADIE: int = struct.field(pytree_node=False, default=6 * 50) # 6 seconds @ 50fps
-    INV_DURATION_MANAGER: int = struct.field(pytree_node=False, default=100000) # longer than the max possible game time of ~60s
+    # Roadie: short timed invulnerability. Manager: lasts until escape vehicle (flag, not a huge timer).
+    INV_DURATION_ROADIE: int = struct.field(pytree_node=False, default=6 * 50)  # ~6s @ 50fps
+    INV_DURATION_MANAGER: int = struct.field(pytree_node=False, default=0)  # unused; manager uses shield flag
 
     # True if the object stops movement / drags player
+    #   0 barrier, 1 roadie, 2 groupies, 3 promoter, 4 photographer,
+    #   5 big roadie, 6 big groupies, 7 big promoter, 8 big photographer,
+    #   9 manager, 10 escape vehicle (scarab)
     IS_SOLID: chex.Array = struct.field(pytree_node=False, default_factory=lambda: jnp.array([
         True,           # 0 barrier
         False,          # 1 roadie
@@ -158,6 +145,7 @@ class JourneyEscapeConstants(AutoDerivedConstants):
         True,           # 7 big promoter
         True,           # 8 big photographer
         False,          # 9 big Manager
+        False,          # 10 escape vehicle
     ]))
 
     # Points deducted on contact
@@ -172,7 +160,18 @@ class JourneyEscapeConstants(AutoDerivedConstants):
         -2000,          # 7 big promoter
         -600,           # 8 big photographer
         9900,           # 9 big manager
+        0,              # 10 escape vehicle (handled as level clear)
     ]))
+
+    # Define the Width and Height for every ID (0 to 10)
+    TYPE_WIDTHS: Tuple[int, ...] = struct.field(pytree_node=False, default_factory=lambda: (32, 8, 8, 8, 8, 16, 16, 16, 16, 17, 16))
+    TYPE_HEIGHTS: Tuple[int, ...] = struct.field(pytree_node=False, default_factory=lambda: (15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15))
+
+    MAX_OBS: int = struct.field(pytree_node=False, default=64)
+
+    # Blinking Effect
+    photographer_on_duration: int = struct.field(pytree_node=False, default=17)
+    photographer_off_duration: int = struct.field(pytree_node=False, default=49)
 
     # predefined groups: [type, amount, spacing in px]
     obstacle_groups: Tuple[Tuple[int, int, int], ...] = struct.field(pytree_node=False, default_factory=lambda: (
@@ -197,49 +196,76 @@ class JourneyEscapeConstants(AutoDerivedConstants):
 
         (9, 1, 0),      # big manager (1)
     ))
-    # SPAWN PROBABILITIES
+    # SPAWN PROBABILITIES — reduced triple-packs; manager a bit more common (ALE rare but not tiny)
     spawn_weights: chex.Array = struct.field(pytree_node=False, default_factory=lambda: jnp.array([
-        0.07017544,     # 0: (0, 1, 0)  barriers
-        0.0175,         # 1: (1, 2, 20) roadie
-        0.0175,         # 2: (5, 1, 0)  big roadie
-
-        0.08771930,     # 3: (2, 1, 0)   groupies (1)
-        0.22807018,     # 4: (2, 2, 55)  groupies (2)
-        0.10526316,     # 5: (2, 3, 10)  groupies (3,T)
-        0.10526316,     # 6: (2, 3, 45)  groupies (3,W)
-        0.03508772,     # 7: (6, 1, 0)   big groupies (1)
-
-        0.05263158,     # 8: (3, 1, 0)   promoter (1)
-        0.08771930,     # 9: (3, 3, 15)  promoter (3,T)
-        0.08771930,     # 10: (3, 2, 55) promoter (2,W)
-        0.05263158,     # 11: (7, 1, 0)  big promoter
-
-        0.05263158,     # 12: (4, 3, 20)  photographers (3)
-        0.05263158,     # 13: (4, 2, 70)  photographers (2)
-        0.05263158,     # 14: (8, 1, 0)   big photographer
-
-        0.0085,         # 15: (9, 1, 0) big manager
+        0.070,   # 0: barriers
+        0.030,   # 1: roadies
+        0.030,   # 2: big roadie
+        0.120,   # 3: groupies (1)
+        0.200,   # 4: groupies (2)
+        0.040,   # 5: groupies (3,T)
+        0.040,   # 6: groupies (3,W)
+        0.040,   # 7: big groupies
+        0.070,   # 8: promoter (1)
+        0.035,   # 9: promoter (3,T)
+        0.090,   # 10: promoter (2,W)
+        0.055,   # 11: big promoter
+        0.025,   # 12: photographers (3)
+        0.060,   # 13: photographers (2)
+        0.060,   # 14: big photographer
+        0.035,   # 15: big manager
     ]))
     ASSET_CONFIG: tuple = struct.field(pytree_node=False, default_factory=get_default_asset_config)
 
-    # Diagonal movement: per-group probability of spawning with horizontal velocity.
-    # One entry per group in obstacle_groups. 0.0 = always vertical, 1.0 = always diagonal.
+    # --- Level progression (band member runs + difficulty patterns) ---
+    # Mods may set start_difficulty_level to skip ahead; -1 = start at 0.
+    start_difficulty_level: int = struct.field(pytree_node=False, default=0)
+    lock_difficulty_level: bool = struct.field(pytree_node=False, default=False)
+    num_band_members: int = struct.field(pytree_node=False, default=5)
+    num_difficulty_levels: int = struct.field(pytree_node=False, default=5)
+    # Scarab appears after this many timer units elapse on the current run.
+    # Multi-level ALE front-hug: ~54–56 units across bands 0–2 (scarab near 0:04–0:12).
+    escape_after_timer_units: int = struct.field(pytree_node=False, default=55)
+    leftover_time_bonus_per_unit: int = struct.field(pytree_node=False, default=100)
+    round_clear_bonus: int = struct.field(pytree_node=False, default=50000)
+
+    # Per-difficulty profiles (indexed by difficulty_level 0..4)
+    # Horizontal period: 1 = 1px/frame sideways, 2 = 0.5px/frame
+    level_horizontal_period: Tuple[int, ...] = struct.field(
+        pytree_node=False, default_factory=lambda: (2, 2, 1, 2, 2)
+    )
+    # Non-barrier diagonal probability (barriers always 0)
+    level_enemy_diagonal_prob: Tuple[float, ...] = struct.field(
+        pytree_node=False, default_factory=lambda: (0.0, 1.0, 1.0, 1.0, 1.0)
+    )
+    level_speed_alternates: Tuple[bool, ...] = struct.field(
+        pytree_node=False, default_factory=lambda: (False, False, False, True, False)
+    )
+    level_random_switch_prob: Tuple[float, ...] = struct.field(
+        pytree_node=False, default_factory=lambda: (0.0, 0.0, 0.0, 0.0, 0.4)
+    )
+    # Level 3 (steep): every Nth frame skip horizontal (only move down). 0 = disabled.
+    level_steep_skip_every: Tuple[int, ...] = struct.field(
+        pytree_node=False, default_factory=lambda: (0, 0, 16, 0, 0)
+    )
+
+    # Legacy mod overrides (used when lock_difficulty / mods set these directly).
+    # When use_level_profiles is True (default), per-level tables above win unless mods override.
+    use_level_profiles: bool = struct.field(pytree_node=False, default=True)
+
+    # Diagonal movement: per-group probability (legacy / mod override path).
     diagonal_probabilities: Tuple[float, ...] = struct.field(pytree_node=False, default_factory=lambda: (
         0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
         0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
     ))
-    # Horizontal move period for diagonal obstacles (move 1px every N frames)
     obstacle_horizontal_move_period: int = struct.field(pytree_node=False, default=2)
-    # When True, horizontal move period alternates between 2 and 1 on each wall bounce
     diagonal_speed_alternates: bool = struct.field(pytree_node=False, default=False)
-    # Per-frame probability of spontaneous direction flip (0.0 = never, checked every frame)
     diagonal_random_switch_prob: float = struct.field(pytree_node=False, default=0.0)
-    # Cooldown frames after a direction switch before another can happen
     diagonal_random_switch_cooldown: int = struct.field(pytree_node=False, default=20)
-    # For randomized cooldown = base + random(0..range)
     diagonal_random_switch_cooldown_range: int = struct.field(pytree_node=False, default=40)
-    # When True, random direction switches are per-obstacle instead of per-group
     diagonal_switch_per_obstacle: bool = struct.field(pytree_node=False, default=False)
+    # Steep-diagonal skip (legacy / mod); 0 disables. Level profiles also set this.
+    steep_skip_horizontal_every: int = struct.field(pytree_node=False, default=0)
 
 @struct.dataclass
 class JourneyEscapeState:
@@ -253,11 +279,18 @@ class JourneyEscapeState:
     walking_direction: chex.Array  # can be {0, 1, 2} for {up/down, right, left}
     game_over: chex.Array
 
-    row_timer: chex.Array  # int32
+    row_timer: chex.Array  # int32 — scroll-px accumulator toward next spawn row
     obstacles: chex.Array  # (MAX_OBS, 8) -> x, y, w, h, type_idx, dx, move_period, switch_cd | [pool]
     obstacle_frames: chex.Array
     invincibility_timer: chex.Array
+    manager_shield: chex.Array  # bool — invincible until escape vehicle (Mighty Manager)
     spawn_count: chex.Array
+    rows_spawned: chex.Array  # obstacle rows spawned this band-member run
+    escape_spawned: chex.Array  # bool — Scarab already queued/spawned this run
+    escape_at_countdown: chex.Array  # countdown value at which Scarab is due
+    awaiting_fire: chex.Array  # bool — between-wave / start lock until FIRE
+    band_member: chex.Array  # 0..4
+    difficulty_level: chex.Array  # 0..4 movement pattern
     rng_key: chex.Array  # PRNGKey
 
     hit_cooldown: chex.Array  # int32
@@ -267,17 +300,12 @@ class JourneyEscapeState:
     bg_frames: chex.Array
 
 @struct.dataclass
-class EntityPosition:
-    x: jnp.ndarray
-    y: jnp.ndarray
-    width: jnp.ndarray
-    height: jnp.ndarray
-    invincibility_timer: jnp.ndarray
-
-@struct.dataclass
 class JourneyEscapeObservation:
-    player: EntityPosition
-    obstacles: chex.Array
+    player: ObjectObservation
+    obstacles: ObjectObservation  # n=MAX_OBS
+    score: chex.Array
+    countdown: chex.Array
+    band_member: chex.Array
 
 @struct.dataclass
 class JourneyEscapeInfo:
@@ -303,7 +331,13 @@ class JaxJourneyEscape(
         player_x = self.consts.start_player_x
 
         empty_boxes = jnp.zeros((self.consts.MAX_OBS, 8), dtype=jnp.int32)
-        rng_key = jax.random.PRNGKey(0)
+        rng_key = key if key is not None else jax.random.PRNGKey(0)
+        start_diff = jnp.array(self.consts.start_difficulty_level, dtype=jnp.int32)
+        start_cd = jnp.array(self.consts.start_countdown, dtype=jnp.int32)
+        escape_at = jnp.maximum(
+            start_cd - jnp.int32(self.consts.escape_after_timer_units),
+            jnp.int32(0),
+        )
 
         state = JourneyEscapeState(
             player_y=jnp.array(player_y, dtype=jnp.int32),
@@ -317,10 +351,19 @@ class JaxJourneyEscape(
             obstacles=empty_boxes,
             obstacle_frames=jnp.array(0, dtype=jnp.int32),
             invincibility_timer=jnp.array(0, dtype=jnp.int32),
+            manager_shield=jnp.array(False, dtype=jnp.bool_),
             spawn_count=jnp.array(0, dtype=jnp.int32),
+            rows_spawned=jnp.array(0, dtype=jnp.int32),
+            escape_spawned=jnp.array(False, dtype=jnp.bool_),
+            escape_at_countdown=escape_at,
+            # First level after reset is immediately playable; FIRE-lock is only
+            # used when advancing to the next band member after a Scarab collect.
+            awaiting_fire=jnp.array(False, dtype=jnp.bool_),
+            band_member=jnp.array(0, dtype=jnp.int32),
+            difficulty_level=start_diff,
             rng_key=rng_key,
             hit_cooldown=jnp.array(0, dtype=jnp.int32),
-            countdown=jnp.array(self.consts.start_countdown, dtype=jnp.int32),
+            countdown=start_cd,
             bg_frames=jnp.array(0, dtype=jnp.int32),
         )
 
@@ -348,6 +391,22 @@ class JaxJourneyEscape(
 
         right_normal = (action == Action.RIGHT) | (action == Action.UPRIGHT) | (action == Action.DOWNRIGHT)
         right_fire = (action == Action.RIGHTFIRE) | (action == Action.UPRIGHTFIRE) | (action == Action.DOWNRIGHTFIRE)
+
+        # Between-wave lock after a Scarab collect: ALE freezes the player (and
+        # timer) until FIRE while obstacles keep scrolling. Not used on reset /
+        # first band member — only when advancing afterwards.
+        is_fire = (
+            (action == Action.FIRE)
+            | (action == Action.UPFIRE)
+            | (action == Action.DOWNFIRE)
+            | left_fire
+            | right_fire
+            | (action == Action.UPLEFTFIRE)
+            | (action == Action.UPRIGHTFIRE)
+            | (action == Action.DOWNLEFTFIRE)
+            | (action == Action.DOWNRIGHTFIRE)
+        )
+        new_awaiting_fire = state.awaiting_fire & jnp.logical_not(is_fire)
 
         # Compute vertical movement
         dy_int = jnp.where(
@@ -383,6 +442,10 @@ class JaxJourneyEscape(
             ),
         )
 
+        # Ignore movement while waiting for FIRE
+        dy_int = jnp.where(state.awaiting_fire, jnp.int32(0), dy_int)
+        dx_int = jnp.where(state.awaiting_fire, jnp.int32(0), dx_int)
+
 
 
         # advance walking animation every frame, independent of input
@@ -414,12 +477,49 @@ class JaxJourneyEscape(
         boxes = boxes.at[:, 1].set(boxes[:, 1] + dy_obs)
 
         # --- Diagonal Movement (horizontal velocity from dx column) ---
+        # Resolve active difficulty profile (concurrent levels; mods may lock via start_difficulty).
+        diff_i = jnp.clip(state.difficulty_level, 0, self.consts.num_difficulty_levels - 1)
+        level_periods = jnp.array(self.consts.level_horizontal_period, dtype=jnp.int32)
+        level_enemy_diag = jnp.array(self.consts.level_enemy_diagonal_prob, dtype=jnp.float32)
+        level_alternates = jnp.array(self.consts.level_speed_alternates, dtype=jnp.bool_)
+        level_switch_p = jnp.array(self.consts.level_random_switch_prob, dtype=jnp.float32)
+        level_steep_skip = jnp.array(self.consts.level_steep_skip_every, dtype=jnp.int32)
+
+        active_period_default = jnp.where(
+            self.consts.use_level_profiles,
+            level_periods[diff_i],
+            jnp.int32(self.consts.obstacle_horizontal_move_period),
+        )
+        active_alternates = jnp.where(
+            self.consts.use_level_profiles,
+            level_alternates[diff_i],
+            jnp.bool_(self.consts.diagonal_speed_alternates),
+        )
+        active_switch_prob = jnp.where(
+            self.consts.use_level_profiles,
+            level_switch_p[diff_i],
+            jnp.float32(self.consts.diagonal_random_switch_prob),
+        )
+        active_steep_skip = jnp.where(
+            self.consts.use_level_profiles,
+            level_steep_skip[diff_i],
+            jnp.int32(self.consts.steep_skip_horizontal_every),
+        )
+        active_enemy_diag = jnp.where(
+            self.consts.use_level_profiles,
+            level_enemy_diag[diff_i],
+            jnp.float32(0.0),  # unused when not profiling; spawn reads consts.diagonal_probabilities
+        )
+
         obs_dx = boxes[:, 5]  # per-obstacle horizontal velocity (-1, 0, or +1)
         obs_move_period = boxes[:, 6]  # per-obstacle move period
         # Use per-obstacle period: move 1px when frame aligns with this obstacle's period
         # For inactive obstacles or period=0 (straight movers), never move horizontally
         safe_period = jnp.where(obs_move_period > 0, obs_move_period, 1)
         should_move_h = active & (obs_move_period > 0) & ((state.time % safe_period) == 0)
+        # Level 3 steep quirk: every Nth frame, only move down (skip sideways).
+        steep_skip_now = (active_steep_skip > 0) & ((state.time % active_steep_skip) == (active_steep_skip - 1))
+        should_move_h = should_move_h & jnp.logical_not(steep_skip_now)
         effective_dx_obs = jnp.where(should_move_h, obs_dx, 0)
         new_obs_x = boxes[:, 0] + effective_dx_obs
 
@@ -451,7 +551,7 @@ class JaxJourneyEscape(
 
         # Alternate speed on bounce: toggle move_period between 2 (slow) and 1 (fast)
         new_move_period = jnp.where(
-            should_flip & self.consts.diagonal_speed_alternates,
+            should_flip & active_alternates,
             jnp.where(obs_move_period == 2, 1, 2),
             obs_move_period
         )
@@ -476,7 +576,7 @@ class JaxJourneyEscape(
             wall_cd_rand_per_obs[group_rep_idx]
         )
         wall_bounce_cd = jnp.where(
-            should_flip & (self.consts.diagonal_random_switch_prob > 0.0),
+            should_flip & (active_switch_prob > 0.0),
             wall_cd_rand,
             boxes[:, 7]
         )
@@ -504,7 +604,7 @@ class JaxJourneyEscape(
             switch_cd[group_rep_idx] == 0
         )
 
-        obs_should_switch = active & is_diagonal_obs & effective_cd_ready & (effective_roll < self.consts.diagonal_random_switch_prob)
+        obs_should_switch = active & is_diagonal_obs & effective_cd_ready & (effective_roll < active_switch_prob)
 
         current_dx = boxes[:, 5]
         boxes = boxes.at[:, 5].set(jnp.where(obs_should_switch, -current_dx, current_dx))
@@ -520,22 +620,35 @@ class JaxJourneyEscape(
         switch_cd = jnp.where(obs_should_switch, effective_cd, switch_cd)
         boxes = boxes.at[:, 7].set(switch_cd)
 
-        # Cull: deactivate obstacles 30px before the bottom of the screen
+        # Cull: deactivate obstacles 30px before the bottom of the screen.
+        # Escape vehicle (type 10): if it scrolls off without being collected, allow a re-spawn.
         cull_y = self.consts.screen_height - 30
         offscreen = boxes[:, 1] >= cull_y
+        is_escape_box = boxes[:, 4] == 10
+        escape_missed = jnp.any(offscreen & is_escape_box & (boxes[:, 3] > 0))
         new_heights = jnp.where(offscreen, 0, boxes[:, 3])  # int32[N]
         boxes = boxes.at[:, 3].set(new_heights)
+        # If the Scarab scrolled off, clear the spawned flag so another can appear.
+        escape_spawned_after_cull = state.escape_spawned & jnp.logical_not(escape_missed)
 
-        # carry-through for new fields (no behavior change yet)
-        new_row_timer = (state.row_timer + 1) % self.consts.row_spawn_period_frames
-        new_rng = new_rng_after_switch  # key consumed by random direction switch
+        # Distance-based spawn cadence (ALE: denser at front because scroll is 2px/frame).
+        scroll_px = self.consts.obstacle_speed_px_per_frame + obstacles_dy_int
+        scroll_accum = state.row_timer + scroll_px
+        spawn_ready = scroll_accum >= self.consts.spawn_every_scroll_px
+        # Hold at threshold while waiting for free pool slots.
+        scroll_accum = jnp.where(
+            spawn_ready,
+            jnp.int32(self.consts.spawn_every_scroll_px),
+            scroll_accum,
+        )
+        new_rng = new_rng_after_switch
 
-        # Trigger: every row_spawn_period_frames frames
-        spawn_now = (new_row_timer == 0)
-
-        def spawn_if_cadence(carry):
-            boxes_in, rng_in, sp_count = carry
+        def spawn_if_ready(carry):
+            boxes_in, rng_in, sp_count, rows_done, esc_spawned, accum_in = carry
             rng_in, r1, r2, r3, r4 = jax.random.split(rng_in, 5)
+
+            # Timer-gated Scarab (ALE L1: due when countdown hits escape_at_countdown).
+            force_escape = (state.countdown <= state.escape_at_countdown) & jnp.logical_not(esc_spawned)
 
             # Random Selection based on weights.
             logits = jnp.log(self.consts.spawn_weights)
@@ -545,9 +658,9 @@ class JaxJourneyEscape(
             presets = jnp.array(self.consts.obstacle_groups, dtype=jnp.int32)
             group_data = presets[random_idx]
 
-            type_idx = group_data[0]  # Sprite ID
-            amount = group_data[1]
-            spacing = group_data[2]
+            type_idx = jnp.where(force_escape, jnp.int32(10), group_data[0])
+            amount = jnp.where(force_escape, jnp.int32(1), group_data[1])
+            spacing = jnp.where(force_escape, jnp.int32(0), group_data[2])
 
             # Lookup dimensions based on type_idx
             width_table = jnp.array(self.consts.TYPE_WIDTHS, dtype=jnp.int32)
@@ -564,10 +677,23 @@ class JaxJourneyEscape(
             max_x = self.consts.right_border - total_w
             span = (max_x - min_x) + 1
             spawn_x = min_x + jax.random.randint(r2, (), 0, span)
+            # Align Scarab with the default player lane so holding UP can catch it.
+            lane_x = jnp.int32(self.consts.start_player_x - (this_w // 4))
+            lane_x = jnp.clip(lane_x, min_x, max_x)
+            spawn_x = jnp.where(force_escape, lane_x, spawn_x)
 
             # --- Diagonal Movement: determine dx for this group ---
-            diag_probs = jnp.array(self.consts.diagonal_probabilities)
-            diag_prob = diag_probs[random_idx]  # probability for this group
+            if self.consts.use_level_profiles:
+                diag_prob = jnp.where(type_idx == 0, jnp.float32(0.0), active_enemy_diag)
+                spawn_period = active_period_default
+            else:
+                diag_probs = jnp.array(self.consts.diagonal_probabilities)
+                diag_prob = diag_probs[random_idx]
+                spawn_period = jnp.int32(self.consts.obstacle_horizontal_move_period)
+            # Escape vehicle always falls straight
+            diag_prob = jnp.where(force_escape, jnp.float32(0.0), diag_prob)
+            spawn_period = jnp.where(force_escape, jnp.int32(0), spawn_period)
+
             is_diagonal = jax.random.uniform(r3, ()) < diag_prob
             # Pick direction: +1 (right) or -1 (left)
             diag_direction = jax.random.choice(r4, jnp.array([-1, 1]))
@@ -591,7 +717,7 @@ class JaxJourneyEscape(
                 hs = jnp.full((MAX_GROUP,), this_h, dtype=jnp.int32)
                 ts = jnp.full((MAX_GROUP,), type_idx, dtype=jnp.int32)
                 dxs = jnp.full((MAX_GROUP,), spawn_dx, dtype=jnp.int32)
-                mps = jnp.full((MAX_GROUP,), self.consts.obstacle_horizontal_move_period, dtype=jnp.int32)
+                mps = jnp.full((MAX_GROUP,), spawn_period, dtype=jnp.int32)
 
                 ys = jnp.full((MAX_GROUP,), self.consts.top_border, dtype=jnp.int32) - hs
 
@@ -604,21 +730,34 @@ class JaxJourneyEscape(
                     return jax.lax.cond(t < amount, place_one, lambda bb: bb, b)
 
                 boxes_out = jax.lax.fori_loop(0, MAX_GROUP, body, boxes_in)
-                return (boxes_out, rng_in, sp_count + 1)
+                # Consume one spawn period only if scroll had reached the threshold.
+                accum_out = jnp.where(
+                    accum_in >= jnp.int32(self.consts.spawn_every_scroll_px),
+                    accum_in - jnp.int32(self.consts.spawn_every_scroll_px),
+                    accum_in,
+                )
+                return (
+                    boxes_out,
+                    rng_in,
+                    sp_count + 1,
+                    rows_done + 1,
+                    esc_spawned | force_escape,
+                    accum_out,
+                )
 
             def skip_spawn(_):
-                return (boxes_in, rng_in, sp_count)
+                return (boxes_in, rng_in, sp_count, rows_done, esc_spawned, accum_in)
 
             return jax.lax.cond(enough_space, do_spawn, skip_spawn, operand=None)
 
         def no_spawn(carry):
             return carry
 
-        boxes, new_rng, new_spawn_count = jax.lax.cond(
-            spawn_now,
-            spawn_if_cadence,
+        boxes, new_rng, new_spawn_count, new_rows_spawned, new_escape_spawned, new_row_timer = jax.lax.cond(
+            spawn_ready | ((state.countdown <= state.escape_at_countdown) & jnp.logical_not(escape_spawned_after_cull)),
+            spawn_if_ready,
             no_spawn,
-            operand=(boxes, state.rng_key, state.spawn_count)
+            operand=(boxes, state.rng_key, state.spawn_count, state.rows_spawned, escape_spawned_after_cull, scroll_accum)
         )
 
         new_obstacle_frames = (state.obstacle_frames + 1) % self.consts.obstacle_frame_switch
@@ -723,26 +862,25 @@ class JaxJourneyEscape(
         new_heights_after_eat = jnp.where(is_part_of_group, 0, current_heights)
         boxes = boxes.at[:, 3].set(new_heights_after_eat)
 
-        # Invincibility Logic (Variable Duration)
+        # Invincibility Logic
+        # Roadie → timed shield. Manager → shield until escape vehicle (manual).
 
         # Identify Specific Power-up Hits
         hit_manager = jnp.any(consumable_collisions & (type_mask == 9))
         hit_roadie = jnp.any(consumable_collisions & ((type_mask == 1) | (type_mask == 5)))
+        hit_escape = jnp.any(consumable_collisions & (type_mask == 10))
 
-        # Determine Duration to Set
-        added_duration = jnp.where(
-            hit_manager,
-            self.consts.INV_DURATION_MANAGER,
-            jnp.where(hit_roadie, self.consts.INV_DURATION_ROADIE, 0)
+        new_manager_shield = (state.manager_shield | hit_manager) & jnp.logical_not(hit_escape)
+
+        # Update Roadie Invincible Timer
+        new_inv_timer = jnp.maximum(state.invincibility_timer - 1, 0)
+        new_inv_timer = jnp.where(
+            hit_roadie,
+            jnp.maximum(new_inv_timer, self.consts.INV_DURATION_ROADIE),
+            new_inv_timer,
         )
 
-        # Update Invincible Timer
-        new_inv_timer = jnp.maximum(
-            jnp.maximum(state.invincibility_timer - 1, 0),
-            added_duration
-        )
-
-        is_invincible = new_inv_timer > 0
+        is_invincible = (new_inv_timer > 0) | new_manager_shield
 
         # Override Physics (The "Ghost" Effect)
         # If invincible, we are effectively never stuck.
@@ -891,9 +1029,108 @@ class JaxJourneyEscape(
         # Update time
         new_time = (state.time + 1).astype(jnp.int32)
 
-        # Update countdown
-        update_countdown = (new_time % self.consts.countdown_frame == 0)
+        # Update countdown (frozen while awaiting FIRE between waves)
+        update_countdown = (new_time % self.consts.countdown_frame == 0) & jnp.logical_not(state.awaiting_fire)
         new_countdown = jnp.where(update_countdown, state.countdown - 1, state.countdown)
+
+        # --- Escape vehicle / band-member / difficulty progression ---
+        # Manual: reach Scarab → leftover time carries to next band member;
+        # all 5 clear → +$50k (+ leftover×$100) and continue (harder patterns).
+        def advance_after_escape(args):
+            score_in, countdown_in, band_in, diff_in, rng_in = args
+            next_band = band_in + 1
+            finished_round = next_band >= self.consts.num_band_members
+
+            # Time leftover applied to next member's 60s allotment
+            carried = countdown_in
+            time_bonus = jnp.where(
+                finished_round,
+                carried * self.consts.leftover_time_bonus_per_unit,
+                0,
+            )
+            round_bonus = jnp.where(finished_round, self.consts.round_clear_bonus, 0)
+            score_out = score_in + time_bonus + round_bonus
+
+            band_out = jnp.where(finished_round, jnp.int32(0), next_band)
+            # Advance difficulty with each successful rescue unless locked by a mod.
+            diff_out = jnp.where(
+                self.consts.lock_difficulty_level,
+                diff_in,
+                jnp.minimum(diff_in + 1, self.consts.num_difficulty_levels - 1),
+            )
+            # After a full round, stay at max difficulty (or keep climbing via lock=False already capped).
+            countdown_out = jnp.where(
+                finished_round,
+                jnp.int32(self.consts.start_countdown),
+                jnp.int32(self.consts.start_countdown) + carried,
+            )
+            escape_at_out = jnp.maximum(
+                countdown_out - jnp.int32(self.consts.escape_after_timer_units),
+                jnp.int32(0),
+            )
+            # Soft-reset the run: clear obstacles, recenter player, drop shields.
+            empty = jnp.zeros((self.consts.MAX_OBS, 8), dtype=jnp.int32)
+            return (
+                score_out.astype(jnp.int32),
+                countdown_out.astype(jnp.int32),
+                band_out.astype(jnp.int32),
+                diff_out.astype(jnp.int32),
+                jnp.array(self.consts.start_player_x, dtype=jnp.int32),
+                jnp.array(self.consts.start_player_y, dtype=jnp.int32),
+                empty,
+                jnp.array(0, dtype=jnp.int32),  # inv timer
+                jnp.array(False),                 # manager shield
+                jnp.array(0, dtype=jnp.int32),  # rows
+                jnp.array(False),                 # escape_spawned
+                escape_at_out.astype(jnp.int32),
+                jnp.array(True),                  # awaiting_fire
+                jnp.array(0, dtype=jnp.int32),  # scroll accum
+                rng_in,
+            )
+
+        def keep_run(args):
+            score_in, _countdown_in, band_in, diff_in, rng_in = args
+            return (
+                score_in,
+                new_countdown,  # keep the normal per-frame countdown tick
+                band_in,
+                diff_in,
+                new_x,
+                new_y,
+                boxes.astype(jnp.int32),
+                new_inv_timer.astype(jnp.int32),
+                new_manager_shield,
+                new_rows_spawned.astype(jnp.int32),
+                new_escape_spawned,
+                state.escape_at_countdown,
+                new_awaiting_fire,
+                new_row_timer.astype(jnp.int32),
+                rng_in,
+            )
+
+        (
+            new_score,
+            new_countdown,
+            new_band_member,
+            new_difficulty,
+            new_x,
+            new_y,
+            boxes,
+            new_inv_timer,
+            new_manager_shield,
+            new_rows_spawned,
+            new_escape_spawned,
+            new_escape_at,
+            new_awaiting_fire,
+            new_row_timer,
+            new_rng,
+        ) = jax.lax.cond(
+            hit_escape,
+            advance_after_escape,
+            keep_run,
+            # Use pre-tick countdown so leftover time isn't off-by-one on the escape frame.
+            (new_score, state.countdown, state.band_member, state.difficulty_level, new_rng),
+        )
 
         # Check game over
         game_over = jnp.where(
@@ -911,10 +1148,17 @@ class JaxJourneyEscape(
             walking_direction=new_walking_direction.astype(jnp.int32),
             game_over=game_over,
             row_timer=new_row_timer.astype(jnp.int32),
-            obstacles=boxes.astype(jnp.int32),  # updated pool
+            obstacles=boxes.astype(jnp.int32),
             obstacle_frames=new_obstacle_frames.astype(jnp.int32),
             invincibility_timer=new_inv_timer,
+            manager_shield=new_manager_shield,
             spawn_count=new_spawn_count,
+            rows_spawned=new_rows_spawned,
+            escape_spawned=new_escape_spawned,
+            escape_at_countdown=new_escape_at,
+            awaiting_fire=new_awaiting_fire,
+            band_member=new_band_member,
+            difficulty_level=new_difficulty,
             rng_key=new_rng,
             hit_cooldown=new_hit_cooldown.astype(jnp.int32),
             countdown=new_countdown.astype(jnp.int32),
@@ -935,18 +1179,49 @@ class JaxJourneyEscape(
 
     @partial(jax.jit, static_argnums=(0,))
     def _get_observation(self, state: JourneyEscapeState):
-        # create player
-        player = EntityPosition(
-            x=state.player_x,
-            y=state.player_y,
+        # Manager shield is invincible until Scarab; surface via ObjectObservation.state.
+        obs_inv = jnp.where(
+            state.manager_shield,
+            jnp.int32(9999),
+            state.invincibility_timer,
+        )
+        player = ObjectObservation.create(
+            x=state.player_x.astype(jnp.int32),
+            y=state.player_y.astype(jnp.int32),
             width=jnp.array(self.consts.player_width, dtype=jnp.int32),
             height=jnp.array(self.consts.player_height, dtype=jnp.int32),
-            invincibility_timer=state.invincibility_timer,
+            active=jnp.array(1, dtype=jnp.int32),
+            visual_id=state.band_member.astype(jnp.int32),
+            state=obs_inv.astype(jnp.int32),
+            orientation=state.walking_direction.astype(jnp.int32),
         )
 
-        # create obstacle
-        obstacles = state.obstacles[:, :5]
-        return JourneyEscapeObservation(player=player, obstacles=obstacles)
+        boxes = state.obstacles
+        obs_h = boxes[:, 3]
+        obs_type = boxes[:, 4]
+        does_exist = obs_h > 0
+        # Photographers blink off-screen for part of their cycle (match renderer).
+        is_photographer = (obs_type == 4) | (obs_type == 8)
+        cycle_len = self.consts.photographer_on_duration + self.consts.photographer_off_duration
+        cycle_pos = state.time % cycle_len
+        is_ghost = is_photographer & (cycle_pos >= self.consts.photographer_on_duration)
+        obs_active = (does_exist & jnp.logical_not(is_ghost)).astype(jnp.int32)
+
+        obstacles = ObjectObservation.create(
+            x=boxes[:, 0].astype(jnp.int32),
+            y=boxes[:, 1].astype(jnp.int32),
+            width=boxes[:, 2].astype(jnp.int32),
+            height=obs_h.astype(jnp.int32),
+            active=obs_active,
+            visual_id=obs_type.astype(jnp.int32),
+        )
+        return JourneyEscapeObservation(
+            player=player,
+            obstacles=obstacles,
+            score=state.score.astype(jnp.int32),
+            countdown=state.countdown.astype(jnp.int32),
+            band_member=state.band_member.astype(jnp.int32),
+        )
 
     @partial(jax.jit, static_argnums=(0,))
     def _get_info(self, state: JourneyEscapeState) -> JourneyEscapeInfo:
@@ -969,18 +1244,18 @@ class JaxJourneyEscape(
     def observation_space(self) -> spaces.Dict:
         """Returns the observation space for JourneyEscape.
         The observation contains:
-        - player: EntityPosition (x, y, width, height, invincibility_timer)
-        - obstacles: array of shape (10, 5) with x,y,width,height,type_idx for each obstacle
+        - player: ObjectObservation (state=invincibility / manager shield, orientation=facing, visual_id=band member)
+        - obstacles: ObjectObservation n=MAX_OBS (visual_id=type_idx; inactive when off / photographer ghost)
+        - score / countdown: HUD values visible on screen
+        - band_member: current band-member index (also on player.visual_id)
         """
+        screen = (self.consts.screen_height, self.consts.screen_width)
         return spaces.Dict({
-            "player": spaces.Dict({
-                "x": spaces.Box(low=0, high=self.consts.screen_width, shape=(), dtype=jnp.int32),
-                "y": spaces.Box(low=0, high=self.consts.screen_height, shape=(), dtype=jnp.int32),
-                "width": spaces.Box(low=0, high=self.consts.screen_width, shape=(), dtype=jnp.int32),
-                "height": spaces.Box(low=0, high=self.consts.screen_height, shape=(), dtype=jnp.int32),
-                "invincibility_timer": spaces.Box(low=0, high=100000, shape=(), dtype=jnp.int32),
-            })
-            , "obstacles": spaces.Box(low=0, high=self.consts.screen_height, shape=(self.consts.MAX_OBS, 5), dtype=jnp.int32),
+            "player": spaces.get_object_space(n=None, screen_size=screen),
+            "obstacles": spaces.get_object_space(n=self.consts.MAX_OBS, screen_size=screen),
+            "score": spaces.Box(low=0, high=99999, shape=(), dtype=jnp.int32),
+            "countdown": spaces.Box(low=0, high=100000, shape=(), dtype=jnp.int32),
+            "band_member": spaces.Box(low=0, high=4, shape=(), dtype=jnp.int32),
         })
 
     def image_space(self) -> spaces.Box:
@@ -1024,7 +1299,6 @@ class JourneyEscapeRenderer(JAXGameRenderer):
                 channels=3,
             )
         else:
-            # Ensure game_dimensions is always set from consts
             config = config.replace(
                 game_dimensions=(self.consts.screen_height, self.consts.screen_width),
             )
@@ -1032,52 +1306,24 @@ class JourneyEscapeRenderer(JAXGameRenderer):
         super().__init__(consts=self.consts, config=self.config)
         self.jr = render_utils.JaxRenderingUtils(self.config)
 
-        # Load and setup assets
-        asset_config = list(self.consts.ASSET_CONFIG) # self._get_asset_config()
+        asset_config = list(self.consts.ASSET_CONFIG)
         sprite_path = f"{os.path.dirname(os.path.abspath(__file__))}/sprites/journey_escape"
 
-        # --- ASSET GENERATION ---
-
-        # Colors (R, G, B)
         COLOR_BLACK = (0, 0, 0)
         COLOR_BLUE = (24, 26, 167)
-        #COLOR_WHITE = (255, 255, 255) # testing
 
-        # Side Bars (8px wide, full height)
-        side_bar_sprite = self._create_solid_block(
-            width=8,
-            height=self.consts.screen_height,
-            color=COLOR_BLACK
-        )
+        side_bar_sprite = self._create_solid_block(8, self.consts.screen_height, COLOR_BLACK)
+        header_sprite = self._create_solid_block(self.consts.screen_width, self.consts.top_blue_area_height, COLOR_BLUE)
+        footer_sprite = self._create_solid_block(self.consts.screen_width, self.consts.bottom_blue_area_height, COLOR_BLUE)
+        # Full-frame black canvas used only while building prebaked BGs.
+        canvas_sprite = self._create_solid_block(self.consts.screen_width, self.consts.screen_height, COLOR_BLACK)
 
-        # Header (top blue area)
-        header_sprite = self._create_solid_block(
-            width=self.consts.screen_width,
-            height=self.consts.top_blue_area_height,
-            color=COLOR_BLUE
-        )
-
-        # Footer (bottom blue area)
-        footer_sprite = self._create_solid_block(
-            width=self.consts.screen_width,
-            height=self.consts.bottom_blue_area_height,
-            color=COLOR_BLUE
-        )
-
-        # Background (full wide, full height)
-        background_sprite = self._create_solid_block(
-            width=self.consts.screen_width,
-            height=self.consts.screen_height,
-            color=COLOR_BLACK
-        )
-
-        # Add to manifest
         asset_config.append({'name': 'black_bar', 'type': 'procedural', 'data': side_bar_sprite})
         asset_config.append({'name': 'header', 'type': 'procedural', 'data': header_sprite})
         asset_config.append({'name': 'footer', 'type': 'procedural', 'data': footer_sprite})
-        asset_config.append({'name': 'background', 'type': 'procedural', 'data': background_sprite})
+        asset_config.append({'name': 'canvas', 'type': 'procedural', 'data': canvas_sprite})
+        # escape_vehicle comes from ASSET_CONFIG / escape_vehicle.npy (ALE-extracted)
 
-        # --- LOAD ASSETS ---
         (
             self.PALETTE,
             self.SHAPE_MASKS,
@@ -1086,140 +1332,123 @@ class JourneyEscapeRenderer(JAXGameRenderer):
             self.FLIP_OFFSETS
         ) = self.jr.load_and_setup_assets(asset_config, sprite_path)
 
-        self.BACKGROUND = self.SHAPE_MASKS['background']
+        # Pre-bake animated backgrounds into full-screen palette rasters (fast path).
+        # Source bg frames are 210x160; pad into 230x160 playfield under the HUD bands.
+        n_bg = int(self.consts.background_frames_amount)
+        bg_group = self.SHAPE_MASKS["backgrounds"]
+        prebaked = []
+        for i in range(n_bg):
+            # cycle through available unique frames via the asset list pattern
+            frame = bg_group[i % bg_group.shape[0]]
+            raster = self.jr.create_object_raster(self.SHAPE_MASKS["canvas"])
+            # Place the 210-tall starfield under the top padding
+            raster = self.jr.render_at(raster, 0, 10, frame)
+            prebaked.append(raster)
+        self.PREBAKED_BACKGROUNDS = jnp.stack(prebaked, axis=0)
 
     def _create_solid_block(self, width: int, height: int, color: Tuple[int, int, int]) -> jnp.ndarray:
-        """Creates a solid color sprite with full alpha."""
-        # Shape: (H, W, 4)
         block = jnp.zeros((height, width, 4), dtype=jnp.uint8)
-
-        # Set RGB
         block = block.at[:, :, 0].set(color[0])
         block = block.at[:, :, 1].set(color[1])
         block = block.at[:, :, 2].set(color[2])
-
-        # Set Alpha to 255 (Opaque)
         block = block.at[:, :, 3].set(255)
         return block
 
     @partial(jax.jit, static_argnums=(0,))
     def render(self, state):
-        raster = self.jr.create_object_raster(self.BACKGROUND)
+        # Fast path: pick a pre-baked full-frame background
+        frame_idx = (state.bg_frames // self.consts.background_frame_switch) % self.PREBAKED_BACKGROUNDS.shape[0]
+        raster = self.PREBAKED_BACKGROUNDS[frame_idx]
 
-        # Render Background
-        frame_idx = state.bg_frames // self.consts.background_frame_switch
-        bg_mask = self.SHAPE_MASKS["backgrounds"][frame_idx]
-        raster = self.jr.render_at(raster, 0, 10, bg_mask)
-
-        # Render obstacles
-        # state.obstacles has shape (MAX_OBS, 8), "active" if h > 0
         obs_boxes = state.obstacles
 
-        # barrier (ID 0) - Returns 32x15
-        BARRIER_MASK = self.SHAPE_MASKS["barrier"] # 0
-
-        # Table for Small Items (IDs 1-4) - Returns 8x15
+        BARRIER_MASK = self.SHAPE_MASKS["barrier"]
         SMALL_TABLE = [
             lambda frame: self.SHAPE_MASKS["roadie"][frame],
             lambda frame: self.SHAPE_MASKS["groupies"][frame],
-            lambda frame: self.SHAPE_MASKS["promoter"][frame], 
+            lambda frame: self.SHAPE_MASKS["promoter"][frame],
             lambda frame: self.SHAPE_MASKS["photographer"],
         ]
-
-        # Table for Big Items (IDs 5-8) - Returns 16x15
         BIG_TABLE = [
-            lambda frame: self.SHAPE_MASKS["big_roadie"][frame], 
-            lambda frame: self.SHAPE_MASKS["big_groupies"][frame], 
+            lambda frame: self.SHAPE_MASKS["big_roadie"][frame],
+            lambda frame: self.SHAPE_MASKS["big_groupies"][frame],
             lambda frame: self.SHAPE_MASKS["big_promoter"][frame],
             lambda frame: self.SHAPE_MASKS["big_photographer"],
         ]
-        
-        # For Mighty Manager (ID 9) - Returns 17x15
         MANAGER_MASK = lambda frame: self.SHAPE_MASKS["big_manager"][frame]
+        ESCAPE_MASK = self.SHAPE_MASKS["escape_vehicle"]
 
         def draw_barrier(r, x, y):
-            mask = BARRIER_MASK
-            return self.jr.render_at_clipped(r, x, y, mask)
+            return self.jr.render_at_clipped(r, x, y, BARRIER_MASK)
 
         def draw_small(r, x, y, type_idx, frame_idx):
-            # Map global ID (1,2,3,4) to local table index (0,1,2,3)
             mask = jax.lax.switch(type_idx - 1, SMALL_TABLE, frame_idx)
             return self.jr.render_at_clipped(r, x, y, mask)
 
         def draw_big(r, x, y, type_idx, frame_idx):
-            # Map global ID (5,6,7,8) to local table index (0,1,2,3)
             mask = jax.lax.switch(type_idx - 5, BIG_TABLE, frame_idx)
             return self.jr.render_at_clipped(r, x, y, mask)
 
         def draw_manager(r, x, y, frame_idx):
-            mask = MANAGER_MASK(frame_idx)
-            return self.jr.render_at_clipped(r, x, y, mask)
+            return self.jr.render_at_clipped(r, x, y, MANAGER_MASK(frame_idx))
+
+        def draw_escape(r, x, y):
+            return self.jr.render_at_clipped(r, x, y, ESCAPE_MASK)
 
         def body(i, r):
             box = obs_boxes[i]
             box_h = box[3]
             obs_type = box[4]
-
             does_exist = box_h > 0
-
             is_photographer = (obs_type == 4) | (obs_type == 8)
-
             cycle_len = self.consts.photographer_on_duration + self.consts.photographer_off_duration
             cycle_pos = state.time % cycle_len
-
             is_ghost = is_photographer & (cycle_pos >= self.consts.photographer_on_duration)
-
-            # Final Decision: Draw if existing AND not a ghost
             should_draw = does_exist & jnp.logical_not(is_ghost)
-
             x, y = box[0], box[1]
             obs_frame_idx = jnp.where(state.obstacle_frames >= (self.consts.obstacle_frame_switch // 2), 0, 1)
 
             def render_op(curr_raster):
                 return jax.lax.cond(
-                    obs_type >= 5,
+                    obs_type == 10,
+                    lambda _r: draw_escape(_r, x, y),
                     lambda _r: jax.lax.cond(
-                                    obs_type == 9,
-                                    lambda _r: draw_manager(_r, x, y, obs_frame_idx),
-                                    lambda _r: draw_big(_r, x, y, obs_type, obs_frame_idx),
-                                    _r
-                                ),
-                    lambda _r: jax.lax.cond(
-                                    obs_type == 0,
-                                    lambda _r: draw_barrier(_r, x, y),
-                                    lambda _r: draw_small(_r, x, y, obs_type, obs_frame_idx),
-                                    _r
-                                ),
-                    curr_raster
+                        obs_type >= 5,
+                        lambda __r: jax.lax.cond(
+                            obs_type == 9,
+                            lambda ___r: draw_manager(___r, x, y, obs_frame_idx),
+                            lambda ___r: draw_big(___r, x, y, obs_type, obs_frame_idx),
+                            __r,
+                        ),
+                        lambda __r: jax.lax.cond(
+                            obs_type == 0,
+                            lambda ___r: draw_barrier(___r, x, y),
+                            lambda ___r: draw_small(___r, x, y, obs_type, obs_frame_idx),
+                            __r,
+                        ),
+                        _r,
+                    ),
+                    curr_raster,
                 )
 
             return jax.lax.cond(should_draw, render_op, lambda _r: _r, r)
 
-        # Iterate all possible slots
         raster = jax.lax.fori_loop(0, obs_boxes.shape[0], body, raster)
 
-        # Select player sprite based on walking frames and direction
         use_idle = state.walking_frames < (self.consts.player_frame_switch // 2)
         sprite_index = state.walking_direction * 2
         player_frame_index = jax.lax.select(use_idle, sprite_index, sprite_index + 1)
-
         player_mask = self.SHAPE_MASKS["player"][player_frame_index]
         raster = self.jr.render_at(raster, state.player_x, state.player_y, player_mask)
 
-        # Render Header (Top Blue)
         header_pos_y = self.consts.top_border - self.consts.top_blue_area_height
-        header_mask = self.SHAPE_MASKS["header"]
-        raster = self.jr.render_at(raster, 0, header_pos_y, header_mask)
+        raster = self.jr.render_at(raster, 0, header_pos_y, self.SHAPE_MASKS["header"])
+        raster = self.jr.render_at(raster, 0, self.consts.bottom_border, self.SHAPE_MASKS["footer"])
 
-        # Render Footer (Bottom Blue)
-        footer_mask = self.SHAPE_MASKS["footer"]
-        raster = self.jr.render_at(raster, 0, self.consts.bottom_border, footer_mask)
-
-        # Render Score (On top of Blue Header)
         score_digits = self.jr.int_to_digits(state.score, max_digits=5)
         score_digit_masks = self.SHAPE_MASKS["score_digits"]
         num_to_render = (
-            1 
+            1
             + (state.score >= 10).astype(jnp.int32)
             + (state.score >= 100).astype(jnp.int32)
             + (state.score >= 1000).astype(jnp.int32)
@@ -1228,27 +1457,29 @@ class JourneyEscapeRenderer(JAXGameRenderer):
         start_index = 5 - num_to_render
         render_x_pos = ((self.consts.screen_width // 2) + 19) - (num_to_render * 8)
         raster = self.jr.render_at(raster, render_x_pos - 8, 6, self.SHAPE_MASKS["dollar"])
-        raster = self.jr.render_label_selective(raster, render_x_pos, 6,
-                                                score_digits,
-                                                score_digit_masks, start_index,num_to_render, spacing=8, 
-                                                max_digits_to_render=5)
+        raster = self.jr.render_label_selective(
+            raster, render_x_pos, 6, score_digits, score_digit_masks, start_index, num_to_render,
+            spacing=8, max_digits_to_render=5,
+        )
 
-        # Render Countdown (On top of Blue Header)
-        countdown_digits = self.jr.int_to_digits(state.countdown, max_digits=2)
+        # Timer as M:SS. Leftover time can push the countdown past 99; the old
+        # 2-digit clip made Level 3+ look frozen at 0:99 until it dropped.
+        minutes = state.countdown // 60
+        seconds = state.countdown % 60
+        minute_digits = self.jr.int_to_digits(minutes, max_digits=1)
+        second_digits = self.jr.int_to_digits(seconds, max_digits=2)
         countdown_digit_masks = self.SHAPE_MASKS["timer_digits"]
-        num_to_render = 2
         render_x_pos = (self.consts.screen_width // 2) - 3
-        raster = self.jr.render_at(raster, render_x_pos - 9, 18, self.SHAPE_MASKS["timer_digits"][0]) # Renders the fixed leading 0
+        raster = self.jr.render_label_selective(
+            raster, render_x_pos - 9, 18, minute_digits, countdown_digit_masks, 0, 1, spacing=7,
+        )
         raster = self.jr.render_at(raster, render_x_pos - 3, 18, self.SHAPE_MASKS["timer_colon"])
-        raster = self.jr.render_label_selective(raster, render_x_pos, 18,
-                                                countdown_digits, # the remaining seconds
-                                                countdown_digit_masks, 0, num_to_render, spacing=7)
+        raster = self.jr.render_label_selective(
+            raster, render_x_pos, 18, second_digits, countdown_digit_masks, 0, 2, spacing=7,
+        )
 
-        # Render Side Bars (Black)
         black_bar_mask = self.SHAPE_MASKS["black_bar"]
-        # left bar
         raster = self.jr.render_at(raster, 0, 0, black_bar_mask)
-        # right bar
         raster = self.jr.render_at(raster, self.consts.screen_width - 8, 0, black_bar_mask)
 
         return self.jr.render_from_palette(raster, self.PALETTE)

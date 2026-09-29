@@ -3,50 +3,11 @@ from functools import partial
 import jax
 import jax.numpy as jnp
 
-from jaxatari.modification import JaxAtariPostStepModPlugin
+from jaxatari.modification import JaxAtariInternalModPlugin, JaxAtariPostStepModPlugin
 from jaxatari.games.jax_videochess import BoardHandler
 
-class RandomBotBlackMod(JaxAtariPostStepModPlugin):
-    @partial(jax.jit, static_argnums=(0,))
-    def run(self, prev_state, new_state):
-        env = self._env
-        for _ in range(6):
-            if hasattr(env, "_env"):
-                env = env._env
-            else:
-                break
-
-        return env.random_black_reply(prev_state, new_state)
-
-
-class GreedyBotBlackMod(JaxAtariPostStepModPlugin):
-    @partial(jax.jit, static_argnums=(0,))
-    def run(self, prev_state, new_state):
-        env = self._env
-        for _ in range(6):
-            if hasattr(env, "_env"):
-                env = env._env
-            else:
-                break
-
-        return env.greedy_black_reply(prev_state, new_state)
-
-
-class MinimaxBotBlackMod(JaxAtariPostStepModPlugin):
-    @partial(jax.jit, static_argnums=(0,))
-    def run(self, prev_state, new_state):
-        env = self._env
-        for _ in range(6):
-            if hasattr(env, "_env"):
-                env = env._env
-            else:
-                break
-
-        return env.minimax_black_reply(prev_state, new_state)
-    
 
 def _unwrap_to_base_env(env, max_depth: int = 8):
-    # unwrap controller/wrapper chain until we reach the actual game env
     for _ in range(max_depth):
         if hasattr(env, "_env"):
             env = env._env
@@ -60,14 +21,12 @@ def _empty_board(c):
 
 
 def _place_kings(board, c):
-    # Keep standard chess king squares: black top, white bottom
     board = board.at[0, 4].set(jnp.int32(c.B_KING))
     board = board.at[7, 4].set(jnp.int32(c.W_KING))
     return board
 
 
 def _reset_state_with_board(state, board, c):
-    # Keep cursor as-is, but clear selection / blink state
     return state.replace(
         board=board,
         to_move=jnp.int32(c.COLOUR_WHITE),
@@ -75,128 +34,47 @@ def _reset_state_with_board(state, board, c):
         selected_square=jnp.array([-1, -1], dtype=jnp.int32),
         last_move_target=jnp.array([-1, -1], dtype=jnp.int32),
         last_move_timer=jnp.int32(0),
+        highlight_squares=jnp.full((c.MAX_MOVES_PER_PIECE, 2), -1, dtype=jnp.int32),
     )
 
 
-class PawnsOnlyMod(JaxAtariPostStepModPlugin):
-    """All non-king pieces are pawns."""
+# ---------------------------------------------------------------------------
+# Opponent / control mods (constants → BLACK_BOT_KIND)
+# Default env: BLACK_BOT_KIND=3 (minimax). play_both_sides turns the bot off.
+# ---------------------------------------------------------------------------
 
-    @partial(jax.jit, static_argnums=(0,))
-    def after_reset(self, obs, state):
-        env = _unwrap_to_base_env(self._env)
-        c = env.consts
+class PlayBothSidesMod(JaxAtariInternalModPlugin):
+    """Human controls both white and black (no automatic black reply)."""
 
-        board = _empty_board(c)
-
-        # Fill the same squares that would normally be occupied at game start:
-        # Black pieces on ranks 0-1, white pieces on ranks 6-7.
-        board = board.at[0, :].set(jnp.int32(c.B_PAWN))
-        board = board.at[1, :].set(jnp.int32(c.B_PAWN))
-        board = board.at[6, :].set(jnp.int32(c.W_PAWN))
-        board = board.at[7, :].set(jnp.int32(c.W_PAWN))
-
-        # Keep exactly one king per side on the standard squares.
-        board = _place_kings(board, c)
-
-        state = _reset_state_with_board(state, board, c)
-        obs = obs.replace(board=state.board) if hasattr(obs, "replace") else obs
-        return obs, state
+    constants_overrides = {"BLACK_BOT_KIND": 0}
 
 
-class QueensOnlyMod(JaxAtariPostStepModPlugin):
-    """All non-king pieces are queens."""
+class RandomBotBlackMod(JaxAtariInternalModPlugin):
+    """Black replies with a random legal move after white moves."""
 
-    @partial(jax.jit, static_argnums=(0,))
-    def after_reset(self, obs, state):
-        env = _unwrap_to_base_env(self._env)
-        c = env.consts
-
-        board = _empty_board(c)
-
-        # Fill the same squares that would normally be occupied at game start:
-        # Black pieces on ranks 0-1, white pieces on ranks 6-7.
-        board = board.at[0, :].set(jnp.int32(c.B_QUEEN))
-        board = board.at[1, :].set(jnp.int32(c.B_QUEEN))
-        board = board.at[6, :].set(jnp.int32(c.W_QUEEN))
-        board = board.at[7, :].set(jnp.int32(c.W_QUEEN))
-
-        # Keep exactly one king per side on the standard squares.
-        board = _place_kings(board, c)
-
-        state = _reset_state_with_board(state, board, c)
-        obs = obs.replace(board=state.board) if hasattr(obs, "replace") else obs
-        return obs, state
+    constants_overrides = {"BLACK_BOT_KIND": 1}
 
 
-class RooksOnlyMod(JaxAtariPostStepModPlugin):
-    """All non-king pieces are rooks."""
+class GreedyBotBlackMod(JaxAtariInternalModPlugin):
+    """Black replies with a greedy material-capture move after white moves."""
 
-    @partial(jax.jit, static_argnums=(0,))
-    def after_reset(self, obs, state):
-        env = _unwrap_to_base_env(self._env)
-        c = env.consts
-
-        board = _empty_board(c)
-
-        board = board.at[0, :].set(jnp.int32(c.B_ROOK))
-        board = board.at[1, :].set(jnp.int32(c.B_ROOK))
-        board = board.at[6, :].set(jnp.int32(c.W_ROOK))
-        board = board.at[7, :].set(jnp.int32(c.W_ROOK))
-
-        # Keep exactly one king per side on the standard squares.
-        board = _place_kings(board, c)
-
-        state = _reset_state_with_board(state, board, c)
-        obs = obs.replace(board=state.board) if hasattr(obs, "replace") else obs
-        return obs, state
+    constants_overrides = {"BLACK_BOT_KIND": 2}
 
 
-class KnightsOnlyMod(JaxAtariPostStepModPlugin):
-    """All non-king pieces are knights."""
+class MinimaxBotBlackMod(JaxAtariInternalModPlugin):
+    """Black replies with depth-2 minimax (this is the unmodded default)."""
 
-    @partial(jax.jit, static_argnums=(0,))
-    def after_reset(self, obs, state):
-        env = _unwrap_to_base_env(self._env)
-        c = env.consts
-
-        board = _empty_board(c)
-
-        board = board.at[0, :].set(jnp.int32(c.B_KNIGHT))
-        board = board.at[1, :].set(jnp.int32(c.B_KNIGHT))
-        board = board.at[6, :].set(jnp.int32(c.W_KNIGHT))
-        board = board.at[7, :].set(jnp.int32(c.W_KNIGHT))
-
-        board = _place_kings(board, c)
-
-        state = _reset_state_with_board(state, board, c)
-        obs = obs.replace(board=state.board) if hasattr(obs, "replace") else obs
-        return obs, state
+    constants_overrides = {"BLACK_BOT_KIND": 3}
 
 
-class BishopsOnlyMod(JaxAtariPostStepModPlugin):
-    """All non-king pieces are bishops."""
+class InstantMovementMod(JaxAtariInternalModPlugin):
+    """Held direction inputs repeat every frame (FIRE stays edge-triggered)."""
 
-    @partial(jax.jit, static_argnums=(0,))
-    def after_reset(self, obs, state):
-        env = _unwrap_to_base_env(self._env)
-        c = env.consts
-
-        board = _empty_board(c)
-
-        board = board.at[0, :].set(jnp.int32(c.B_BISHOP))
-        board = board.at[1, :].set(jnp.int32(c.B_BISHOP))
-        board = board.at[6, :].set(jnp.int32(c.W_BISHOP))
-        board = board.at[7, :].set(jnp.int32(c.W_BISHOP))
-
-        board = _place_kings(board, c)
-
-        state = _reset_state_with_board(state, board, c)
-        obs = obs.replace(board=state.board) if hasattr(obs, "replace") else obs
-        return obs, state
+    constants_overrides = {"INPUT_EDGE_TRIGGERED": False}
 
 
 class LegalMovesDisplayMod(JaxAtariPostStepModPlugin):
-    """Highlights legal moves for the currently selected piece."""
+    """Show legal-move indicator dots for the currently selected piece."""
 
     @partial(jax.jit, static_argnums=(0,))
     def run(self, prev_state, new_state):
@@ -217,8 +95,98 @@ class LegalMovesDisplayMod(JaxAtariPostStepModPlugin):
         )
         return new_state.replace(highlight_squares=highlights)
 
+
+# ---------------------------------------------------------------------------
+# Board setup mods
+# ---------------------------------------------------------------------------
+
+class PawnsOnlyMod(JaxAtariPostStepModPlugin):
+    """All non-king pieces are pawns."""
+
     @partial(jax.jit, static_argnums=(0,))
     def after_reset(self, obs, state):
+        env = _unwrap_to_base_env(self._env)
+        c = env.consts
+        board = _empty_board(c)
+        board = board.at[0, :].set(jnp.int32(c.B_PAWN))
+        board = board.at[1, :].set(jnp.int32(c.B_PAWN))
+        board = board.at[6, :].set(jnp.int32(c.W_PAWN))
+        board = board.at[7, :].set(jnp.int32(c.W_PAWN))
+        board = _place_kings(board, c)
+        state = _reset_state_with_board(state, board, c)
+        obs = obs.replace(board=state.board) if hasattr(obs, "replace") else obs
+        return obs, state
+
+
+class QueensOnlyMod(JaxAtariPostStepModPlugin):
+    """All non-king pieces are queens."""
+
+    @partial(jax.jit, static_argnums=(0,))
+    def after_reset(self, obs, state):
+        env = _unwrap_to_base_env(self._env)
+        c = env.consts
+        board = _empty_board(c)
+        board = board.at[0, :].set(jnp.int32(c.B_QUEEN))
+        board = board.at[1, :].set(jnp.int32(c.B_QUEEN))
+        board = board.at[6, :].set(jnp.int32(c.W_QUEEN))
+        board = board.at[7, :].set(jnp.int32(c.W_QUEEN))
+        board = _place_kings(board, c)
+        state = _reset_state_with_board(state, board, c)
+        obs = obs.replace(board=state.board) if hasattr(obs, "replace") else obs
+        return obs, state
+
+
+class RooksOnlyMod(JaxAtariPostStepModPlugin):
+    """All non-king pieces are rooks."""
+
+    @partial(jax.jit, static_argnums=(0,))
+    def after_reset(self, obs, state):
+        env = _unwrap_to_base_env(self._env)
+        c = env.consts
+        board = _empty_board(c)
+        board = board.at[0, :].set(jnp.int32(c.B_ROOK))
+        board = board.at[1, :].set(jnp.int32(c.B_ROOK))
+        board = board.at[6, :].set(jnp.int32(c.W_ROOK))
+        board = board.at[7, :].set(jnp.int32(c.W_ROOK))
+        board = _place_kings(board, c)
+        state = _reset_state_with_board(state, board, c)
+        obs = obs.replace(board=state.board) if hasattr(obs, "replace") else obs
+        return obs, state
+
+
+class KnightsOnlyMod(JaxAtariPostStepModPlugin):
+    """All non-king pieces are knights."""
+
+    @partial(jax.jit, static_argnums=(0,))
+    def after_reset(self, obs, state):
+        env = _unwrap_to_base_env(self._env)
+        c = env.consts
+        board = _empty_board(c)
+        board = board.at[0, :].set(jnp.int32(c.B_KNIGHT))
+        board = board.at[1, :].set(jnp.int32(c.B_KNIGHT))
+        board = board.at[6, :].set(jnp.int32(c.W_KNIGHT))
+        board = board.at[7, :].set(jnp.int32(c.W_KNIGHT))
+        board = _place_kings(board, c)
+        state = _reset_state_with_board(state, board, c)
+        obs = obs.replace(board=state.board) if hasattr(obs, "replace") else obs
+        return obs, state
+
+
+class BishopsOnlyMod(JaxAtariPostStepModPlugin):
+    """All non-king pieces are bishops."""
+
+    @partial(jax.jit, static_argnums=(0,))
+    def after_reset(self, obs, state):
+        env = _unwrap_to_base_env(self._env)
+        c = env.consts
+        board = _empty_board(c)
+        board = board.at[0, :].set(jnp.int32(c.B_BISHOP))
+        board = board.at[1, :].set(jnp.int32(c.B_BISHOP))
+        board = board.at[6, :].set(jnp.int32(c.W_BISHOP))
+        board = board.at[7, :].set(jnp.int32(c.W_BISHOP))
+        board = _place_kings(board, c)
+        state = _reset_state_with_board(state, board, c)
+        obs = obs.replace(board=state.board) if hasattr(obs, "replace") else obs
         return obs, state
 
 
@@ -229,17 +197,11 @@ class CheckmateTestMod(JaxAtariPostStepModPlugin):
     def after_reset(self, obs, state):
         env = _unwrap_to_base_env(self._env)
         c = env.consts
-
         board = _empty_board(c)
-
-        # Black king alone in a corner
         board = board.at[0, 0].set(jnp.int32(c.B_KING))
-
-        # White king and two queens on the other side
         board = board.at[7, 7].set(jnp.int32(c.W_KING))
         board = board.at[7, 5].set(jnp.int32(c.W_QUEEN))
         board = board.at[6, 6].set(jnp.int32(c.W_QUEEN))
-
         state = _reset_state_with_board(state, board, c)
         obs = obs.replace(board=state.board) if hasattr(obs, "replace") else obs
         return obs, state

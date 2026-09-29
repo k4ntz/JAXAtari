@@ -1,14 +1,20 @@
-from jaxatari.modification import JaxAtariModController
+from jaxatari.modification import (
+    JaxAtariModController,
+    JaxAtariInternalModPlugin,
+    JaxAtariPostStepModPlugin,
+)
 from jaxatari.games.mods.videochess_mod_plugins import (
     RandomBotBlackMod,
     GreedyBotBlackMod,
     MinimaxBotBlackMod,
+    PlayBothSidesMod,
+    InstantMovementMod,
+    LegalMovesDisplayMod,
     PawnsOnlyMod,
     QueensOnlyMod,
     RooksOnlyMod,
     KnightsOnlyMod,
     BishopsOnlyMod,
-    LegalMovesDisplayMod,
     CheckmateTestMod,
 )
 
@@ -17,15 +23,20 @@ class VideochessEnvMod(JaxAtariModController):
     """Game-specific Mod Controller for VideoChess."""
 
     REGISTRY = {
+        # Opponent / control
+        "play_both_sides": PlayBothSidesMod,
         "random_bot_black": RandomBotBlackMod,
         "greedy_bot_black": GreedyBotBlackMod,
-        "minimax_bot_black": MinimaxBotBlackMod,
+        "minimax_bot_black": MinimaxBotBlackMod,  # default behavior; explicit re-enable
+        # Input / display
+        "instant_movement": InstantMovementMod,
+        "legal_moves_display": LegalMovesDisplayMod,
+        # Board setups
         "pawns_only": PawnsOnlyMod,
         "queens_only": QueensOnlyMod,
         "rooks_only": RooksOnlyMod,
         "knights_only": KnightsOnlyMod,
         "bishops_only": BishopsOnlyMod,
-        "legal_moves_display": LegalMovesDisplayMod,
         "checkmate_test": CheckmateTestMod,
     }
 

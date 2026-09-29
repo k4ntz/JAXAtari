@@ -803,6 +803,7 @@ class MarioBrosObservation:
     player_on_ground: chex.Array
     player_brake_frames_left: chex.Array
     player_lives: chex.Array
+    score: chex.Array
     pow_block_counter: chex.Array
     pow_block_pos: chex.Array
     plattforms_pos: chex.Array
@@ -2177,6 +2178,7 @@ class JaxMarioBros(JaxEnvironment[
             player_on_ground=jnp.array([state.player.on_ground], dtype=jnp.float32),
             player_brake_frames_left=jnp.array([state.player.brake_frames_left], dtype=jnp.float32),
             player_lives=jnp.array([state.lives], dtype=jnp.float32),
+            score=jnp.array(state.game.score, dtype=jnp.int32),
             pow_block_counter=jnp.array([state.game.pow_block_counter], dtype=jnp.float32),
             pow_block_pos=jnp.array(POW_BLOCK, dtype=jnp.float32),
             plattforms_pos=jnp.array(PLATFORMS, dtype=jnp.float32),
@@ -2195,6 +2197,7 @@ class JaxMarioBros(JaxEnvironment[
             "player_on_ground": spaces.Box(low=0, high=1, shape=(1,), dtype=jnp.float32),
             "player_brake_frames_left": spaces.Box(low=0, high=255, shape=(1,), dtype=jnp.float32),
             "player_lives": spaces.Box(low=-1, high=99, shape=(1,), dtype=jnp.float32),
+            "score": spaces.Box(low=0, high=jnp.iinfo(jnp.int32).max, shape=(), dtype=jnp.int32),
             "pow_block_counter": spaces.Box(low=0, high=3, shape=(1,), dtype=jnp.float32),
             "pow_block_pos": spaces.Box(low=0, high=max(SCREEN_WIDTH, SCREEN_HEIGHT), shape=(1, 4), dtype=jnp.float32),
             "plattforms_pos": spaces.Box(low=0, high=max(SCREEN_WIDTH, SCREEN_HEIGHT), shape=PLATFORMS.shape, dtype=jnp.float32),

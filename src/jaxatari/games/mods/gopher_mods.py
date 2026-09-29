@@ -8,17 +8,14 @@ from jaxatari.games.mods.gopher.gopher_mod_plugins import (
     FastSeedMod,
     InvisibleGopherMod,
     WindGopherMod,
-    DizzyFarmerMod
-
+    DizzyFarmerMod,
 )
 
+
 class GopherEnvMod(JaxAtariModController):
-    """
-    Game-specific Mod Controller for Gopher.
-    """
+    """Game-specific Mod Controller for Gopher."""
 
     REGISTRY = {
-        
         "greedy_gopher": GreedyGopherMod,
         "mirror_button": MirrorButtonMod,
         "energy_drain": EnergyDrainMod,
@@ -26,21 +23,15 @@ class GopherEnvMod(JaxAtariModController):
         "fast_seed": FastSeedMod,
         "invisible_gopher": InvisibleGopherMod,
         "wind_gopher": WindGopherMod,
-        "dizzy_farmer": DizzyFarmerMod
+        "dizzy_farmer": DizzyFarmerMod,
     }
 
-    
     _mod_sprite_dir = os.path.join(os.path.dirname(__file__), "gopher", "sprites")
 
-    def __init__(self,
-                 env,
-                 mods_config: list = [],
-                 allow_conflicts: bool = False
-                 ):
-
+    def __init__(self, env, mods_config: list = [], allow_conflicts: bool = False):
         super().__init__(
             env=env,
             mods_config=mods_config,
             allow_conflicts=allow_conflicts,
-            registry=self.REGISTRY
+            registry=self.REGISTRY,
         )

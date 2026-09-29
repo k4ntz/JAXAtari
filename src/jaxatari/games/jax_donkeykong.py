@@ -312,6 +312,8 @@ class DonkeyKongObservation:
     fires: ObjectObservation
     traps: ObjectObservation
     ladders: ObjectObservation
+    score: chex.Array
+    lives: chex.Array
 
 @struct.dataclass
 class DonkeyKongInfo:
@@ -2203,6 +2205,8 @@ class JaxDonkeyKong(JaxEnvironment[DonkeyKongState, DonkeyKongObservation, Donke
             fires = fires,
             traps = traps,
             ladders = ladders,
+            score = state.game_score.astype(jnp.int32),
+            lives = state.lives.astype(jnp.int32),
         )
 
     def render(self, state: DonkeyKongState) -> jnp.ndarray:
@@ -2225,6 +2229,8 @@ class JaxDonkeyKong(JaxEnvironment[DonkeyKongState, DonkeyKongObservation, Donke
             "traps": spaces.get_object_space(n=self.consts.MAX_TRAPS, screen_size=(self.consts.HEIGHT, self.consts.WIDTH)),
             # Ladders
             "ladders": spaces.get_object_space(n=self.consts.MAX_LADDERS, screen_size=(self.consts.HEIGHT, self.consts.WIDTH), xy_low=-1),
+            "score": spaces.Box(low=0, high=jnp.iinfo(jnp.int32).max, shape=(), dtype=jnp.int32),
+            "lives": spaces.Box(low=0, high=10, shape=(), dtype=jnp.int32),
         })
 
     def image_space(self) -> spaces.Box:

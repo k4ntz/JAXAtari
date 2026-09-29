@@ -5,7 +5,7 @@ import jax.numpy as jnp
 from functools import partial
 from typing import Tuple, List, Optional, Any
 from flax import struct
-from jaxatari.environment import JaxEnvironment, JAXAtariAction
+from jaxatari.environment import JaxEnvironment, JAXAtariAction, ObjectObservation
 from jaxatari.renderers import JAXGameRenderer
 from jaxatari.rendering import jax_rendering_utils as jr
 from jaxatari.modification import AutoDerivedConstants
@@ -151,10 +151,10 @@ class BackgammonObservation:
     is_game_over: jnp.ndarray
     bar_counts: jnp.ndarray
     home_counts: jnp.ndarray
-    cursor_position: jnp.ndarray
+    cursor: ObjectObservation
+    selected: ObjectObservation  # picked checker origin point
+    last_valid_drop: ObjectObservation
     game_phase: jnp.ndarray
-    picked_checker_from: jnp.ndarray
-    last_valid_drop: jnp.ndarray
 
 
 # ============================================================================
@@ -1234,18 +1234,24 @@ class JaxBackgammonEnv(JaxEnvironment[BackgammonState, BackgammonObservation, Ba
     @partial(jax.jit, static_argnums=(0,))
     def obs_to_flat_array(self, obs: BackgammonObservation) -> jnp.ndarray:
         """Convert object-centric observation to flat array."""
+        def flat_ptr(obj: ObjectObservation) -> jnp.ndarray:
+            return jnp.array([
+                obj.x, obj.y, obj.width, obj.height,
+                obj.active, obj.visual_id, obj.state, obj.orientation,
+            ], dtype=jnp.float32)
+
         return jnp.concatenate([
-            obs.board.flatten(),
-            obs.dice.flatten(),
-            obs.current_player.flatten(),
-            obs.is_game_over.flatten(),
-            obs.bar_counts.flatten(),
-            obs.home_counts.flatten(),
-            obs.cursor_position.flatten(),
-            obs.game_phase.flatten(),
-            obs.picked_checker_from.flatten(),
-            obs.last_valid_drop.flatten(),
-        ]).astype(jnp.int32)
+            obs.board.flatten().astype(jnp.float32),
+            obs.dice.flatten().astype(jnp.float32),
+            obs.current_player.flatten().astype(jnp.float32),
+            obs.is_game_over.flatten().astype(jnp.float32),
+            obs.bar_counts.flatten().astype(jnp.float32),
+            obs.home_counts.flatten().astype(jnp.float32),
+            flat_ptr(obs.cursor),
+            flat_ptr(obs.selected),
+            flat_ptr(obs.last_valid_drop),
+            obs.game_phase.flatten().astype(jnp.float32),
+        ])
 
     @partial(jax.jit, static_argnums=(0,))
     def _get_all_reward(self, previous_state: BackgammonState, state: BackgammonState):
@@ -1308,27 +1314,12 @@ class JaxBackgammonEnv(JaxEnvironment[BackgammonState, BackgammonObservation, Ba
                 shape=(2,),
                 dtype=jnp.int32
             ),
-            "cursor_position": spaces.Box(
-                low=0,
-                high=26,
-                shape=(1,),
-                dtype=jnp.int32
-            ),
+            "cursor": spaces.get_object_space(n=None, screen_size=(1, 27), xy_low=-1.0),
+            "selected": spaces.get_object_space(n=None, screen_size=(1, 27), xy_low=-1.0),
+            "last_valid_drop": spaces.get_object_space(n=None, screen_size=(1, 27), xy_low=-1.0),
             "game_phase": spaces.Box(
                 low=0,
                 high=2,
-                shape=(1,),
-                dtype=jnp.int32
-            ),
-            "picked_checker_from": spaces.Box(
-                low=-1,
-                high=26,
-                shape=(1,),
-                dtype=jnp.int32
-            ),
-            "last_valid_drop": spaces.Box(
-                low=-1,
-                high=26,
                 shape=(1,),
                 dtype=jnp.int32
             ),
@@ -1337,6 +1328,16 @@ class JaxBackgammonEnv(JaxEnvironment[BackgammonState, BackgammonObservation, Ba
     @partial(jax.jit, static_argnums=(0,))
     def _get_observation(self, state: BackgammonState) -> BackgammonObservation:
         """Convert state to object-centric observation."""
+        def make_point_ptr(point_idx):
+            active = (point_idx >= 0).astype(jnp.int32)
+            return ObjectObservation.create(
+                x=jnp.clip(point_idx, 0, 26).astype(jnp.int32),
+                y=jnp.array(0, dtype=jnp.int32),
+                width=jnp.array(1, dtype=jnp.int32),
+                height=jnp.array(1, dtype=jnp.int32),
+                active=active,
+            )
+
         return BackgammonObservation(
             board=state.board,
             dice=state.dice,
@@ -1344,10 +1345,10 @@ class JaxBackgammonEnv(JaxEnvironment[BackgammonState, BackgammonObservation, Ba
             is_game_over=jnp.array([jnp.where(state.is_game_over, 1, 0)], dtype=jnp.int32),
             bar_counts=jnp.array([state.board[0, 24], state.board[1, 24]], dtype=jnp.int32),
             home_counts=jnp.array([state.board[0, 25], state.board[1, 25]], dtype=jnp.int32),
-            cursor_position=jnp.array([state.cursor_position], dtype=jnp.int32),
+            cursor=make_point_ptr(jnp.asarray(state.cursor_position, dtype=jnp.int32)),
+            selected=make_point_ptr(jnp.asarray(state.picked_checker_from, dtype=jnp.int32)),
+            last_valid_drop=make_point_ptr(jnp.asarray(state.last_valid_drop, dtype=jnp.int32)),
             game_phase=jnp.array([state.game_phase], dtype=jnp.int32),
-            picked_checker_from=jnp.array([state.picked_checker_from], dtype=jnp.int32),
-            last_valid_drop=jnp.array([state.last_valid_drop], dtype=jnp.int32),
         )
 
     @partial(jax.jit, static_argnums=(0,))
