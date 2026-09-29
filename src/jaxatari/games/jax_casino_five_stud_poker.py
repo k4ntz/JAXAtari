@@ -6,7 +6,7 @@
 # Simulates the Atari Casino Five Stud Poker game
 #
 
-from typing import NamedTuple, Tuple
+from typing import Tuple
 from functools import partial
 
 import chex
@@ -16,10 +16,7 @@ from flax import struct
 
 from jaxatari.environment import JAXAtariAction as Action, JaxEnvironment
 from jaxatari.spaces import Space, Discrete, Box, Dict
-try:
-    from jaxatari.games.jax_casino import CasinoRenderer
-except ImportError:
-    from jax_casino import CasinoRenderer
+from jaxatari.games.casino.renderer import CasinoRenderer
 
 
 @jax.jit
@@ -161,7 +158,7 @@ def betting_step(state, action, min_bet, max_bet):
 
     new_round_bet = jax.lax.cond(is_normal_bet | is_ante_bet, lambda _: next_round_default_bet, lambda _: new_round_bet, None)
 
-    return state._replace(
+    return state.replace(
         round_bet=new_round_bet,
         total_bet=new_total_bet,
         player_score=new_player_score,
@@ -184,7 +181,7 @@ def deal_step(state, num_cards_each):
     new_player_cards = jax.lax.dynamic_update_slice(state.player_cards, player_new_cards, (card_start_idx,))
     new_dealer_cards = jax.lax.dynamic_update_slice(state.dealer_cards, dealer_new_cards, (card_start_idx,))
 
-    return state._replace(
+    return state.replace(
         player_cards=new_player_cards,
         dealer_cards=new_dealer_cards,
         deck_idx=state.deck_idx + num_cards_each * 2,
@@ -207,7 +204,7 @@ def showdown_step(state):
     # Player loses automatically if they folded
     result = jax.lax.cond(state.player_folded == 1, lambda _: 2, lambda w: w, winner)
 
-    return state._replace(state_counter=10, last_round_result=result)
+    return state.replace(state_counter=10, last_round_result=result)
 
 
 @jax.jit
@@ -253,7 +250,7 @@ def payout_step(state):
                                                   lambda st: st.player_score - st.total_bet, # Player lost or folded
                                                   s),
                              state)
-    return state._replace(player_score=new_score, state_counter=11)
+    return state.replace(player_score=new_score, state_counter=11)
 
 @partial(jax.jit, static_argnames=('num_cards_in_deck', 'min_bet', 'hand_size'))
 def end_round_step(state, action, num_cards_in_deck, min_bet, hand_size):
@@ -261,7 +258,7 @@ def end_round_step(state, action, num_cards_in_deck, min_bet, hand_size):
     def _start_new_round(st):
         key, subkey = jax.random.split(st.key)
         new_deck = jax.random.permutation(subkey, jnp.arange(1, num_cards_in_deck + 1))
-        return st._replace(
+        return st.replace(
             key=key,
             step_counter=jnp.array(0, dtype=jnp.int32),
             state_counter=jnp.array(0, dtype=jnp.int32),
@@ -293,7 +290,7 @@ class CasinoFiveStudPokerConstants(struct.PyTreeNode):
     P2_DIFFICULTY: str = struct.field(pytree_node=False, default='b')
     BANK_LIMIT: int = struct.field(pytree_node=False, default=10000)
 
-class CasinoFiveStudPokerState(NamedTuple):
+class CasinoFiveStudPokerState(struct.PyTreeNode):
     # colors:   D -> diamonds ♦
     #           C -> clubs ♣
     #           H -> hearts ♥
@@ -331,7 +328,7 @@ class CasinoFiveStudPokerState(NamedTuple):
     player_folded: jnp.ndarray # 0 for not folded, 1 for folded
     last_round_result: jnp.ndarray # 0: none, 1: win, 2: loss, 3: tie
 
-class CasinoFiveStudPokerObservation(NamedTuple):
+class CasinoFiveStudPokerObservation(struct.PyTreeNode):
     player_score: jnp.ndarray
     total_bet: jnp.ndarray
     round_bet: jnp.ndarray
@@ -339,7 +336,7 @@ class CasinoFiveStudPokerObservation(NamedTuple):
     dealer_cards: jnp.ndarray
     state_counter: jnp.ndarray
 
-class CasinoFiveStudPokerInfo(NamedTuple):
+class CasinoFiveStudPokerInfo(struct.PyTreeNode):
     time: jnp.ndarray
 
 class JaxCasinoFiveStudPoker(JaxEnvironment[CasinoFiveStudPokerState, CasinoFiveStudPokerObservation, CasinoFiveStudPokerInfo, CasinoFiveStudPokerConstants]):
@@ -385,7 +382,7 @@ class JaxCasinoFiveStudPoker(JaxEnvironment[CasinoFiveStudPokerState, CasinoFive
     def step(self, state: CasinoFiveStudPokerState, action: chex.Array) -> Tuple[CasinoFiveStudPokerObservation, CasinoFiveStudPokerState, float, bool, CasinoFiveStudPokerInfo]:
         action = jnp.take(self.ACTION_SET, action.astype(jnp.int32))
         previous_state = state
-        new_state = state._replace(step_counter=state.step_counter + 1)
+        new_state = state.replace(step_counter=state.step_counter + 1)
 
         # Game State Machine:
         # 0, 2, 4, 6, 8: Betting rounds (ante, after 2nd, 3rd, 4th, 5th card)
@@ -428,7 +425,6 @@ class JaxCasinoFiveStudPoker(JaxEnvironment[CasinoFiveStudPokerState, CasinoFive
                             lambda _: 0.0,
                             (previous_state, state))
 
-    @partial(jax.jit, static_argnums=(0,))
     def render(self, state: CasinoFiveStudPokerState) -> jnp.ndarray:
         return self.renderer.render(state)
 

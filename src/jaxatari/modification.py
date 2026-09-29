@@ -110,8 +110,9 @@ def apply_native_downscaling(
         core_env = core_env._env
 
     # 2. Create new config
+    old_dims = core_env.renderer.config.game_dimensions
     new_config = RendererConfig(
-        game_dimensions=core_env.renderer.config.game_dimensions,
+        game_dimensions=(int(old_dims[0]), int(old_dims[1])),
         channels=1 if grayscale else 3,
         downscale=pixel_resize_shape
     )

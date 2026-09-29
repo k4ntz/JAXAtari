@@ -267,7 +267,7 @@ A full status overview with quality ratings is in [games_covered.md](games_cover
 
 | Environment | Mods available |
 | ----------- | -------------- |
-| Pong        | 9              |
+| Pong        | 10             |
 | Beamrider   | 8              |
 | Phoenix     | 11             |
 | Tennis      | 13             |

@@ -5,30 +5,95 @@ import subprocess
 from concurrent.futures import ThreadPoolExecutor
 
 # You can modify this list to include the exact environments you want to run.
-ATARI_ENVS = [
-    "bankheist",
-    "beamrider", # still missing pixel runs
-    "enduro", 
-    "freeway", "frostbite", 
-    "kangaroo",
-    "montezumarevenge",
-    "phoenix", "pong", "qbert",
-    "seaquest", "skiing",
-    "tennis",
-    "venture",
-    "timepilot", "asteroids", "breakout", 
-    "gravitar",
-    "mspacman",
+ATARI_15_ENVS = [
+     "bankheist",
+     "beamrider", # still missing pixel runs
+     "enduro", 
+     "freeway", "frostbite", 
+     "kangaroo",
+     "montezumarevenge",
+     "phoenix", "pong", "qbert",
+     "seaquest", "skiing",
+     "tennis",
+     "venture",
+     "timepilot", "asteroids", "breakout", 
+     "gravitar",
+     "mspacman",
+     "pong"
 ]
 
+ALL_ATARI_ENVS = [
+    "amidar",
+    "airraid",
+    "alien",
+    "asterix",
+    "asteroids",
+    "atlantis",
+    "bankheist",
+    "beamrider",
+    "berzerk",
+    "blackjack",
+    "breakout",
+    "casinoblackjack",
+    "casinofivestudpoker",
+    "casinopokersolitaire",
+    "centipede",
+    "choppercommand",
+    "donkeykong",
+    "enduro",
+    "fishingderby",
+    "flagcapture",
+    "freeway",
+    "frostbite",
+    "galaxian",
+    "gravitar",
+    "hangman",
+    "hauntedhouse",
+    "humancannonball",
+    "kangaroo",
+    "kingkong",
+    "klax",
+    "lasergates",
+    "namethisgame",
+    "phoenix",
+    "pong",
+    "qbert",
+    "riverraid",
+    "seaquest",
+    "sirlancelot",
+    "skiing",
+    "slotmachine",
+    "spaceinvaders",
+    "spacewar",
+    "surround",
+    "tennis",
+    "tetris",
+    "timepilot",
+    "tron",
+    "turmoil",
+    "venture",
+    "videocheckers",
+    "videocube",
+    "videopinball",
+    "wordzapper",
+    "mspacman",
+    "montezumarevenge",
+    "pacman",
+]
+
+# Run on all or on subset?
+ATARI_ENVS = ATARI_15_ENVS 
+#ATARI_ENVS = ALL_ATARI_ENVS
+
 # Setting to control how often to rerun an exp (with different seeds)
-N_SEEDS = 1
+START_SEED = 3
+N_SEEDS = 2
 # Setting to control maximum concurrent processes per GPU
 WORKERS_PER_GPU = 1
 
 CONFIGS = [
-    "ppo_jaxatari_object_large",
-    "ppo_jaxatari_pixel_large",
+    "ppo_jaxatari_pixel",
+    "ppo_jaxatari_object",
 ]
 
 # game_specific_configs = {
@@ -58,7 +123,7 @@ def worker(gpu_id: str, worker_id: int, task_queue: queue.Queue, extra_args: lis
             "uv", "run", "scripts/benchmarks/ppo_jaxatari_scan.py",
             f"+alg={alg_config}",
             f"alg.ENV_ID={env_id}",
-            f"SEED={seed}"
+            f"SEED={seed}",
         ] + extra_args
         
         try:
@@ -95,7 +160,7 @@ def main():
             for seed in seeds:
                 task_queue.put((env, seed, alg_config))
         else:
-            for seed in range(1, N_SEEDS + 1):
+            for seed in range(START_SEED, START_SEED + N_SEEDS):
                 for alg_config in CONFIGS:
                     task_queue.put((env, seed, alg_config))
         
