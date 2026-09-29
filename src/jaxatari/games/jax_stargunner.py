@@ -152,7 +152,7 @@ class StarGunnerConstants(struct.PyTreeNode):
 
     PLAYER_WIDTH: int = struct.field(pytree_node=False, default=9)
     PLAYER_HEIGHT: int = struct.field(pytree_node=False, default=4)
-    PLAYER_SPEED: float = struct.field(pytree_node=False, default=0.7)
+    PLAYER_SPEED: float = struct.field(pytree_node=False, default=1.5)
     PLAYER_START_X: int = struct.field(pytree_node=False, default=80)
     PLAYER_START_Y: int = struct.field(pytree_node=False, default=165)
     PLAYER_LIVES_START: int = struct.field(pytree_node=False, default=5)
@@ -168,7 +168,7 @@ class StarGunnerConstants(struct.PyTreeNode):
 
     REFORM_FRAMES: int = struct.field(pytree_node=False, default=20)
     NUM_ENEMIES: int = struct.field(pytree_node=False, default=1)
-    ENEMY_SPEED: float = struct.field(pytree_node=False, default=0.15)
+    ENEMY_SPEED: float = struct.field(pytree_node=False, default=0.5)
     ENEMY_SPEED_INCREMENT: float = struct.field(pytree_node=False, default=0.10)
     MAX_ENEMY_SPEED_MULTIPLIER: float = struct.field(pytree_node=False, default=2.0)
     ENEMY_AMP: float = struct.field(pytree_node=False, default=0.0)
@@ -176,19 +176,20 @@ class StarGunnerConstants(struct.PyTreeNode):
     BOBO_WIDTH: int = struct.field(pytree_node=False, default=7)
     BOBO_HEIGHT: int = struct.field(pytree_node=False, default=10)
     BOBO_Y: int = struct.field(pytree_node=False, default=40)
+    BOBO_CHANGE_PROB: float = struct.field(pytree_node=False, default=0.05)
 
     ENEMY_Y_MAX: int = struct.field(pytree_node=False, default=165)
-    ENEMY_Y_MIN: int = struct.field(pytree_node=False, default=45)
+    ENEMY_Y_MIN: int = struct.field(pytree_node=False, default=55)
     ENEMY_CHANGE_PROB: float = struct.field(pytree_node=False, default=0.04)
     ENEMY_SPAWN_X: int = struct.field(pytree_node=False, default=8)
     COLLISION_POINTS: int = struct.field(pytree_node=False, default=200)
-    BOBO_SPEED: float = struct.field(pytree_node=False, default=0.5)
+    BOBO_SPEED: float = struct.field(pytree_node=False, default=1.5)
     BOBO_BOMB_PERIOD: int = struct.field(pytree_node=False, default=30)
 
     MAX_BOMBS: int = struct.field(pytree_node=False, default=4)
     BOMB_WIDTH: int = struct.field(pytree_node=False, default=4)
     BOMB_HEIGHT: int = struct.field(pytree_node=False, default=1)
-    BOMB_SPEED: float = struct.field(pytree_node=False, default=1.5)
+    BOMB_SPEED: float = struct.field(pytree_node=False, default=2.5)
 
     HILL_SCROLL_SPEED: float = struct.field(pytree_node=False, default=0.85)
 
@@ -408,9 +409,14 @@ class JaxStarGunner(
         )
 
     def _spawn_positions(self):
+        """Slot 0 = oben links, Slot 1 = unten links, Slot 2 = links Mitte."""
         n = self.consts.NUM_ENEMIES
-        x = jnp.full((n,), 0.0, jnp.float32)
-        y = jnp.full((n,), float(self.consts.ENEMY_Y_MIN), jnp.float32)
+        x = jnp.full((n,), float(self.consts.ENEMY_SPAWN_X), jnp.float32)
+        y = jnp.array([
+            float(self.consts.ENEMY_Y_MIN),                                # oben links
+            float(self.consts.ENEMY_Y_MAX - 10),                           # unten links
+            float((self.consts.ENEMY_Y_MIN + self.consts.ENEMY_Y_MAX) // 2),  # Mitte links
+        ], jnp.float32)[:n]
         return x, y
 
     def _init_subwave(self, level, subwave):
@@ -606,132 +612,57 @@ class JaxStarGunner(
         )
 
     def _enemy_step(self, state):
-        """
-        Enemy (ring) behaviour:
-
-        Above bottom:
-            mode 0 = diagonal (descend + right)
-            mode 1 = vertical (straight down)
-            Random switches between them.
-
-        At bottom (y >= ENEMY_Y_MAX):
-            Pause for PAUSE_FRAMES, then
-            mode 2 = horizontal sweep rightward, wraps at edges.
-
-        Depth never exceeds ENEMY_Y_MAX.
-        """
         n = self.consts.NUM_ENEMIES
+        key, k_change, k_vx, k_vy = jax.random.split(state.key, 4)
+
+        wave_multiplier = jnp.minimum(
+            1.0 + self.consts.ENEMY_SPEED_INCREMENT * (state.level - 1).astype(jnp.float32),
+            self.consts.MAX_ENEMY_SPEED_MULTIPLIER,
+        )
+        speed = self.consts.ENEMY_SPEED * wave_multiplier
         is_alive = state.enemy_state == ENEMY_ALIVE
 
-        key, k_mode = jax.random.split(state.key)
-        r = jax.random.uniform(k_mode, (n,))
-
-        speed = self.consts.ENEMY_SPEED
-        mode = state.enemy_mode
-
-        y_top = float(self.consts.ENEMY_Y_MIN)
-        y_bottom = float(self.consts.ENEMY_Y_MAX)
-        at_bottom = state.enemy_y >= (y_bottom - 1.0)
-
-        # Bottom timer counts only while at bottom
-        new_timer = jnp.where(at_bottom, state.enemy_mode_timer + 1, 0)
-
-        PAUSE_FRAMES = 20
-        pause = at_bottom & (new_timer < PAUSE_FRAMES)
-
-        # Transition to horizontal when at bottom after pause
-        mode = jnp.where(at_bottom & (new_timer >= PAUSE_FRAMES), 2, mode)
-
-        # Above bottom: never horizontal
-        mode = jnp.where((~at_bottom) & (mode == 2), 0, mode)
-
-        # Random switching between diagonal (0) and vertical (1) above bottom
-        switch_to_vert = (mode == 0) & (r < 0.010) & (~at_bottom)
-        switch_to_diag = (mode == 1) & (r < 0.010) & (~at_bottom)
-        mode = jnp.where(switch_to_vert, 1, jnp.where(switch_to_diag, 0, mode))
-
-        # --- Velocities ---
-        vx_diag = speed * 1.2
-        vy_diag = speed * 0.4
-
-        vx_horiz = speed * 1.5   # always right; wraps at edge
-        vy_horiz = 0.0
-
-        vx_vert = 0.0
-        vy_vert = speed * 0.8
-
-        vx = jnp.where(mode == 0, vx_diag,
-              jnp.where(mode == 2, vx_horiz,
-                                       vx_vert))
-        vy = jnp.where(mode == 0, vy_diag,
-              jnp.where(mode == 2, vy_horiz,
-                                       vy_vert))
-
-        # Pause overrides movement
-        vx = jnp.where(pause, 0.0, vx)
-        vy = jnp.where(pause, 0.0, vy)
-
-        # Never descend past bottom
-        vy = jnp.where(at_bottom & (vy > 0), 0.0, vy)
+        # Zufaellige neue Richtung in x UND y
+        change = jax.random.uniform(k_change, (n,)) < self.consts.ENEMY_CHANGE_PROB
+        new_vx = jax.random.uniform(k_vx, (n,), minval=-1.0, maxval=1.0) * speed
+        new_vy = jax.random.uniform(k_vy, (n,), minval=-1.0, maxval=1.0) * speed
+        vx = jnp.where(change, new_vx, state.enemy_vx)
+        vy = jnp.where(change, new_vy, state.enemy_vy)
 
         nx = state.enemy_x + jnp.where(is_alive, vx, 0.0)
         ny = state.enemy_y + jnp.where(is_alive, vy, 0.0)
 
-        # Horizontal wrap across the whole screen
+        # Horizontal: Wrap-Around wie beim Spieler (links raus -> rechts rein)
         nx = jnp.mod(nx, float(self.consts.WIDTH))
-        ny = jnp.clip(ny, y_top, y_bottom)
 
-        return state.replace(
-            key=key,
+        # Vertikal: weiterhin Abprallen zwischen ENEMY_Y_MIN und ENEMY_Y_MAX
+        y_lo, y_hi = float(self.consts.ENEMY_Y_MIN), float(self.consts.ENEMY_Y_MAX)
+        bounce_y = ((ny < y_lo) | (ny > y_hi)) & is_alive
+        vy = jnp.where(bounce_y, -vy, vy)
+
+        return state.replace(key=key,
             enemy_x=nx,
-            enemy_y=ny,
+            enemy_y=jnp.clip(ny, y_lo, y_hi),
             enemy_vx=vx,
             enemy_vy=vy,
-            enemy_mode=mode,
-            enemy_mode_timer=new_timer,
         )
 
     def _bobo_step(self, state):
-        """
-        Bobo moves within a sliding window.
-        Window spans 2 units (80 px). Within a window he moves back and
-        forth 3 times, dropping a bomb after each full traversal.
-        After 3 traversals the window slides one unit (40 px) right.
-        At the screen edge the window direction reverses.
-        """
-        c = self.consts
+        key, k_change, k_vel = jax.random.split(state.key, 3)
 
-        POSITION_SIZE = 40.0
-        WINDOW_UNITS = 2
-        WINDOW_WIDTH = POSITION_SIZE * WINDOW_UNITS      # 80
-        SPEED = 1.0
-        TRAVEL_FRAMES = int(WINDOW_WIDTH / SPEED)        # 40 frames one way
-        CYCLE_FRAMES = 2 * TRAVEL_FRAMES                 # 80 frames full traverse
-        CYCLES_PER_WINDOW = 3
-        WINDOW_FRAMES = CYCLES_PER_WINDOW * CYCLE_FRAMES # 240
+        change = jax.random.uniform(k_change) < self.consts.BOBO_CHANGE_PROB
+        new_vx = jax.random.uniform(
+            k_vel, minval=-self.consts.BOBO_SPEED, maxval=self.consts.BOBO_SPEED
+        )
+        vx = jnp.where(change, new_vx, state.bobo_vx)
 
-        # How many window start positions fit on screen
-        num_windows = int((c.WIDTH - WINDOW_WIDTH) / POSITION_SIZE) + 1  # 3
+        lo = 4.0
+        hi = float(self.consts.WIDTH - self.consts.BOBO_WIDTH - 4)
+        nx = state.bobo_x + vx
+        vx = jnp.where((nx < lo) | (nx > hi), -vx, vx)
 
-        # Triangle wave over window positions (e.g. 0, 1, 2, 1, 0, 1, ...)
-        tri_period = 2 * (num_windows - 1) if num_windows > 1 else 1
-        tri_m = (state.step_counter // WINDOW_FRAMES) % tri_period
-        window_idx = jnp.where(
-            tri_m <= (num_windows - 1),
-            tri_m,
-            tri_period - tri_m,
-        ).astype(jnp.float32)
+        return state.replace(key=key, bobo_x=jnp.clip(nx, lo, hi), bobo_vx=vx)
 
-        window_left = window_idx * POSITION_SIZE
-
-        # Within-window phase: triangle 0 -> WINDOW_WIDTH -> 0
-        cycle_t = state.step_counter % CYCLE_FRAMES
-        tri = jnp.where(cycle_t <= TRAVEL_FRAMES, cycle_t, CYCLE_FRAMES - cycle_t)
-        bobo_x = window_left + tri.astype(jnp.float32) * SPEED
-
-        bobo_vx = jnp.where(cycle_t <= TRAVEL_FRAMES, SPEED, -SPEED)
-
-        return state.replace(bobo_x=bobo_x, bobo_vx=bobo_vx)
 
     def _bomb_step(self, state):
         """Bobo drops horizontal bombs that fall straight down.
