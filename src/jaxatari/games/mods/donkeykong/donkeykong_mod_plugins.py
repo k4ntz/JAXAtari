@@ -28,10 +28,8 @@ class PacifistMod(JaxAtariInternalModPlugin):
 
 class NoBarrelsMod(JaxAtariInternalModPlugin):
     constants_overrides = {
+        "ENABLE_BARRELS": False,
         "SPAWN_STEP_COUNTER_BARREL": 9999999,
-        # Set start Y (horizontal coordinate) to far left so it never enters screen
-        "BARREL_START_Y": -9999,
-        "BARREL_START_X": -9999,
     }
 
 

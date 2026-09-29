@@ -140,6 +140,7 @@ class DonkeyKongConstants(AutoDerivedConstants):
     MARIO_CLIMB_SPRITE_1: int = struct.field(pytree_node=False, default=1)
 
     # Barrel positions and sprites
+    ENABLE_BARRELS: bool = struct.field(pytree_node=False, default=True)
     BARREL_START_X: int = struct.field(pytree_node=False, default=52)
     BARREL_START_Y: int = struct.field(pytree_node=False, default=34)
     BARREL_SPRITE_FALL: int = struct.field(pytree_node=False, default=0)
@@ -801,6 +802,8 @@ class JaxDonkeyKong(JaxEnvironment[DonkeyKongState, DonkeyKongObservation, Donke
     # Barrel enemy
     @partial(jax.jit, static_argnums=(0,))
     def _barrel_step(self, state):
+        if not self.consts.ENABLE_BARRELS:
+            return state
         step_counter = state.step_counter
         
         # pick other sprite for animation after 8 frames --> for animation
@@ -1043,7 +1046,10 @@ class JaxDonkeyKong(JaxEnvironment[DonkeyKongState, DonkeyKongObservation, Donke
             )
 
             return jax.lax.cond(
-                jnp.logical_and(state.frames_since_last_barrel_spawn >= self.consts.SPAWN_STEP_COUNTER_BARREL, jnp.logical_and(idx != -1, jnp.logical_and(state.mario_got_hit == False, state.mario_reached_goal == False))),
+                jnp.logical_and(
+                    self.consts.ENABLE_BARRELS,
+                    jnp.logical_and(state.frames_since_last_barrel_spawn >= self.consts.SPAWN_STEP_COUNTER_BARREL, jnp.logical_and(idx != -1, jnp.logical_and(state.mario_got_hit == False, state.mario_reached_goal == False)))
+                ),
                 lambda _: new_state,
                 lambda _: state,
                 operand=None
@@ -2181,16 +2187,21 @@ class JaxDonkeyKong(JaxEnvironment[DonkeyKongState, DonkeyKongObservation, Donke
         
         # Check if game was even started --> with human_action FIRE
         def start_game():
-            started_state_level_1 = state.replace(
-                game_started = True,
-                barrels = BarrelPosition(
+            barrels_start = (
+                BarrelPosition(
                     barrel_y = jnp.array([self.consts.BARREL_START_X, -1, -1, -1]).astype(jnp.int32),
                     barrel_x = jnp.array([self.consts.BARREL_START_Y, -1, -1, -1]).astype(jnp.int32), 
                     sprite = jnp.array([self.consts.BARREL_SPRITE_RIGHT, self.consts.BARREL_SPRITE_RIGHT, self.consts.BARREL_SPRITE_RIGHT, self.consts.BARREL_SPRITE_RIGHT]).astype(jnp.int32),
                     moving_direction = jnp.array([self.consts.MOVING_RIGHT, self.consts.MOVING_RIGHT, self.consts.MOVING_RIGHT, self.consts.MOVING_RIGHT]).astype(jnp.int32),
                     stage = jnp.array([6, 6, 6, 6]).astype(jnp.int32),
                     reached_the_end=jnp.array([False, True, True, True]).astype(bool)
-                ),
+                )
+                if self.consts.ENABLE_BARRELS
+                else state.barrels
+            )
+            started_state_level_1 = state.replace(
+                game_started = True,
+                barrels = barrels_start,
             )
             started_state_level_2 = state.replace(
                 game_started = True,

@@ -388,4 +388,28 @@ def test_start_top_platform_mod():
     assert float(state.mario_y) <= 20.0
 
 
+def test_no_barrels_mod():
+    """
+    Verify that NoBarrelsMod prevents barrels from spawning either on game start (FIRE)
+    or during game rollout.
+    """
+    env = jaxatari.make("donkeykong", mods=["no_barrels"])
+    fire_idx = jnp.where(env.ACTION_SET == Action.FIRE)[0][0]
+    right_idx = jnp.where(env.ACTION_SET == Action.RIGHT)[0][0]
+
+    obs, state = env.reset(jax.random.PRNGKey(42))
+    assert bool(jnp.all(state.barrels.reached_the_end)), "Barrels should all be reached_the_end on reset"
+
+    # Start game with FIRE
+    obs, state, r, d, info = env.step(state, fire_idx)
+    assert bool(state.game_started), "Game should start on FIRE"
+    assert bool(jnp.all(state.barrels.reached_the_end)), "No barrel should spawn on start in no_barrels mod"
+
+    # Step through rollout
+    for _ in range(50):
+        obs, state, r, d, info = env.step(state, right_idx)
+        assert bool(jnp.all(state.barrels.reached_the_end)), "No barrels should spawn during rollout"
+
+
+
 
