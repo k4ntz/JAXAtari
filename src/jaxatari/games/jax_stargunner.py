@@ -14,8 +14,6 @@ from jaxatari.environment import (
     ObjectObservation,
 )
 
-# Screen modes and enemy types
-
 ATTRACT = 0
 PLAY = 1
 GAME_OVER = 2
@@ -25,7 +23,7 @@ BUZZIE = 1
 SQUEEZER = 2
 
 SUBWAVE_KILL_TARGET = jnp.array([10, 20, 30], jnp.int32)
-SUBWAVE_CONCURRENT = jnp.array([1, 2, 3], jnp.int32)
+SUBWAVE_CONCURRENT = jnp.array([1, 1, 1], jnp.int32)
 
 ENEMY_EMPTY = 0
 ENEMY_ALIVE = 1
@@ -41,20 +39,19 @@ def wave_bonus_for_level(level):
 
 
 # ============================================================
-# REAL ALE SPRITES — extracted from ALE frames
+# SPRITES
 # ============================================================
 
-# Blick nach RECHTS: Stufen links, lange Linie rechts = Schussrichtung
 PLAYER_SPRITE_RIGHT = jnp.array([
     [1, 0, 0, 0, 0, 0, 0, 0, 0],
     [1, 1, 0, 0, 0, 0, 0, 0, 0],
     [1, 1, 1, 1, 0, 0, 0, 0, 0],
     [1, 1, 1, 1, 1, 1, 1, 1, 1],
 ], dtype=jnp.bool_)
-# Blick nach LINKS: gespiegelt, Linie zeigt nach links
 PLAYER_SPRITE_LEFT = jnp.flip(PLAYER_SPRITE_RIGHT, axis=1)
 
-ENEMY_SPRITE = jnp.array([
+# BOBO = humanoid (person-like). Moves horizontally, drops bombs.
+BOBO_SPRITE = jnp.array([
     [1, 0, 0, 0, 0, 0, 1],
     [1, 0, 1, 0, 1, 0, 1],
     [1, 0, 0, 0, 0, 0, 1],
@@ -65,11 +62,9 @@ ENEMY_SPRITE = jnp.array([
     [0, 1, 0, 0, 0, 1, 0],
     [1, 0, 0, 0, 0, 0, 1],
 ], dtype=jnp.bool_)
-SAUCER_SPRITE = ENEMY_SPRITE
-BUZZIE_SPRITE = ENEMY_SPRITE
-SQUEEZER_SPRITE = ENEMY_SPRITE
 
-BOBO_SPRITE = jnp.array([
+# ENEMY = ring/UFO. Moves freely in all directions.
+ENEMY_SPRITE = jnp.array([
     [0, 0, 1, 1, 0, 0, 0],
     [0, 1, 0, 0, 1, 0, 0],
     [0, 1, 0, 0, 1, 0, 0],
@@ -81,25 +76,28 @@ BOBO_SPRITE = jnp.array([
     [1, 0, 0, 0, 0, 1, 0],
     [0, 1, 1, 1, 1, 0, 0],
 ], dtype=jnp.bool_)
+SAUCER_SPRITE = ENEMY_SPRITE
+BUZZIE_SPRITE = ENEMY_SPRITE
+SQUEEZER_SPRITE = ENEMY_SPRITE
 
 BULLET_SPRITE_LOCAL = jnp.array([[1, 1, 1, 1]], dtype=jnp.bool_)
 
 ENEMY_W = jnp.array([7.0, 7.0, 7.0], jnp.float32)
-ENEMY_H = jnp.array([9.0, 9.0, 9.0], jnp.float32)
+ENEMY_H = jnp.array([10.0, 10.0, 10.0], jnp.float32)
 
 ENEMY_COLOR = jnp.array(
     [
-        [236, 200, 96],
-        [125, 48, 173],
-        [224, 124, 210],
+        [200, 72, 72],     # red
+        [125, 48, 173],    # purple
+        [184, 70, 162],    # pink
     ],
     jnp.uint8,
 )
 
 C_PLAYER_RED = (214, 92, 92)
 C_PLAYER_GREEN = (144, 252, 144)
-C_BOBO_GOLD = (162, 134, 56)
-C_BULLET_GOLD = (162, 134, 56)
+C_BOBO_GOLD = (180, 122, 48)
+C_BULLET_GREEN = (144, 252, 144)
 
 C_ATTRACT_STAR = (210, 182, 86)
 C_ATTRACT_GUNNER = (84, 184, 153)
@@ -109,7 +107,6 @@ C_ATTRACT_YELLOW = (210, 210, 64)
 
 
 def _find_asset(name):
-    """Search for an asset file in common locations."""
     module_dir = os.path.dirname(os.path.abspath(__file__))
     candidates = [
         os.path.join(module_dir, name),
@@ -133,13 +130,13 @@ class StarGunnerConstants(struct.PyTreeNode):
     MOD_ID: int = struct.field(pytree_node=False, default=0)
 
     MAX_EPISODE_FRAMES: int = struct.field(pytree_node=False, default=108_000)
-    PLAY_TOP: int = struct.field(pytree_node=False, default=30)
+    PLAY_TOP: int = struct.field(pytree_node=False, default=50)
     PLAY_BOTTOM: int = struct.field(pytree_node=False, default=175)
     HILL_Y: int = struct.field(pytree_node=False, default=190)
 
     PLAYER_WIDTH: int = struct.field(pytree_node=False, default=9)
     PLAYER_HEIGHT: int = struct.field(pytree_node=False, default=4)
-    PLAYER_SPEED: int = struct.field(pytree_node=False, default=2)
+    PLAYER_SPEED: float = struct.field(pytree_node=False, default=0.45)
     PLAYER_START_X: int = struct.field(pytree_node=False, default=80)
     PLAYER_START_Y: int = struct.field(pytree_node=False, default=165)
     PLAYER_LIVES_START: int = struct.field(pytree_node=False, default=5)
@@ -149,36 +146,34 @@ class StarGunnerConstants(struct.PyTreeNode):
 
     BULLET_WIDTH: int = struct.field(pytree_node=False, default=4)
     BULLET_HEIGHT: int = struct.field(pytree_node=False, default=1)
-    BULLET_SPEED: float = struct.field(pytree_node=False, default=5.0)
+    BULLET_SPEED: float = struct.field(pytree_node=False, default=4.0)
     MAX_BULLETS: int = struct.field(pytree_node=False, default=2)
     FIRE_COOLDOWN: int = struct.field(pytree_node=False, default=8)
 
     REFORM_FRAMES: int = struct.field(pytree_node=False, default=20)
-    NUM_ENEMIES: int = struct.field(pytree_node=False, default=3)
-    ENEMY_SPEED: float = struct.field(pytree_node=False, default=1.0)
+    NUM_ENEMIES: int = struct.field(pytree_node=False, default=1)
+    ENEMY_SPEED: float = struct.field(pytree_node=False, default=0.15)
     ENEMY_SPEED_INCREMENT: float = struct.field(pytree_node=False, default=0.10)
     MAX_ENEMY_SPEED_MULTIPLIER: float = struct.field(pytree_node=False, default=2.0)
     ENEMY_AMP: float = struct.field(pytree_node=False, default=0.0)
 
-    BOBO_WIDTH: int = struct.field(pytree_node=False, default=7)
-    BOBO_HEIGHT: int = struct.field(pytree_node=False, default=10)
-    BOBO_Y: int = struct.field(pytree_node=False, default=32)        # war 60 -> jetzt ueber den Gegnern
-    BOBO_CHANGE_PROB: float = struct.field(pytree_node=False, default=0.05)   # Chance/Frame auf neue Zufallsgeschwindigkeit
+    BOBO_WIDTH: int = struct.field(pytree_node=False, default=14)
+    BOBO_HEIGHT: int = struct.field(pytree_node=False, default=18)
+    BOBO_Y: int = struct.field(pytree_node=False, default=40)
 
-    ENEMY_Y_MAX: int = struct.field(pytree_node=False, default=165)  # bis zum Spielfeld-Boden
-    ENEMY_Y_MIN: int = struct.field(pytree_node=False, default=55)   # unterhalb von Bobo (32 + 10 + Abstand)
+    ENEMY_Y_MAX: int = struct.field(pytree_node=False, default=165)
+    ENEMY_Y_MIN: int = struct.field(pytree_node=False, default=45)
     ENEMY_CHANGE_PROB: float = struct.field(pytree_node=False, default=0.04)
-    ENEMY_SPAWN_X: int = struct.field(pytree_node=False, default=8)        # linker Rand
-    COLLISION_POINTS: int = struct.field(pytree_node=False, default=200)   # Score bei Kollision mit Gegner
-    BOBO_SPEED: float = struct.field(pytree_node=False, default=2.5)
-    BOBO_BOMB_PERIOD: int = struct.field(pytree_node=False, default=45)
+    ENEMY_SPAWN_X: int = struct.field(pytree_node=False, default=8)
+    COLLISION_POINTS: int = struct.field(pytree_node=False, default=200)
+    BOBO_SPEED: float = struct.field(pytree_node=False, default=2.0)
+    BOBO_BOMB_PERIOD: int = struct.field(pytree_node=False, default=30)
 
     MAX_BOMBS: int = struct.field(pytree_node=False, default=4)
-    BOMB_WIDTH: int = struct.field(pytree_node=False, default=2)
-    BOMB_HEIGHT: int = struct.field(pytree_node=False, default=4)
-    BOMB_SPEED: float = struct.field(pytree_node=False, default=2.0)
+    BOMB_WIDTH: int = struct.field(pytree_node=False, default=4)
+    BOMB_HEIGHT: int = struct.field(pytree_node=False, default=1)
+    BOMB_SPEED: float = struct.field(pytree_node=False, default=1.5)
 
-    ENEMY_COLOR_SAUCER: tuple = struct.field(pytree_node=False, default=(236, 200, 96))
     HILL_SCROLL_SPEED: float = struct.field(pytree_node=False, default=0.85)
 
     EXPLOSION_SIZE: int = struct.field(pytree_node=False, default=10)
@@ -214,8 +209,12 @@ class StarGunnerState(struct.PyTreeNode):
     enemy_vy: chex.Array
     enemy_vx: chex.Array
     enemy_phase: chex.Array
+    enemy_mode: chex.Array
+    enemy_mode_timer: chex.Array
+    enemy_sweep_dir: chex.Array
 
     bobo_x: chex.Array
+    bobo_base_x: chex.Array
     bobo_vx: chex.Array
     bomb_x: chex.Array
     bomb_y: chex.Array
@@ -393,14 +392,9 @@ class JaxStarGunner(
         )
 
     def _spawn_positions(self):
-        """Slot 0 = oben links, Slot 1 = unten links, Slot 2 = links Mitte."""
         n = self.consts.NUM_ENEMIES
-        x = jnp.full((n,), float(self.consts.ENEMY_SPAWN_X), jnp.float32)
-        y = jnp.array([
-            float(self.consts.ENEMY_Y_MIN),                                # oben links
-            float(self.consts.ENEMY_Y_MAX - 10),                           # unten links
-            float((self.consts.ENEMY_Y_MIN + self.consts.ENEMY_Y_MAX) // 2),  # Mitte links
-        ], jnp.float32)[:n]
+        x = jnp.full((n,), 0.0, jnp.float32)
+        y = jnp.full((n,), float(self.consts.ENEMY_Y_MIN), jnp.float32)
         return x, y
 
     def _init_subwave(self, level, subwave):
@@ -413,7 +407,7 @@ class JaxStarGunner(
 
         type_index = jnp.mod(idx + level - 1, 3).astype(jnp.int32)
         direction = jnp.where(idx % 2 == 0, 1.0, -1.0)
-        vy = jnp.where(type_index == BUZZIE, direction * 0.6, 0.0)
+        vy = jnp.where(type_index == BUZZIE, direction * 0.3, 0.0)
         phase = idx.astype(jnp.float32) * (2.0 * jnp.pi / n)
 
         enemy_state = jnp.where(active, ENEMY_ALIVE, ENEMY_EMPTY)
@@ -449,13 +443,17 @@ class JaxStarGunner(
             enemy_vy=evy,
             enemy_vx=jnp.zeros((n,), jnp.float32),
             enemy_phase=eph,
+            enemy_mode=jnp.zeros((n,), jnp.int32),
+            enemy_mode_timer=jnp.zeros((n,), jnp.int32),
+            enemy_sweep_dir=jnp.ones((n,), jnp.float32),
             enemy_state=est,
             enemy_timer=jnp.zeros((n,), jnp.int32),
             level=jnp.array(1, jnp.int32),
             subwave=jnp.array(0, jnp.int32),
             kills_in_subwave=jnp.array(0, jnp.int32),
             extra_lives_earned=jnp.array(0, jnp.int32),
-            bobo_x=jnp.array(self.consts.WIDTH / 2, jnp.float32),
+            bobo_x=jnp.array(105.0, jnp.float32),
+            bobo_base_x=jnp.array(105.0, jnp.float32),
             bobo_vx=jnp.array(self.consts.BOBO_SPEED, jnp.float32),
             bomb_x=jnp.zeros((self.consts.MAX_BOMBS,), jnp.float32),
             bomb_y=jnp.zeros((self.consts.MAX_BOMBS,), jnp.float32),
@@ -541,7 +539,6 @@ class JaxStarGunner(
                 (a == Action.RIGHTFIRE) | (a == Action.UPRIGHTFIRE) | (a == Action.DOWNRIGHTFIRE)
         )
 
-        # UPFIRE / DOWNFIRE / FIRE schießen in Blickrichtung, nie vertikal
         vx_dir = jnp.where(goes_left, -1.0, jnp.where(goes_right, 1.0, facing_dir))
         vx = vx_dir * self.consts.BULLET_SPEED
         vy = jnp.zeros_like(vx)
@@ -550,7 +547,6 @@ class JaxStarGunner(
         ready = state.fire_cooldown <= 0
         can_fire = fire & ready & (~jnp.all(state.bullet_active))
 
-        # Schuss kommt vorne an der Linie heraus, auf der Hoehe der Linie (unterste Sprite-Zeile)
         spawn_x = jnp.where(
             vx > 0,
             state.player_x + self.consts.PLAYER_WIDTH,
@@ -594,63 +590,142 @@ class JaxStarGunner(
         )
 
     def _enemy_step(self, state):
-        n = self.consts.NUM_ENEMIES
-        key, k_change, k_vx, k_vy = jax.random.split(state.key, 4)
+        """
+        Enemy (ring) behaviour:
 
-        wave_multiplier = jnp.minimum(
-            1.0 + self.consts.ENEMY_SPEED_INCREMENT * (state.level - 1).astype(jnp.float32),
-            self.consts.MAX_ENEMY_SPEED_MULTIPLIER,
-        )
-        speed = self.consts.ENEMY_SPEED * wave_multiplier
+        Above bottom:
+            mode 0 = diagonal (descend + right)
+            mode 1 = vertical (straight down)
+            Random switches between them.
+
+        At bottom (y >= ENEMY_Y_MAX):
+            Pause for PAUSE_FRAMES, then
+            mode 2 = horizontal sweep rightward, wraps at edges.
+
+        Depth never exceeds ENEMY_Y_MAX.
+        """
+        n = self.consts.NUM_ENEMIES
         is_alive = state.enemy_state == ENEMY_ALIVE
 
-        # Zufaellige neue Richtung in x UND y
-        change = jax.random.uniform(k_change, (n,)) < self.consts.ENEMY_CHANGE_PROB
-        new_vx = jax.random.uniform(k_vx, (n,), minval=-1.0, maxval=1.0) * speed
-        new_vy = jax.random.uniform(k_vy, (n,), minval=-1.0, maxval=1.0) * speed
-        vx = jnp.where(change, new_vx, state.enemy_vx)
-        vy = jnp.where(change, new_vy, state.enemy_vy)
+        key, k_mode = jax.random.split(state.key)
+        r = jax.random.uniform(k_mode, (n,))
+
+        speed = self.consts.ENEMY_SPEED
+        mode = state.enemy_mode
+
+        y_top = float(self.consts.ENEMY_Y_MIN)
+        y_bottom = float(self.consts.ENEMY_Y_MAX)
+        at_bottom = state.enemy_y >= (y_bottom - 1.0)
+
+        # Bottom timer counts only while at bottom
+        new_timer = jnp.where(at_bottom, state.enemy_mode_timer + 1, 0)
+
+        PAUSE_FRAMES = 20
+        pause = at_bottom & (new_timer < PAUSE_FRAMES)
+
+        # Transition to horizontal when at bottom after pause
+        mode = jnp.where(at_bottom & (new_timer >= PAUSE_FRAMES), 2, mode)
+
+        # Above bottom: never horizontal
+        mode = jnp.where((~at_bottom) & (mode == 2), 0, mode)
+
+        # Random switching between diagonal (0) and vertical (1) above bottom
+        switch_to_vert = (mode == 0) & (r < 0.010) & (~at_bottom)
+        switch_to_diag = (mode == 1) & (r < 0.010) & (~at_bottom)
+        mode = jnp.where(switch_to_vert, 1, jnp.where(switch_to_diag, 0, mode))
+
+        # --- Velocities ---
+        vx_diag = speed * 1.2
+        vy_diag = speed * 0.4
+
+        vx_horiz = speed * 1.5   # always right; wraps at edge
+        vy_horiz = 0.0
+
+        vx_vert = 0.0
+        vy_vert = speed * 0.8
+
+        vx = jnp.where(mode == 0, vx_diag,
+              jnp.where(mode == 2, vx_horiz,
+                                       vx_vert))
+        vy = jnp.where(mode == 0, vy_diag,
+              jnp.where(mode == 2, vy_horiz,
+                                       vy_vert))
+
+        # Pause overrides movement
+        vx = jnp.where(pause, 0.0, vx)
+        vy = jnp.where(pause, 0.0, vy)
+
+        # Never descend past bottom
+        vy = jnp.where(at_bottom & (vy > 0), 0.0, vy)
 
         nx = state.enemy_x + jnp.where(is_alive, vx, 0.0)
         ny = state.enemy_y + jnp.where(is_alive, vy, 0.0)
 
-        # Horizontal: Wrap-Around wie beim Spieler (links raus -> rechts rein)
+        # Horizontal wrap across the whole screen
         nx = jnp.mod(nx, float(self.consts.WIDTH))
-
-        # Vertikal: weiterhin Abprallen zwischen ENEMY_Y_MIN und ENEMY_Y_MAX
-        y_lo, y_hi = float(self.consts.ENEMY_Y_MIN), float(self.consts.ENEMY_Y_MAX)
-        bounce_y = ((ny < y_lo) | (ny > y_hi)) & is_alive
-        vy = jnp.where(bounce_y, -vy, vy)
+        ny = jnp.clip(ny, y_top, y_bottom)
 
         return state.replace(
             key=key,
             enemy_x=nx,
-            enemy_y=jnp.clip(ny, y_lo, y_hi),
+            enemy_y=ny,
             enemy_vx=vx,
             enemy_vy=vy,
+            enemy_mode=mode,
+            enemy_mode_timer=new_timer,
         )
 
     def _bobo_step(self, state):
-        key, k_change, k_vel = jax.random.split(state.key, 3)
+        """
+        Bobo moves within a sliding window.
+        Window spans 2 units (80 px). Within a window he moves back and
+        forth 3 times, dropping a bomb after each full traversal.
+        After 3 traversals the window slides one unit (40 px) right.
+        At the screen edge the window direction reverses.
+        """
+        c = self.consts
 
-        change = jax.random.uniform(k_change) < self.consts.BOBO_CHANGE_PROB
-        new_vx = jax.random.uniform(
-            k_vel, minval=-self.consts.BOBO_SPEED, maxval=self.consts.BOBO_SPEED
-        )
-        vx = jnp.where(change, new_vx, state.bobo_vx)
+        POSITION_SIZE = 40.0
+        WINDOW_UNITS = 2
+        WINDOW_WIDTH = POSITION_SIZE * WINDOW_UNITS      # 80
+        SPEED = 4.0
+        TRAVEL_FRAMES = int(WINDOW_WIDTH / SPEED)        # 40 frames one way
+        CYCLE_FRAMES = 2 * TRAVEL_FRAMES                 # 80 frames full traverse
+        CYCLES_PER_WINDOW = 3
+        WINDOW_FRAMES = CYCLES_PER_WINDOW * CYCLE_FRAMES # 240
 
-        lo = 4.0
-        hi = float(self.consts.WIDTH - self.consts.BOBO_WIDTH - 4)
-        nx = state.bobo_x + vx
-        vx = jnp.where((nx < lo) | (nx > hi), -vx, vx)
+        # How many window start positions fit on screen
+        num_windows = int((c.WIDTH - WINDOW_WIDTH) / POSITION_SIZE) + 1  # 3
 
-        return state.replace(key=key, bobo_x=jnp.clip(nx, lo, hi), bobo_vx=vx)
+        # Triangle wave over window positions (e.g. 0, 1, 2, 1, 0, 1, ...)
+        tri_period = 2 * (num_windows - 1) if num_windows > 1 else 1
+        tri_m = (state.step_counter // WINDOW_FRAMES) % tri_period
+        window_idx = jnp.where(
+            tri_m <= (num_windows - 1),
+            tri_m,
+            tri_period - tri_m,
+        ).astype(jnp.float32)
+
+        window_left = window_idx * POSITION_SIZE
+
+        # Within-window phase: triangle 0 -> WINDOW_WIDTH -> 0
+        cycle_t = state.step_counter % CYCLE_FRAMES
+        tri = jnp.where(cycle_t <= TRAVEL_FRAMES, cycle_t, CYCLE_FRAMES - cycle_t)
+        bobo_x = window_left + tri.astype(jnp.float32) * SPEED
+
+        bobo_vx = jnp.where(cycle_t <= TRAVEL_FRAMES, SPEED, -SPEED)
+
+        return state.replace(bobo_x=bobo_x, bobo_vx=bobo_vx)
 
     def _bomb_step(self, state):
-        drop = (state.step_counter > 0) & (state.step_counter % self.consts.BOBO_BOMB_PERIOD == 0)
+        """Bobo drops horizontal bombs that fall straight down."""
+        CYCLE_FRAMES = 80
+        drop = (state.step_counter % CYCLE_FRAMES) == (CYCLE_FRAMES - 1)
+
         free = jnp.argmax(~state.bomb_active)
         can_drop = drop & (~jnp.all(state.bomb_active))
 
+        # Spawn directly below Bobo
         spawn_x = state.bobo_x + self.consts.BOBO_WIDTH / 2 - self.consts.BOMB_WIDTH / 2
         spawn_y = self.consts.BOBO_Y + self.consts.BOBO_HEIGHT
 
@@ -662,7 +737,10 @@ class JaxStarGunner(
         bomb_y = jnp.where(can_drop, by, state.bomb_y)
         bomb_active = jnp.where(can_drop, ba, state.bomb_active)
 
+        # Fall down
         bomb_y = bomb_y + self.consts.BOMB_SPEED
+
+        # Deactivate when hitting hills
         bomb_active = bomb_active & (bomb_y < self.consts.HILL_Y)
 
         return state.replace(bomb_x=bomb_x, bomb_y=bomb_y, bomb_active=bomb_active)
@@ -802,6 +880,17 @@ class JaxStarGunner(
         new_enemy_state = state.enemy_state
         new_enemy_state = jnp.where(goes_to_reform, ENEMY_REFORMING, new_enemy_state)
         new_enemy_state = jnp.where(goes_empty, ENEMY_EMPTY, new_enemy_state)
+        # When an enemy finishes reforming and becomes ALIVE again,
+        # respawn it at the top of the screen with a new random X and mode.
+        key_r, k_x, k_mode = jax.random.split(state.key, 3)
+        respawn_x = jax.random.uniform(k_x, (n,), minval=10.0,
+                                       maxval=float(self.consts.WIDTH - 10))
+        respawn_y = jnp.full((n,), float(self.consts.ENEMY_Y_MIN), jnp.float32)
+        respawn_mode = jax.random.randint(k_mode, (n,), 0, 2).astype(jnp.int32)
+
+        # Only reset position/mode for enemies that JUST finished reforming
+        reset_pos = finished_reform
+
         new_enemy_state = jnp.where(finished_reform, ENEMY_ALIVE, new_enemy_state)
 
         new_timer = jnp.where(goes_to_reform, self.consts.REFORM_FRAMES, timer)
@@ -828,10 +917,19 @@ class JaxStarGunner(
         final_timer = jnp.where(subwave_complete, jnp.zeros((n,), jnp.int32), new_timer)
         final_kills = jnp.where(subwave_complete, jnp.array(0, jnp.int32), state.kills_in_subwave)
 
+        # Apply respawn position/mode only to enemies that just reformed
+        final_x = jnp.where(reset_pos, respawn_x, final_x)
+        final_y = jnp.where(reset_pos, respawn_y, final_y)
+        final_mode = jnp.where(reset_pos, respawn_mode, state.enemy_mode)
+        final_timer2 = jnp.where(reset_pos, 0, state.enemy_mode_timer)
+
         return state.replace(
+            key=key_r,
             enemy_state=final_enemy_state, enemy_timer=final_timer,
             enemy_x=final_x, enemy_y=final_y, enemy_type=final_type,
             enemy_vy=final_vy, enemy_phase=final_phase,
+            enemy_mode=final_mode,
+            enemy_mode_timer=final_timer2,
             subwave=next_subwave, level=next_level,
             kills_in_subwave=final_kills, score=state.score + bonus,
         )
@@ -1070,7 +1168,6 @@ class StarGunnerRenderer:
 
         self.digit_font = jnp.array(np.stack([_glyph_np(str(d)) for d in range(10)]))
 
-        # ---- Pre-rendered attract animation (117-frame loop from ALE) ----
         attract_path = _find_asset("attract_frames.npz")
         if attract_path is not None:
             self.attract_frames = jnp.array(np.load(attract_path)["frames"])
@@ -1079,9 +1176,8 @@ class StarGunnerRenderer:
         else:
             self.attract_frames = None
             self.attract_cycle = 117
-            print("WARNING: attract_frames.npz not found — using fallback text rendering")
+            print("WARNING: attract_frames.npz not found — using fallback")
 
-        # ---- Pre-rendered hill scroll cycle (20-frame loop from ALE) ----
         hills_path = _find_asset("hills_cycle.npz")
         if hills_path is not None:
             h = np.load(hills_path)["hills"]
@@ -1103,7 +1199,6 @@ class StarGunnerRenderer:
             d = (value // place) % 10
             glyph = self.digit_font[d]
             xi = x0 + i * spacing
-            # Only draw if this digit is significant OR it is the ones digit
             should_show = (value >= place) | (i == ndigits - 1)
             masked = jnp.where(
                 should_show & (glyph[..., None] > 0),
@@ -1143,35 +1238,74 @@ class StarGunnerRenderer:
     def _draw_entities(self, img, state):
         c = self.consts
 
-        img = draw_sprite(img, state.bobo_x, c.BOBO_Y, BOBO_SPRITE,
-                          jnp.array(C_BOBO_GOLD, jnp.uint8))
+        # Bobo = humanoid at top — cycles through 8 ALE colors
+        bobo_color_list = jnp.array([
+            [180, 122, 48],    # gold
+            [84, 92, 214],     # blue
+            [162, 98, 33],     # dark gold
+            [101, 111, 228],   # bright blue
+            [146, 70, 192],    # purple
+            [66, 72, 200],     # dark blue
+            [213, 130, 74],    # orange
+            [117, 128, 240],   # very bright blue
+        ], jnp.uint8)
+        bobo_phase = (state.step_counter // 240) % 8
+        bobo_current_color = bobo_color_list[bobo_phase]
+
+        # Bobo itself uses the same colour
+        img = draw_sprite(img, state.bobo_x, c.BOBO_Y, BOBO_SPRITE, bobo_current_color)
 
         for i in range(c.MAX_BOMBS):
             def draw_bomb(active):
                 def draw(_):
-                    bomb_sprite = jnp.array([[1], [1], [1], [1]], dtype=jnp.bool_)
+                    bomb_sprite = jnp.array([[1, 1, 1, 1]], dtype=jnp.bool_)
                     return draw_sprite(img, state.bomb_x[i], state.bomb_y[i], bomb_sprite,
-                                       jnp.array([255, 255, 255], jnp.uint8))
+                                       bobo_current_color)
                 def skip(_):
                     return img
                 return jax.lax.cond(active, draw, skip, operand=None)
             img = draw_bomb(state.bomb_active[i])
 
+        # Enemies = ring/UFO, move freely
         edy = enemy_display_y(state.enemy_y, state.enemy_type, state.enemy_phase,
                               state.step_counter, c.ENEMY_AMP)
+
+        # Enemy palette — blue, purple, red, yellow, green
+        ENEMY_PALETTE = jnp.array([
+            # Blues
+            [0, 0, 148], [24, 26, 167], [45, 50, 184], [66, 72, 200],
+            [84, 92, 214], [101, 111, 228], [117, 128, 240],
+            # Purples
+            [80, 0, 132], [104, 25, 154], [125, 48, 173], [146, 70, 192],
+            [164, 89, 208], [181, 108, 224], [197, 124, 238],
+            # Reds
+            [148, 0, 0], [167, 26, 26], [184, 50, 50], [200, 72, 72],
+            [214, 92, 92], [228, 111, 111], [240, 128, 128],
+            # Yellows
+            [148, 116, 0], [181, 143, 0], [210, 164, 0], [232, 204, 99],
+            [252, 224, 112], [252, 240, 148],
+            # Greens
+            [0, 68, 0], [20, 60, 0], [72, 160, 72], [92, 186, 92],
+            [111, 210, 111], [144, 252, 144],
+        ], jnp.uint8)
+        enemy_cycle_color = ENEMY_PALETTE[(state.step_counter // 12) % 34]
 
         for i in range(c.NUM_ENEMIES):
             def draw_enemy(est_val, timer_val):
                 def alive_fn(_):
-                    etype = state.enemy_type[i]
-                    color = jax.lax.switch(
-                        etype,
-                        [lambda: ENEMY_COLOR[SAUCER],
-                         lambda: ENEMY_COLOR[BUZZIE],
-                         lambda: ENEMY_COLOR[SQUEEZER]],
-                    )
+                    # Cycle phase
+                    WAVE_FRAMES = 90
+                    DESCEND_FRAMES = 40
+                    CYCLE = WAVE_FRAMES + DESCEND_FRAMES
+                    phase = state.step_counter % CYCLE
+                    in_wave = phase < WAVE_FRAMES
+
+                    # Green/yellow palette during WAVE
+                    color = enemy_cycle_color
+
+
                     sprite = jax.lax.switch(
-                        etype,
+                        state.enemy_type[i],
                         [lambda: SAUCER_SPRITE, lambda: BUZZIE_SPRITE, lambda: SQUEEZER_SPRITE],
                     )
                     return draw_sprite(img, state.enemy_x[i], edy[i], sprite, color)
@@ -1179,12 +1313,7 @@ class StarGunnerRenderer:
                 def reforming_fn(_):
                     progress = 1.0 - (timer_val / c.REFORM_FRAMES)
                     etype = state.enemy_type[i]
-                    color = jax.lax.switch(
-                        etype,
-                        [lambda: ENEMY_COLOR[SAUCER],
-                         lambda: ENEMY_COLOR[BUZZIE],
-                         lambda: ENEMY_COLOR[SQUEEZER]],
-                    )
+                    color = enemy_cycle_color
                     angles = jnp.array([jnp.pi/4, 3*jnp.pi/4, 5*jnp.pi/4, 7*jnp.pi/4])
                     spread = 12.0 * (1.0 - progress)
                     img_local = img
@@ -1201,16 +1330,18 @@ class StarGunnerRenderer:
 
             img = draw_enemy(state.enemy_state[i], state.enemy_timer[i])
 
+        # Player bullets = green
         for i in range(c.MAX_BULLETS):
             def draw_bullet(active, x, y):
                 def draw_fn(_):
                     return draw_sprite(img, x, y, BULLET_SPRITE_LOCAL,
-                                       jnp.array(C_BULLET_GOLD, jnp.uint8))
+                                       jnp.array(C_BULLET_GREEN, jnp.uint8))
                 def skip_fn(_):
                     return img
                 return jax.lax.cond(active, draw_fn, skip_fn, operand=None)
             img = draw_bullet(state.bullet_active[i], state.bullet_x[i], state.bullet_y[i])
 
+        # Enemy explosions
         for i in range(c.NUM_ENEMIES):
             elapsed = c.EXPLOSION_DURATION - state.explosion_timer[i]
             for f in range(4):
@@ -1223,6 +1354,7 @@ class StarGunnerRenderer:
                 w = jnp.where(active, 2, 0)
                 img = draw_rect(img, fx, fy, w, w, col)
 
+        # Player explosion
         p_elapsed = c.PLAYER_EXPLOSION_DURATION - state.player_explosion_timer
         for f in range(4):
             fx = state.player_explosion_x + state.player_frag_vx[f] * p_elapsed
@@ -1240,7 +1372,6 @@ class StarGunnerRenderer:
                 sprite = jnp.where(state.player_facing > 0, PLAYER_SPRITE_RIGHT, PLAYER_SPRITE_LEFT)
                 return draw_sprite(img, state.player_x, state.player_y, sprite,
                                    jnp.array(C_PLAYER_RED, jnp.uint8))
-
             def hide_fn(_):
                 return img
             return jax.lax.cond(should_show, show_fn, hide_fn, operand=None)
@@ -1267,6 +1398,7 @@ class StarGunnerRenderer:
         img = jnp.where((lives > 1) & self.red_icon_masks[1][..., None], self.red_icon_rgbs[1], img)
         img = jnp.where((lives > 2) & self.red_icon_masks[2][..., None], self.red_icon_rgbs[2], img)
 
+
         img = self._draw_entities(img, state)
         return img
 
@@ -1278,11 +1410,9 @@ class StarGunnerRenderer:
             img = self._background(state)
             img = jnp.where(self.attract_mask[..., None], self.attract_rgb, img)
 
-        # Ganze obere HUD-Zeile löschen (rote Leben + alter Score)
         black = jnp.array([0, 0, 0], jnp.uint8)
         img = img.at[0:35, :].set(black)
 
-        # Score sauber neu zeichnen
         color_blue = jnp.array(C_ATTRACT_BLUE, jnp.uint8)
         img = self._blit_number_spaced(img, state.score, 60, 16, color_blue, ndigits=4, spacing=11)
         return img
