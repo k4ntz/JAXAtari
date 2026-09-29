@@ -12,7 +12,7 @@ output directories that differ only in `--seed` and reports, per game and arm:
 
 The distinction matters. On Pong the *final* returns of PPO-from-scratch and
 PPO-on-frozen-LeWM overlap heavily once seeds are taken into account, while the
-steps-to-positive-play do not overlap at all — so the defensible claim is about
+steps-to-positive-play do not overlap at all, so the defensible claim is about
 sample efficiency and run-to-run consistency, not about the final score.
 
 Usage
@@ -42,8 +42,8 @@ def load_runs(dirs, game, arm):
     """Every (seed, final_return, history) triple for this game/arm.
 
     `final_return` comes from the runner's summary, which averages the last 10%
-    of iterations. The last history entry is a single noisy evaluation — often
-    `None` — and using it silently collapses the seed spread.
+    of iterations. The last history entry is a single noisy evaluation, often
+    `None`, and using it silently collapses the seed spread.
     """
     runs = []
     for d in dirs:
@@ -63,7 +63,7 @@ def load_runs(dirs, game, arm):
 def steps_to_positive(history):
     """First environment step at which the mean episodic return goes above zero.
 
-    Returns None if it never does — reported rather than silently dropped, since
+    Returns None if it never does, reported rather than silently dropped, since
     "never got there" is itself a result.
     """
     for e in history["history"]:
@@ -139,10 +139,10 @@ def main():
 
     (out / f"{cli.game}_seeds.json").write_text(json.dumps(rows, indent=2))
 
-    print(f"\n{cli.game} — {rows[0]['n_seeds'] if rows else 0} seeds\n")
+    print(f"\n{cli.game}, {rows[0]['n_seeds'] if rows else 0} seeds\n")
     print(f"{'arm':16s} {'final return':>20s} {'steps to positive':>22s}")
     for r in rows:
-        fin = f"{r['final_mean']:.2f} +- {r['final_sd']:.2f}" if r["final_mean"] is not None else "—"
+        fin = f"{r['final_mean']:.2f} +- {r['final_sd']:.2f}" if r["final_mean"] is not None else "n/a"
         stp = (f"{r['steps_to_positive_mean']/1e6:.2f}M "
                f"{[round(f/1e6, 2) if f else None for f in r['steps_to_positive']]}"
                if r["steps_to_positive_mean"] else "never")

@@ -1,10 +1,10 @@
 """
-PPO on JAXtari with a pluggable feature extractor — the downstream evaluation of
+PPO on JAXtari with a pluggable feature extractor, the downstream evaluation of
 the LeWM world model.
 
 LeWM is trained reward-free (`lewm_jaxatari.py`), so on its own it produces no game
 scores. This script closes that gap: it freezes the pretrained LeWM encoder, learns
-a policy on top of its embeddings, and reports episodic return — numbers directly
+a policy on top of its embeddings, and reports episodic return, numbers directly
 comparable to the repo's PPO/PQN baselines and to Dreamer.
 
 Three feature extractors, selected with `--features`:
@@ -22,7 +22,7 @@ Why PyTorch and not JAX
 The environment stays JAXtari (JAX); only the networks are PyTorch. On Apple
 silicon JAX has no GPU backend and runs on CPU, while PyTorch reaches the GPU
 through MPS. Measured on the Nature-CNN trunk at batch 512, one forward+backward
-costs 772 ms under JAX/CPU against 37 ms under PyTorch/MPS — a 20x gap on the
+costs 772 ms under JAX/CPU against 37 ms under PyTorch/MPS, a 20x gap on the
 operation PPO spends nearly all of its time in. Keeping the networks in PyTorch
 also means the LeWM encoder loads directly, with no cross-framework weight port.
 
@@ -106,7 +106,7 @@ def orthogonal_(layer, gain=np.sqrt(2), bias=0.0):
 
 
 class NatureCNN(nn.Module):
-    """The standard Atari trunk, trained from scratch — the control arm."""
+    """The standard Atari trunk, trained from scratch, the control arm."""
 
     def __init__(self, in_channels: int, hidden: int = 512):
         super().__init__()
@@ -127,7 +127,7 @@ class NatureCNN(nn.Module):
 class LeWMTrunk(nn.Module):
     """Pretrained LeWM encoder applied per frame, then a learned projection.
 
-    The world model encodes single frames — all temporal structure lives in its
+    The world model encodes single frames, all temporal structure lives in its
     predictor, which the policy does not use. So the frame stack is encoded
     frame-by-frame with the *same* encoder and the embeddings are concatenated,
     which is what gives the policy access to motion.
@@ -154,9 +154,9 @@ class LeWMTrunk(nn.Module):
         #
         # This is not cosmetic. PPO stores log-probs during the rollout and
         # recomputes them during the update to form an importance ratio. With BN
-        # in training mode the two passes normalise by different statistics —
+        # in training mode the two passes normalise by different statistics,
         # rollout batches are num_envs*frame_stack (64 frames here) while update
-        # minibatches are 2048 — so the ratio compares two different functions,
+        # minibatches are 2048, so the ratio compares two different functions,
         # explodes, and takes the policy and critic with it. Observed directly:
         # value loss reaching 1e15 and entropy collapsing to 0 within 25
         # iterations on every game.
@@ -201,7 +201,7 @@ def train(args):
     if num_iterations == 0:
         raise ValueError(
             f"total_timesteps={args.total_timesteps} is smaller than one batch "
-            f"({batch_size}) — nothing would be trained."
+            f"({batch_size}), nothing would be trained."
         )
 
     torch.manual_seed(args.seed)
@@ -269,7 +269,7 @@ def train(args):
 
     def to_torch(obs_j):
         """(N, F, H, W, 3) uint8 jax -> (N, F, 3, H, W) float32 torch in [0,1]."""
-        # np.array (not asarray) — JAX hands back a read-only buffer, and torch
+        # np.array (not asarray), JAX hands back a read-only buffer, and torch
         # refuses to own one safely.
         t = torch.from_numpy(np.array(obs_j)).to(device)
         return t.permute(0, 1, 4, 2, 3).float().div_(255.0)
@@ -410,7 +410,7 @@ def train(args):
     save_run(run_dir, args, history)
     plot_returns(run_dir, args, history)
     torch.save(agent.state_dict(), run_dir / "agent.pt")
-    print(f"Done in {(time.time() - start) / 60:.1f} min → {run_dir}")
+    print(f"Done in {(time.time() - start) / 60:.1f} min -> {run_dir}")
     return history
 
 
@@ -432,7 +432,7 @@ def plot_returns(run_dir, args, history):
     import matplotlib.pyplot as plt
 
     steps, rets = [p[0] for p in pts], [p[1] for p in pts]
-    # Running mean — per-iteration returns average over few episodes and are noisy.
+    # Running mean, per-iteration returns average over few episodes and are noisy.
     w = max(1, len(rets) // 20)
     smooth = np.convolve(rets, np.ones(w) / w, mode="valid")
 
@@ -441,7 +441,7 @@ def plot_returns(run_dir, args, history):
     ax.plot(steps[w - 1:], smooth, color="C0", linewidth=2, label=args.features)
     ax.set_xlabel("Environment steps")
     ax.set_ylabel("Episodic return")
-    ax.set_title(f"PPO on {args.game} — {args.features}")
+    ax.set_title(f"PPO on {args.game}, {args.features}")
     ax.grid(True, alpha=0.3)
     ax.legend()
     fig.tight_layout()

@@ -37,7 +37,7 @@ from pathlib import Path
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 import matplotlib
-matplotlib.use("Agg")  # headless — no display needed
+matplotlib.use("Agg")  # headless, no display needed
 import matplotlib.pyplot as plt
 
 import torch
@@ -74,7 +74,7 @@ def build_parser():
     p.add_argument("--device", type=str, default="auto")
     p.add_argument("--ckpt_every", type=int, default=0)
     p.add_argument("--stop_grad", action="store_true",
-                   help="ABLATION ONLY — run every game with stop-gradient")
+                   help="ABLATION ONLY, run every game with stop-gradient")
     return p
 
 
@@ -115,7 +115,7 @@ def free_memory():
 
 
 def save_grid(outdir: Path, games, results):
-    """One figure with every game's learning curve — the report's overview plot."""
+    """One figure with every game's learning curve, the report's overview plot."""
     ok = [g for g in games if results.get(g, {}).get("status") == "ok"
           and results[g].get("curve_points")]
     if not ok:
@@ -139,7 +139,7 @@ def save_grid(outdir: Path, games, results):
     axes.flat[0].legend(fontsize=7, loc="upper right")
     fig.supxlabel("Training step", fontsize=9)
     fig.supylabel("Loss", fontsize=9)
-    fig.suptitle("LeWM on JAXtari — learning curves", fontsize=12)
+    fig.suptitle("LeWM on JAXtari, learning curves", fontsize=12)
     fig.tight_layout()
     path = outdir / "all_games.png"
     fig.savefig(path, dpi=150)
@@ -148,9 +148,9 @@ def save_grid(outdir: Path, games, results):
 
 
 def save_summary_md(outdir: Path, results, cli):
-    """Markdown table of the run — paste-ready for the report."""
+    """Markdown table of the run, paste-ready for the report."""
     lines = [
-        "# LeWM on JAXtari — run summary",
+        "# LeWM on JAXtari, run summary",
         "",
         f"`total_steps={cli.total_steps}`, `seq_len={cli.seq_len}`, "
         f"`batch_size={cli.batch_size}`, `lr={cli.lr}`, "
@@ -159,7 +159,7 @@ def save_summary_md(outdir: Path, results, cli):
         "`rollout MSE` is the open-loop latent prediction error averaged over the "
         "horizon; `frozen` is the trivial baseline that assumes the embedding never "
         "changes. Lower rollout MSE than frozen means the predictor is doing real work. "
-        "`eff. rank` is the effective rank of the embeddings (out of 256) — a value "
+        "`eff. rank` is the effective rank of the embeddings (out of 256), a value "
         "near 1 would mean representation collapse.",
         "",
         "| game | status | time (s) | final loss | final pred | eff. rank | rollout MSE | frozen | beats baseline |",
@@ -167,15 +167,15 @@ def save_summary_md(outdir: Path, results, cli):
     ]
 
     def fmt(v, spec=".4f"):
-        return "—" if v is None else format(v, spec)
+        return "n/a" if v is None else format(v, spec)
 
     for game, r in results.items():
         if r["status"] != "ok":
-            lines.append(f"| {game} | **{r['status']}** | {r.get('time_seconds', '—')} "
-                         f"| — | — | — | — | — | — |")
+            lines.append(f"| {game} | **{r['status']}** | {r.get('time_seconds', 'n/a')} "
+                         f"| n/a | n/a | n/a | n/a | n/a | n/a |")
             continue
         roll, base = r["rollout_mse_mean"], r["frozen_baseline_mean"]
-        beats = "—" if roll is None or base is None else ("yes" if roll < base else "no")
+        beats = "n/a" if roll is None or base is None else ("yes" if roll < base else "no")
         lines.append(
             f"| {game} | ok | {r['time_seconds']:.0f} | {fmt(r['final_loss'])} "
             f"| {fmt(r['final_pred_loss'])} | {fmt(r['final_eff_rank'], '.1f')} "
@@ -224,7 +224,7 @@ def main():
                 # compact (step, loss, pred_loss) triples for the overview grid
                 "curve_points": [[e["step"], e["loss"], e["pred_loss"]] for e in loss_history],
             }
-            print(f"✓ {game} done in {elapsed:.0f}s")
+            print(f"ok: {game} done in {elapsed:.0f}s")
             del model
         except Exception as e:
             elapsed = time.time() - start
@@ -233,11 +233,11 @@ def main():
                 "time_seconds": round(elapsed, 1),
                 "error": traceback.format_exc(),
             }
-            print(f"✗ {game} FAILED after {elapsed:.0f}s: {type(e).__name__}: {e}")
+            print(f"FAIL: {game} FAILED after {elapsed:.0f}s: {type(e).__name__}: {e}")
 
         free_memory()
 
-        # Persist after every game — a run interrupted at game 12 keeps 11 results.
+        # Persist after every game, a run interrupted at game 12 keeps 11 results.
         summary_file.write_text(json.dumps(results, indent=2))
 
     grid = save_grid(outdir, cli.games, results)
@@ -245,11 +245,11 @@ def main():
 
     n_ok = sum(1 for r in results.values() if r["status"] == "ok")
     print(f"\n{'=' * 60}")
-    print(f"SUMMARY — {n_ok}/{len(results)} games trained "
+    print(f"SUMMARY, {n_ok}/{len(results)} games trained "
           f"in {(time.time() - run_start) / 60:.1f} min")
     print(f"{'=' * 60}")
     for game, r in results.items():
-        icon = "✓" if r["status"] == "ok" else "✗"
+        icon = "ok" if r["status"] == "ok" else "FAIL"
         extra = ""
         if r["status"] == "ok" and r["final_loss"] is not None:
             extra = f" | loss {r['final_loss']:.4f} | eff_rank {r['final_eff_rank']:.1f}"

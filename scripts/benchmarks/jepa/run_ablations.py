@@ -6,9 +6,9 @@ trained identically otherwise, so a difference in the metrics is attributable to
 that change.
 
     faithful      the paper: AdaLN actions, no stop-gradient, lambda = 0.1
-    no_sigreg     lambda = 0 — removes the anti-collapse term entirely
+    no_sigreg     lambda = 0, removes the anti-collapse term entirely
     stop_grad     stop-gradient on the target, on top of SIGReg
-    stop_grad_only  stop-gradient with lambda = 0 — the BYOL-style control
+    stop_grad_only  stop-gradient with lambda = 0, the BYOL-style control
     action_add    additive action embedding instead of AdaLN
     sigreg_0.5    lambda = 0.5
     sigreg_2.0    lambda = 2.0
@@ -21,7 +21,7 @@ representation collapse, with no stop-gradient and no EMA target encoder.
 the harder question and the real BYOL-style control: with lambda = 0 and a
 stop-gradient, does the asymmetry alone hold the representation open? Without it
 one can only claim SIGReg is sufficient, not that it does anything a plain
-stop-gradient could not — and this predictor is already asymmetric enough that
+stop-gradient could not, and this predictor is already asymmetric enough that
 the question is live.
 
 Effective rank is the collapse metric rather than embedding variance: BatchNorm
@@ -139,7 +139,7 @@ def save_figure(outdir: Path, games, variants, results):
             steps = res["steps"]
             ax_rank.plot(steps, res["eff_rank"], label=v, **STYLE.get(v, {}))
             ax_pred.plot(steps, res["pred_loss"], label=v, **STYLE.get(v, {}))
-        ax_rank.set_title(f"{game}: effective rank (collapse → 1)", fontsize=10)
+        ax_rank.set_title(f"{game}: effective rank (collapse -> 1)", fontsize=10)
         ax_rank.set_ylabel("effective rank")
         ax_rank.set_ylim(bottom=0)
         ax_pred.set_title(f"{game}: prediction loss", fontsize=10)
@@ -151,7 +151,7 @@ def save_figure(outdir: Path, games, variants, results):
             ax.tick_params(labelsize=8)
         ax_rank.legend(fontsize=7)
 
-    fig.suptitle("LeWM ablations — does SIGReg alone prevent collapse?", fontsize=12)
+    fig.suptitle("LeWM ablations, does SIGReg alone prevent collapse?", fontsize=12)
     fig.tight_layout()
     path = outdir / "ablations.png"
     fig.savefig(path, dpi=150)
@@ -166,7 +166,7 @@ def save_summary_md(outdir: Path, games, variants, results, cli):
         f"`total_steps={cli.total_steps}`, `seed={cli.seed}`. Each variant changes "
         "exactly one thing against `faithful`.",
         "",
-        "`eff. rank` is the effective rank of the embeddings out of 256 — near 1 "
+        "`eff. rank` is the effective rank of the embeddings out of 256, near 1 "
         "means representation collapse. `rollout MSE` is open-loop latent "
         "prediction error against a `frozen` baseline that assumes the embedding "
         "never changes; a model that does not beat it has learned nothing useful.",
@@ -180,14 +180,14 @@ def save_summary_md(outdir: Path, games, variants, results, cli):
             if r is None:
                 continue
             if r["status"] != "ok":
-                lines.append(f"| {game} | {v} | **{r['status']}** | — | — | — | — |")
+                lines.append(f"| {game} | {v} | **{r['status']}** | n/a | n/a | n/a | n/a |")
                 continue
             roll, base = r["rollout_mse_mean"], r["frozen_baseline_mean"]
-            beats = "—" if roll is None or base is None else ("yes" if roll < base else "**no**")
+            beats = "n/a" if roll is None or base is None else ("yes" if roll < base else "**no**")
             lines.append(
                 f"| {game} | {v} | {r['final_pred_loss']:.4f} | {r['final_eff_rank']:.1f} "
-                f"| {'—' if roll is None else f'{roll:.4f}'} "
-                f"| {'—' if base is None else f'{base:.4f}'} | {beats} |"
+                f"| {'n/a' if roll is None else f'{roll:.4f}'} "
+                f"| {'n/a' if base is None else f'{base:.4f}'} | {beats} |"
             )
 
     lines += ["", "## The paper's central claim", ""]
@@ -243,12 +243,12 @@ def main():
                 "eff_rank": [e["eff_rank"] for e in hist],
                 "pred_loss": [e["pred_loss"] for e in hist],
             }
-            print(f"✓ {tag} — eff_rank {results[tag]['final_eff_rank']:.1f}, "
+            print(f"ok: {tag}, eff_rank {results[tag]['final_eff_rank']:.1f}, "
                   f"pred {results[tag]['final_pred_loss']:.4f}")
         except Exception as e:
             results[tag] = {"status": "error", "time_min": (time.time() - start) / 60,
                             "error": traceback.format_exc()}
-            print(f"✗ {tag} FAILED: {type(e).__name__}: {e}")
+            print(f"FAIL: {tag} FAILED: {type(e).__name__}: {e}")
 
         free_memory()
         summary_file.write_text(json.dumps(results, indent=2))
@@ -258,10 +258,10 @@ def main():
 
     n_ok = sum(1 for r in results.values() if r["status"] == "ok")
     print(f"\n{'=' * 64}")
-    print(f"SUMMARY — {n_ok}/{len(results)} ok in {(time.time() - run_start) / 60:.1f} min")
+    print(f"SUMMARY, {n_ok}/{len(results)} ok in {(time.time() - run_start) / 60:.1f} min")
     print(f"{'=' * 64}")
     for tag, r in results.items():
-        icon = "✓" if r["status"] == "ok" else "✗"
+        icon = "ok" if r["status"] == "ok" else "FAIL"
         extra = (f" | eff_rank {r['final_eff_rank']:5.1f} | pred {r['final_pred_loss']:.4f}"
                  if r["status"] == "ok" else "")
         print(f"{icon} {tag:26s} | {r['time_min']:5.1f} min{extra}")

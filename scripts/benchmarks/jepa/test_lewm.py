@@ -2,7 +2,7 @@
 Tests for the LeWM implementation.
 
 These cover the properties that are easy to break silently and expensive to
-notice later — the ones where a bug produces plausible-looking numbers rather
+notice later, the ones where a bug produces plausible-looking numbers rather
 than a crash. Several are regression tests for bugs that actually occurred.
 
 Deliberately fast: nothing here constructs a JAXtari environment, so the whole
@@ -96,7 +96,7 @@ def test_predictor_is_causal(action_cond):
 
 def test_adaln_uses_actions():
     """After a gradient step the gates are non-zero, so different actions must
-    give different predictions — otherwise conditioning is silently dead."""
+    give different predictions, otherwise conditioning is silently dead."""
     p = Predictor(emb_dim=32, n_actions=4, n_heads=4, n_layers=2,
                   action_cond="adaln")
     emb = torch.randn(4, 5, 32)
@@ -179,7 +179,7 @@ def test_buffer_ring_overwrites_and_stays_capped():
 # ---------------------------------------------------------------------------
 
 def test_stop_grad_flag_controls_target_gradient():
-    """Faithful LeWM has NO stop-gradient — the paper's central claim depends on
+    """Faithful LeWM has NO stop-gradient, the paper's central claim depends on
     it. Guard against the flag silently inverting."""
     obs = torch.rand(2, 4, 3, 84, 84)
     act = torch.randint(0, 6, (2, 4))
@@ -214,7 +214,7 @@ def test_finetuned_trunk_keeps_encoder_batchnorm_in_eval():
     update to build an importance ratio. If the encoder's BatchNorm runs in
     training mode, the two passes normalise by different statistics (rollout
     batches are ~32x smaller than update minibatches), the ratio compares two
-    different functions, and training diverges — observed as value loss 1e15 and
+    different functions, and training diverges, observed as value loss 1e15 and
     entropy 0. The trunk must therefore hold encoder BN in eval mode even when
     the encoder's weights are being fine-tuned.
     """

@@ -2,7 +2,7 @@
 LeWorldModel (LeWM) agent for JAXtari environments.
 
 Based on: "LeWorldModel: Stable End-to-End Joint-Embedding Predictive Architecture from Pixels"
-          Maes, Le Lidec, Scieur, LeCun, Balestriero (2026) — arXiv:2603.19312
+          Maes, Le Lidec, Scieur, LeCun, Balestriero (2026), arXiv:2603.19312
 Code reference: https://github.com/lucas-maes/le-wm
 
 Adapted for JAXtari by: Amirmohammad Raei (TU Darmstadt Praktikum, Topic 30)
@@ -10,7 +10,7 @@ Changes from original:
   - CNN encoder instead of ViT (faster for Atari pixel observations)
   - Discrete action embedding instead of continuous action encoder
   - Online data collection from JAXtari instead of offline HDF5 datasets
-  - Uniform-random policy for data collection (no policy learning here — this
+  - Uniform-random policy for data collection (no policy learning here, this
     script trains the world model only)
 
 Usage
@@ -49,7 +49,7 @@ from jaxatari.wrappers import AtariWrapper, PixelObsWrapper
 
 # Defaults for every knob `train()` understands. Both entry points (the CLI and
 # run_all_games.py) build an argparse.Namespace, so anything missing is filled in
-# from here — a caller that omits a key gets the documented default rather than
+# from here, a caller that omits a key gets the documented default rather than
 # an AttributeError.
 DEFAULTS = dict(
     game="pong",
@@ -82,7 +82,7 @@ DEFAULTS = dict(
 
 
 # ---------------------------------------------------------------------------
-# RTPT — required on the TU Darmstadt student pool
+# RTPT, required on the TU Darmstadt student pool
 # ---------------------------------------------------------------------------
 
 def make_rtpt(experiment: str, max_iterations: int, initials: str = "AR"):
@@ -183,7 +183,7 @@ class AdaLNBlock(nn.Module):
     This is how the paper injects actions (Sec. 3): instead of adding an action
     embedding to the token, the action produces per-token shift/scale/gate
     parameters for both sub-layers. The modulation head is **zero-initialised**,
-    so at step 0 the gates are 0 and the block is exactly the identity — the
+    so at step 0 the gates are 0 and the block is exactly the identity, the
     predictor starts as a no-op and learns to use actions rather than having
     randomly-scaled action noise injected into the residual stream from the start.
     """
@@ -220,8 +220,8 @@ class Predictor(nn.Module):
     """Causal transformer over frame embeddings, conditioned on actions.
 
     `action_cond` selects how actions enter:
-      "adaln" — per-token AdaLN modulation, zero-init (what the paper does)
-      "add"   — action embedding added to the token (simpler; kept for ablation)
+      "adaln": per-token AdaLN modulation, zero-init (what the paper does)
+      "add":   action embedding added to the token (simpler; kept for ablation)
 
     The output projector mirrors the encoder's (Linear -> BatchNorm), as the paper
     specifies, so predictions live in the same normalised space as the targets
@@ -256,9 +256,9 @@ class Predictor(nn.Module):
 
     def forward(self, emb, actions):
         """
-        emb:     (B, T, D) — sequence of frame embeddings
-        actions: (B, T)    — discrete actions taken at each step
-        returns: (B, T, D) — predicted next embeddings
+        emb:     (B, T, D)  sequence of frame embeddings
+        actions: (B, T)     discrete actions taken at each step
+        returns: (B, T, D)  predicted next embeddings
         """
         B, T, D = emb.shape
         mask = nn.Transformer.generate_square_subsequent_mask(T, device=emb.device)
@@ -285,7 +285,7 @@ class Predictor(nn.Module):
 def effective_rank(emb_2d):
     """Entropy-based effective rank of an (N, D) embedding matrix.
 
-    Ranges from ~1 (full dimensional collapse — embeddings lie on a line) up to
+    Ranges from ~1 (full dimensional collapse, embeddings lie on a line) up to
     D (embeddings fill the space). This is the right collapse metric here because
     BatchNorm forces unit per-dimension variance, so naive std is uninformative;
     collapse instead shows up as the embeddings occupying a low-dim subspace.
@@ -335,7 +335,7 @@ class LeWM(nn.Module):
         pred = self.predictor(emb[:, :-1], actions[:, :-1])  # predict t+1 from t
 
         target = emb[:, 1:]
-        if self.stop_grad:                           # ablation only — NOT faithful LeWM
+        if self.stop_grad:                           # ablation only, NOT faithful LeWM
             target = target.detach()
         pred_loss = F.mse_loss(pred, target)
         sigreg_loss = self.sigreg(emb.transpose(0, 1))       # (T, B, D)
@@ -398,7 +398,7 @@ def make_env(game: str, img_size: int = 84):
     # Under stickiness the wrapper executes the *previous* action with probability
     # 0.25 while the caller only sees the action it requested, so a world model
     # trained here would learn p(z'|z, a) from action labels that are wrong a
-    # quarter of the time — which corrupts exactly what the action-conditioning
+    # quarter of the time, which corrupts exactly what the action-conditioning
     # ablation is meant to measure. It also keeps the world model's dynamics
     # identical to the PPO environment in ppo_lewm.py, which sets 0.0 too.
     #
@@ -431,7 +431,7 @@ def rollout_episode(env, key, n_actions: int, max_steps: int):
     obs, state = env.reset(key)
     obs_list, act_list = [], []
     for _ in range(max_steps):
-        # obs shape from PixelObsWrapper: (1, H, W, 3) — 1 stacked frame
+        # obs shape from PixelObsWrapper: (1, H, W, 3), 1 stacked frame
         frame = np.asarray(obs[0], dtype=np.uint8)
         obs_list.append(frame.transpose(2, 0, 1))       # (3, H, W)
 
@@ -453,7 +453,7 @@ def episode_windows(obs, acts, seq_len: int, max_windows: int, rng=None):
     When an episode yields more windows than `max_windows`, the kept ones are
     sampled uniformly from the whole episode rather than taken from the front.
     Taking the front is what an earlier version did, and combined with a short
-    episode cap it meant the model only ever saw the opening seconds of a game —
+    episode cap it meant the model only ever saw the opening seconds of a game,
     it never observed, say, a partly-cleared Breakout wall. That is a coverage
     limitation strong enough to be confused with a property of the objective, so
     it is worth avoiding rather than explaining away.
@@ -481,7 +481,7 @@ def collect_sequences(env, key, buffer: SequenceBuffer,
         if episodes > max_episodes:
             raise RuntimeError(
                 f"collect_sequences: only gathered {collected}/{n_sequences} windows "
-                f"from {episodes} episodes — no episode reached seq_len+1="
+                f"from {episodes} episodes, no episode reached seq_len+1="
                 f"{seq_len + 1} steps. Reduce --seq_len for this game."
             )
         episodes += 1
@@ -521,7 +521,7 @@ def evaluate_rollout(model, env, key, device, n_seq, seq_len, n_actions, context
     autoregressive rollout the sequence grows and is increasingly self-generated,
     so batch statistics are computed partly over the model's own predictions.
     Measured on a trained Pong model, using fixed running statistics for the
-    predictor's BN instead gives rollout MSE 0.182 vs 0.196 — about 7%, i.e. real
+    predictor's BN instead gives rollout MSE 0.182 vs 0.196, about 7%, i.e. real
     but small, and far from explaining architecture-level differences. Batch-stat
     mode is kept so that every number in these results is comparable; the 7% is
     the size of the methodological wobble underneath them.
@@ -550,7 +550,7 @@ def evaluate_rollout(model, env, key, device, n_seq, seq_len, n_actions, context
     obs = torch.from_numpy(np.stack(obs_list)).float().div_(255.0).to(device)
     act = torch.from_numpy(np.stack(act_list)).long().to(device)
 
-    z = model.encode_sequence(obs)            # (N, T+1, D) — ground-truth embeddings
+    z = model.encode_sequence(obs)            # (N, T+1, D), ground-truth embeddings
     Tp1 = z.size(1)
     seq = z[:, :context, :].clone()           # seed with true context embeddings
     preds = []
@@ -586,7 +586,7 @@ def save_learning_curve(game: str, loss_history: list, path) -> bool:
     """Save the learning curve for one game as a PNG. Returns True if written.
 
     Left axis: total / prediction / SIGReg loss. Right axis: effective rank of
-    the embeddings — the collapse diagnostic. A curve where the loss falls while
+    the embeddings, the collapse diagnostic. A curve where the loss falls while
     the effective rank falls towards 1 is collapse, not learning, so the two
     belong on the same figure.
     """
@@ -594,7 +594,7 @@ def save_learning_curve(game: str, loss_history: list, path) -> bool:
         return False
 
     import matplotlib
-    matplotlib.use("Agg")          # headless — no display needed
+    matplotlib.use("Agg")          # headless, no display needed
     import matplotlib.pyplot as plt
 
     steps = [e["step"] for e in loss_history]
@@ -607,7 +607,7 @@ def save_learning_curve(game: str, loss_history: list, path) -> bool:
             label="sigreg", linestyle=":", color="C2")
     ax.set_xlabel("Training step")
     ax.set_ylabel("Loss")
-    ax.set_title(f"LeWM — {game}")
+    ax.set_title(f"LeWM, {game}")
     ax.grid(True, alpha=0.3)
 
     ranks = [e.get("eff_rank") for e in loss_history]
@@ -660,7 +660,7 @@ def pick_device(requested: str = "auto") -> torch.device:
 
 
 def save_checkpoint(path, model, optimizer, step, loss_history, args):
-    """Crash-safe checkpoint (atomic write). The replay buffer is NOT stored —
+    """Crash-safe checkpoint (atomic write). The replay buffer is NOT stored,
     it is re-collected on resume, since serializing it would be many GB."""
     payload = {
         "step": step,
@@ -709,9 +709,9 @@ def train(args):
         action_cond=args.action_cond,
     ).to(device)
     print(f"Action conditioning: {args.action_cond}"
-          f"{' (paper)' if args.action_cond == 'adaln' else ' (ABLATION — paper uses AdaLN)'}")
+          f"{' (paper)' if args.action_cond == 'adaln' else ' (ABLATION, paper uses AdaLN)'}")
     if model.stop_grad:
-        print("WARNING: stop_grad=True — this is the ablation, NOT faithful LeWM.")
+        print("WARNING: stop_grad=True, this is the ablation, NOT faithful LeWM.")
 
     optimizer = torch.optim.Adam(model.parameters(), lr=args.lr)
     buffer = SequenceBuffer(capacity=args.buffer_size, seq_len=args.seq_len)
@@ -729,7 +729,7 @@ def train(args):
         loss_history = ckpt.get("loss_history", [])
         print(f"Resumed from {args.resume} at step {start_step}")
 
-    # --- initial data collection (always — buffer is not checkpointed) ---
+    # --- initial data collection (always, buffer is not checkpointed) ---
     print(f"Collecting {args.init_sequences} initial sequences...")
     key = collect_sequences(env, key, buffer, args.init_sequences, args.seq_len,
                             n_actions, args.max_windows_per_episode,
@@ -739,7 +739,7 @@ def train(args):
     if len(buffer) < args.batch_size:
         raise RuntimeError(
             f"buffer holds {len(buffer)} sequences but batch_size is {args.batch_size} "
-            f"— raise --init_sequences or lower --batch_size."
+            f"- raise --init_sequences or lower --batch_size."
         )
 
     print("Starting training...")
@@ -788,11 +788,11 @@ def train(args):
         if args.plot and args.plot_every and step % args.plot_every == 0:
             if save_learning_curve(args.game, loss_history, curve_path):
                 save_history(history_path, args.game, args, loss_history)
-                print(f"  curve → {curve_path} (step {step})")
+                print(f"  curve -> {curve_path} (step {step})")
 
         if args.ckpt_every and step % args.ckpt_every == 0:
             save_checkpoint(str(ckpt_path), model, optimizer, step, loss_history, args)
-            print(f"  checkpoint → {ckpt_path} (step {step})")
+            print(f"  checkpoint -> {ckpt_path} (step {step})")
 
     # --- evaluate: open-loop latent rollout error on held-out trajectories ---
     print("\nEvaluating (open-loop latent rollout)...")
@@ -804,7 +804,7 @@ def train(args):
         context=args.eval_context, max_episode_steps=args.max_episode_steps,
     )
     if eval_metrics is None:
-        print("  (could not collect eval sequences — skipped)")
+        print("  (could not collect eval sequences, skipped)")
     else:
         roll = eval_metrics["rollout_mse_by_horizon"]
         base = eval_metrics["frozen_baseline_by_horizon"]

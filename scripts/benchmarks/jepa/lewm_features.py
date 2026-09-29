@@ -5,7 +5,7 @@ Only the encoder is reused; the predictor plays no part in acting. The one thing
 that needs care is BatchNorm.
 
 The encoder is trained online, so its BatchNorm *running* statistics chase a
-moving feature distribution and end up stale — using them directly inflates the
+moving feature distribution and end up stale, using them directly inflates the
 embedding scale several-fold and hands the policy garbage features. (This is the
 same pitfall documented in `evaluate_rollout`, which sidesteps it by evaluating in
 batch-statistics mode.) A policy needs a genuinely fixed encoder, so instead we
@@ -73,7 +73,7 @@ def load_frozen_encoder(model_path, game, device="cpu", recalibrate_frames=4096,
                         seed=0, img_size=84):
     """Load a LeWM encoder, refresh its BN statistics, and return it in eval mode.
 
-    Returns (encoder, emb_dim). Freezing the parameters is left to the caller —
+    Returns (encoder, emb_dim). Freezing the parameters is left to the caller,
     `lewm_finetune` wants them trainable.
     """
     encoder, emb_dim = load_encoder(model_path, device=device)

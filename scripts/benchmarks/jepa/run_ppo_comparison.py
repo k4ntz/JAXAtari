@@ -1,8 +1,8 @@
 """
 Does the LeWM world model learn representations that are useful for control?
 
-Runs PPO twice per game under an identical budget — once on a from-scratch CNN,
-once on the frozen LeWM encoder — and plots the two return curves together. The
+Runs PPO twice per game under an identical budget, once on a from-scratch CNN,
+once on the frozen LeWM encoder, and plots the two return curves together. The
 from-scratch arm is the control: without it, a LeWM curve on its own says nothing,
 because any number could be explained by PPO rather than by the representation.
 
@@ -44,7 +44,7 @@ from ppo_lewm import build_parser, train
 
 
 # Pong is the simplest, Seaquest is where agents pick up shooting quickly, and
-# Breakout is a standard reference point — the three the lab guidelines suggest
+# Breakout is a standard reference point, the three the lab guidelines suggest
 # starting from.
 GAMES = ["pong", "seaquest", "breakout"]
 ARMS = ["scratch", "lewm_frozen"]
@@ -111,7 +111,7 @@ def smooth(y, frac=20):
 
 
 def final_return(history, last_frac=0.1):
-    """Mean return over the last `last_frac` of the run — less noisy than the
+    """Mean return over the last `last_frac` of the run, less noisy than the
     single final iteration, which often averages over one or two episodes."""
     _, rets = curve(history)
     if not rets:
@@ -166,7 +166,7 @@ def save_comparison(outdir: Path, games, results):
 
 def save_summary_md(outdir: Path, games, arms, results, cli):
     lines = [
-        "# LeWM representations for control — PPO comparison",
+        "# LeWM representations for control, PPO comparison",
         "",
         f"`total_timesteps={cli.total_timesteps}`, `num_envs={cli.num_envs}`, "
         f"`num_steps={cli.num_steps}`, `seed={cli.seed}`",
@@ -187,12 +187,12 @@ def save_summary_md(outdir: Path, games, arms, results, cli):
             if r is None:
                 continue
             if r["status"] != "ok":
-                lines.append(f"| {game} | {arm} | **{r['status']}** | — | — | "
+                lines.append(f"| {game} | {arm} | **{r['status']}** | n/a | n/a | "
                              f"{r['time_min']:.1f} |")
                 continue
             fr = r["final_return"]
             lines.append(
-                f"| {game} | {arm} | ok | {'—' if fr is None else f'{fr:.2f}'} "
+                f"| {game} | {arm} | ok | {'n/a' if fr is None else f'{fr:.2f}'} "
                 f"| {r['sps']} | {r['time_min']:.1f} |"
             )
 
@@ -206,7 +206,7 @@ def save_summary_md(outdir: Path, games, arms, results, cli):
             verdict = ("LeWM ahead" if d > 0 else "scratch ahead" if d < 0 else "tied")
             lines.append(f"- **{game}**: scratch {a['final_return']:.2f} vs "
                          f"LeWM-frozen {b['final_return']:.2f} "
-                         f"(Δ {d:+.2f}) — {verdict}")
+                         f"(delta {d:+.2f}), {verdict}")
         else:
             lines.append(f"- **{game}**: incomplete")
 
@@ -240,15 +240,15 @@ def main():
     for i, (game, arm) in enumerate(jobs, start=1):
         tag = f"{game}/{arm}"
         print(f"\n{'=' * 64}")
-        print(f"[{i}/{len(jobs)}] {game} — {arm}")
+        print(f"[{i}/{len(jobs)}] {game}, {arm}")
         print(f"{'=' * 64}")
 
         args = run_args(game, arm, cli)
         if arm != "scratch" and not Path(args.encoder).exists():
             results[tag] = {"status": "missing_encoder", "time_min": 0.0,
-                            "error": f"no world-model checkpoint at {args.encoder} — "
+                            "error": f"no world-model checkpoint at {args.encoder}, "
                                      f"run run_all_games.py first"}
-            print(f"✗ {tag}: no encoder at {args.encoder}")
+            print(f"FAIL: {tag}: no encoder at {args.encoder}")
             summary_file.write_text(json.dumps(results, indent=2))
             continue
 
@@ -263,14 +263,14 @@ def main():
                 "sps": history[-1]["sps"] if history else None,
                 "curve": [[s, r] for s, r in zip(steps, rets)],
             }
-            print(f"✓ {tag} — final return {results[tag]['final_return']}")
+            print(f"ok: {tag}, final return {results[tag]['final_return']}")
         except Exception as e:
             results[tag] = {
                 "status": "error",
                 "time_min": (time.time() - start) / 60,
                 "error": traceback.format_exc(),
             }
-            print(f"✗ {tag} FAILED: {type(e).__name__}: {e}")
+            print(f"FAIL: {tag} FAILED: {type(e).__name__}: {e}")
 
         free_memory()
         summary_file.write_text(json.dumps(results, indent=2))
@@ -282,11 +282,11 @@ def main():
 
     n_ok = sum(1 for r in results.values() if r["status"] == "ok")
     print(f"\n{'=' * 64}")
-    print(f"SUMMARY — {n_ok}/{len(results)} runs ok "
+    print(f"SUMMARY, {n_ok}/{len(results)} runs ok "
           f"in {(time.time() - run_start) / 60:.1f} min")
     print(f"{'=' * 64}")
     for tag, r in results.items():
-        icon = "✓" if r["status"] == "ok" else "✗"
+        icon = "ok" if r["status"] == "ok" else "FAIL"
         extra = ""
         if r["status"] == "ok" and r["final_return"] is not None:
             extra = f" | final return {r['final_return']:7.2f}"
