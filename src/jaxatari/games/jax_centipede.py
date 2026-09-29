@@ -89,6 +89,9 @@ class CentipedeConstants(struct.PyTreeNode):
 
     PLAYER_Y_VALUES: chex.Array = struct.field(pytree_node=False, default_factory=lambda: jnp.array([141, 145, 147, 150, 154, 156, 159, 163, 165, 168, 172]))      # Double to not need extra state value
 
+    PLAYER_LIVES_RESET: int = struct.field(pytree_node=False, default=3)
+    PLAYER_MAX_LIVES: int = struct.field(pytree_node=False, default=6)
+
     ## -------- Player spell constants --------
     PLAYER_SPELL_SPEED: int = struct.field(pytree_node=False, default=9)
 
@@ -1932,7 +1935,7 @@ class JaxCentipede(JaxEnvironment[CentipedeState, CentipedeObservation, Centiped
             scorpion_position=jnp.zeros(4, dtype=jnp.int32),
             scorpion_spawn_timer=initial_scorpion_timer,
             score=jnp.array(0),
-            lives=jnp.array(3),
+            lives=jnp.array(self.consts.PLAYER_LIVES_RESET),
             step_counter=jnp.array(0),
             wave=jnp.array([0, 0]),
             death_counter=jnp.array(0),
@@ -2206,7 +2209,7 @@ class JaxCentipede(JaxEnvironment[CentipedeState, CentipedeObservation, Centiped
             new_lives = jnp.where(
                 jnp.logical_or(
                     new_score // 10000 == state.score // 10000,
-                    state.lives >= 6
+                    state.lives >= self.consts.PLAYER_MAX_LIVES
                 ),
                 state.lives,
                 state.lives + 1
