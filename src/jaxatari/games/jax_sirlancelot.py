@@ -2648,7 +2648,7 @@ class SirLancelotRenderer(JAXGameRenderer):
         # Use injected config if provided, else default
         if config is None:
             self.config = render_utils.RendererConfig(
-                game_dimensions=(self.consts.SCREEN_HEIGHT, self.consts.SCREEN_WIDTH),
+                game_dimensions=(int(self.consts.SCREEN_HEIGHT), int(self.consts.SCREEN_WIDTH)),
                 channels=3,
                 downscale=None
             )

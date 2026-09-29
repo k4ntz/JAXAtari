@@ -32,11 +32,17 @@ class RendererConfig(struct.PyTreeNode):
 
     @property
     def width_scaling(self) -> float:
-        return self.downscale[1] / self.game_dimensions[1] if self.downscale else 1.0
+        # Cast to Python float so comparisons stay host-side under jax.jit.
+        # Some games (e.g. Sir Lancelot) store screen dims as jnp arrays.
+        if not self.downscale:
+            return 1.0
+        return float(self.downscale[1]) / float(self.game_dimensions[1])
 
     @property
     def height_scaling(self) -> float:
-        return self.downscale[0] / self.game_dimensions[0] if self.downscale else 1.0
+        if not self.downscale:
+            return 1.0
+        return float(self.downscale[0]) / float(self.game_dimensions[0])
 
 class JaxRenderingUtils:
     """
