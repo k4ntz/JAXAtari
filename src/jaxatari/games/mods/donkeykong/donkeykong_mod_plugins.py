@@ -1,11 +1,9 @@
-import os
 import jax
 import jax.numpy as jnp
 from functools import partial
 import numpy as np
 from jaxatari.modification import JaxAtariInternalModPlugin
 from jaxatari.games.jax_donkeykong import Ladder
-from jaxatari.rendering.jax_rendering_utils import get_base_sprite_dir
 
 class SpeedrunnerMod(JaxAtariInternalModPlugin):
     constants_overrides = {
