@@ -116,6 +116,8 @@ MOD_MODULES = {
     "alien": "jaxatari.games.mods.alien_mods.AlienEnvMod",
     "asteroids": "jaxatari.games.mods.asteroids_mods.AsteroidsEnvMod",
     "pacman": "jaxatari.games.mods.pacman_mods.PacmanEnvMod",
+    "amidar": "jaxatari.games.mods.amidar_mods.AmidarEnvMod",
+    "timepilot": "jaxatari.games.mods.timepilot_mods.TimePilotEnvMod",
 }
 
 
