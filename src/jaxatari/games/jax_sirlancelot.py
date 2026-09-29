@@ -2512,54 +2512,62 @@ class JaxSirLancelot(JaxEnvironment[SirLancelotState, SirLancelotObservation, Si
     @partial(jax.jit, static_argnums=(0,))
     def _get_observation(self, state: SirLancelotState) -> SirLancelotObservation:
         c = self.consts
-        w, h = int(c.SCREEN_WIDTH), int(c.SCREEN_HEIGHT)
+        w = int(c.SCREEN_WIDTH)
+        in_castle = state.stage == 2
 
-        # --- Player ---
-        # Facing Left (True) -> 270.0, Right (False) -> 90.0
         p_ori = jnp.where(state.player.facing_left, 270.0, 90.0).astype(jnp.float32)
-        
+        p_fly = jnp.asarray(state.player.is_flapping).astype(jnp.int32)
+        p_shift = p_fly * jnp.logical_not(state.player.facing_left).astype(jnp.int32)
         player = ObjectObservation.create(
-            x=jnp.clip(jnp.array(state.player.x, dtype=jnp.int32), 0, w),
-            y=jnp.clip(jnp.array(state.player.y, dtype=jnp.int32), 0, h),
-            width=jnp.array(c.PLAYER_WIDTH, dtype=jnp.int32),
-            height=jnp.array(c.PLAYER_HEIGHT, dtype=jnp.int32),
+            x=jnp.asarray(state.player.x).astype(jnp.int32) + p_shift,
+            y=jnp.asarray(state.player.y).astype(jnp.int32),
+            width=8 - p_fly,
+            height=jnp.array(10, dtype=jnp.int32),
             active=jnp.array(1, dtype=jnp.int32),
-            orientation=jnp.array(p_ori, dtype=jnp.float32)
+            orientation=p_ori
         )
 
-        # --- Enemies (Beasts) ---
         e_ori = jnp.where(state.enemies.facing_left, 270.0, 90.0).astype(jnp.float32)
-        
+        beast = (state.level - 1) // 2
+        e_frame = state.enemies.animation_frame % 2
+        e_flip = jnp.where(state.level == 3, state.enemies.facing_left, jnp.logical_not(state.enemies.facing_left))
+        e_w = jnp.array([8, 8, 8, 5], dtype=jnp.int32)[beast]
+        e_h = jnp.array([[6, 6], [10, 12], [9, 9], [1, 1]], dtype=jnp.int32)[beast, e_frame]
+        e_x = state.enemies.positions[:, 0].astype(jnp.int32) + jnp.where(e_flip, 8 - e_w, 0)
+        e_x0 = jnp.maximum(e_x, 0)
+        e_x1 = jnp.minimum(e_x + e_w, w)
         enemies = ObjectObservation.create(
-            x=jnp.clip(state.enemies.positions[:, 0].astype(jnp.int32), 0, w),
-            y=jnp.clip(state.enemies.positions[:, 1].astype(jnp.int32), 0, h),
-            width=jnp.full((c.NUM_ENEMIES,), c.ENEMY_WIDTH, dtype=jnp.int32),
-            height=jnp.full((c.NUM_ENEMIES,), c.ENEMY_HEIGHT, dtype=jnp.int32),
-            active=state.enemies.active.astype(jnp.int32),
+            x=e_x0,
+            y=state.enemies.positions[:, 1].astype(jnp.int32),
+            width=jnp.maximum(e_x1 - e_x0, 0),
+            height=e_h,
+            active=(state.enemies.active & jnp.logical_not(state.enemies.is_invisible) & (e_x1 > e_x0)).astype(jnp.int32),
             orientation=e_ori
         )
 
-        # --- Dragon ---
-        # Dragon is rendered at consts.DRAGON_Y (minus small animation adjustments)
         d_ori = jnp.where(state.dragon.facing_left, 270.0, 90.0).astype(jnp.float32)
-        
+        d_frame = state.dragon.wing_frame
+        d_fire = (state.dragon.shoot_cooldown > (c.FIREBALL_SHOOT_COOLDOWN - 20)) & jnp.any(state.fireballs.active)
+        d_h = jnp.where(
+            d_fire,
+            jnp.array([20, 14, 15, 14], dtype=jnp.int32)[d_frame],
+            jnp.array([20, 16, 16, 16], dtype=jnp.int32)[d_frame]
+        )
         dragon = ObjectObservation.create(
-            x=jnp.clip(jnp.array(state.dragon.x, dtype=jnp.int32), 0, w),
-            y=jnp.clip(jnp.array(c.DRAGON_Y, dtype=jnp.int32), 0, h),
-            width=jnp.array(c.DRAGON_WIDTH, dtype=jnp.int32),
-            height=jnp.array(c.DRAGON_HEIGHT, dtype=jnp.int32),
-            active=state.dragon.is_active.astype(jnp.int32),
-            orientation=jnp.array(d_ori, dtype=jnp.float32)
+            x=jnp.asarray(state.dragon.x).astype(jnp.int32),
+            y=(c.DRAGON_Y - jnp.array([4, 0, 0, 0], dtype=jnp.int32)[d_frame]).astype(jnp.int32),
+            width=jnp.array(24, dtype=jnp.int32),
+            height=d_h,
+            active=(state.dragon.is_active & in_castle).astype(jnp.int32),
+            orientation=d_ori
         )
 
-        # --- Fireballs ---
         fireballs = ObjectObservation.create(
-            x=jnp.clip(state.fireballs.positions[:, 0].astype(jnp.int32), 0, w),
-            y=jnp.clip(state.fireballs.positions[:, 1].astype(jnp.int32), 0, h),
-            width=jnp.full((c.MAX_FIREBALLS,), c.FIREBALL_WIDTH, dtype=jnp.int32),
-            height=jnp.full((c.MAX_FIREBALLS,), c.FIREBALL_HEIGHT, dtype=jnp.int32),
-            active=state.fireballs.active.astype(jnp.int32),
-            # Fireballs fall straight down, no specific orientation
+            x=state.fireballs.positions[:, 0].astype(jnp.int32),
+            y=state.fireballs.positions[:, 1].astype(jnp.int32),
+            width=jnp.full((c.MAX_FIREBALLS,), 3, dtype=jnp.int32),
+            height=jnp.full((c.MAX_FIREBALLS,), 5, dtype=jnp.int32),
+            active=(state.fireballs.active & in_castle).astype(jnp.int32),
             orientation=jnp.zeros((c.MAX_FIREBALLS,), dtype=jnp.float32)
         )
 
