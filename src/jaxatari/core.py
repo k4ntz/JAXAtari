@@ -115,7 +115,11 @@ MOD_MODULES = {
     "skiing": "jaxatari.games.mods.skiing_mods.SkiingEnvMod",
     "alien": "jaxatari.games.mods.alien_mods.AlienEnvMod",
     "asteroids": "jaxatari.games.mods.asteroids_mods.AsteroidsEnvMod",
+    "choppercommand": "jaxatari.games.mods.choppercommand_mods.ChopperCommandEnvMod",
+    "centipede": "jaxatari.games.mods.centipede_mods.CentipedeEnvMod",
     "pacman": "jaxatari.games.mods.pacman_mods.PacmanEnvMod",
+    "amidar": "jaxatari.games.mods.amidar_mods.AmidarEnvMod",
+    "timepilot": "jaxatari.games.mods.timepilot_mods.TimePilotEnvMod",
 }
 
 

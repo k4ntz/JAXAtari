@@ -108,7 +108,7 @@ class SurroundState:
 
 @struct.dataclass
 class SurroundObservation:
-    grid: jnp.ndarray  # (GRID_WIDTH, GRID_HEIGHT) int32
+    trail: ObjectObservation
     player1: ObjectObservation
     player2: ObjectObservation
     agent_id: jnp.ndarray  # () int32
@@ -530,46 +530,39 @@ class JaxSurround(
     @partial(jax.jit, static_argnums=(0,))
     def _get_observation(self, state: SurroundState) -> SurroundObservation:
         c = self.consts
-        w, h = int(c.GRID_WIDTH), int(c.GRID_HEIGHT)
-        
-        grid = state.trail
-        grid = grid.at[tuple(state.pos0)].set(1)
-        grid = grid.at[tuple(state.pos1)].set(2)
+        cell_w, cell_h = c.CELL_SIZE
+        y_off = c.PLAYFIELD_Y_OFFSET
+        gw, gh = int(c.GRID_WIDTH), int(c.GRID_HEIGHT)
 
-        # Helper to map direction index (0..5) to orientation (degrees)
-        # NOOP=0, FIRE=1, UP=2, RIGHT=3, LEFT=4, DOWN=5 (Surround mapping is weird in _dir_offset logic)
-        # Looking at _dir_offset:
-        # 0: (0,0), 1: (0,0), 2: (0,-1) UP, 3: (1,0) RIGHT, 4: (-1,0) LEFT, 5: (0,1) DOWN
-        # So: 2->0.0, 3->90.0, 4->270.0, 5->180.0
-        def get_ori(d):
-            return jnp.select(
-                [d == 2, d == 3, d == 4, d == 5],
-                [0.0, 90.0, 270.0, 180.0],
-                0.0 # Default/NOOP
-            ).astype(jnp.float32)
+        gx, gy = jnp.meshgrid(jnp.arange(gw), jnp.arange(gh), indexing="ij")
+        trail = ObjectObservation.create(
+            x=gx.ravel() * cell_w,
+            y=gy.ravel() * cell_h + y_off,
+            width=jnp.full((gw * gh,), cell_w, dtype=jnp.int32),
+            height=jnp.full((gw * gh,), cell_h - max(1, c.DIVIDER_THICKNESS), dtype=jnp.int32),
+            active=(state.trail != 0).ravel().astype(jnp.int32),
+        )
 
         p1 = ObjectObservation.create(
-            x=jnp.clip(state.pos0[0], 0, w),
-            y=jnp.clip(state.pos0[1], 0, h),
-            width=jnp.array(1, dtype=jnp.int32), # 1 cell
-            height=jnp.array(1, dtype=jnp.int32),
+            x=state.pos0[0] * cell_w,
+            y=state.pos0[1] * cell_h + y_off + c.HEAD_Y_NUDGE,
+            width=jnp.array(cell_w, dtype=jnp.int32),
+            height=jnp.array(cell_h, dtype=jnp.int32),
             active=jnp.array(1, dtype=jnp.int32),
             visual_id=jnp.array(1, dtype=jnp.int32),
-            orientation=get_ori(state.dir0)
         )
-        
+
         p2 = ObjectObservation.create(
-            x=jnp.clip(state.pos1[0], 0, w),
-            y=jnp.clip(state.pos1[1], 0, h),
-            width=jnp.array(1, dtype=jnp.int32),
-            height=jnp.array(1, dtype=jnp.int32),
+            x=state.pos1[0] * cell_w,
+            y=state.pos1[1] * cell_h + y_off + c.HEAD_Y_NUDGE,
+            width=jnp.array(cell_w, dtype=jnp.int32),
+            height=jnp.array(cell_h, dtype=jnp.int32),
             active=jnp.array(1, dtype=jnp.int32),
             visual_id=jnp.array(2, dtype=jnp.int32),
-            orientation=get_ori(state.dir1)
         )
 
         return SurroundObservation(
-            grid=grid,
+            trail=trail,
             player1=p1,
             player2=p2,
             agent_id=jnp.array(0, dtype=jnp.int32),
@@ -603,19 +596,12 @@ class JaxSurround(
 
     def observation_space(self) -> spaces.Dict:
         c = self.consts
-        h = int(c.GRID_HEIGHT)
-        w = int(c.GRID_WIDTH)
-        screen_size = (h, w) # Logical grid size, not pixel size
+        screen_size = (c.SCREEN_SIZE[1], c.SCREEN_SIZE[0])
         
         single_obj = spaces.get_object_space(n=None, screen_size=screen_size)
         
         return spaces.Dict({
-            "grid": spaces.Box(
-                low=0,
-                high=2,
-                shape=(w, h),
-                dtype=jnp.int32,
-            ),
+            "trail": spaces.get_object_space(n=int(c.GRID_WIDTH) * int(c.GRID_HEIGHT), screen_size=screen_size),
             "player1": single_obj,
             "player2": single_obj,
             "agent_id": spaces.Box(0, 1, shape=(), dtype=jnp.int32),
