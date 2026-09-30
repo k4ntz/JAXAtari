@@ -26,7 +26,7 @@ from jaxatari.rendering import jax_rendering_utils as render_utils
 ## NOTE: background.npy, bullet.npy and score_6..9.npy are placeholder
 ## sprites so the environment can run; the sprite task owner should replace
 ## them with real extractions.
-JB_SPRITE_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "jb_sprites")
+JB_SPRITE_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "jb_sprites")
 
 
 def get_default_asset_config() -> tuple:
