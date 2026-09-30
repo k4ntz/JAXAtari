@@ -579,6 +579,29 @@ frames. That this is also the game where the gap to published PPO is widest for
 \emph{both} arms suggests the budget is the dominant factor and the representation
 a secondary one, but the two are not separated here.
 
+\paragraph{Why this comparison covers scores and not learning curves.} The lab
+guidelines ask for a comparison of final scores \emph{and} learning curves against
+the original implementations. Only the first is given here, for two reasons that
+are worth stating rather than passing over. First, the reference that the
+guidelines link publishes a table of final scores and no per game curve data, so
+there is no reference curve to plot this work against. Second, and more
+fundamentally, LeWM has no score of its own to compare: its reference
+implementation is a world model evaluated by planning in the latent space on
+different benchmarks, and it never produces a game return. The downstream agent in
+this section exists precisely to manufacture a quantity that published
+reinforcement learning results can be compared against at all.
+
+A curve level comparison is still possible in principle, by running the
+repository's own PPO under an identical budget and overlaying the two curves. That
+was attempted and abandoned on time grounds: the repository's PPO is written in
+JAX, which has no GPU backend on Apple silicon, and it was measured at roughly
+seventeen environment steps per second on the machine in Table~\ref{tab:system},
+which puts a single one million step run at about fifteen hours. Increasing the
+number of parallel environments from eight to thirty two and then to one hundred
+and twenty eight did not improve throughput, so the limit is compute rather than
+parallelism. On a CUDA machine this comparison would be inexpensive and it is the
+first thing worth adding to this work.
+
 \section{Methodological problems found during the work}
 \label{sec:confounds}
 

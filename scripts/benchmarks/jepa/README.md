@@ -196,6 +196,13 @@ the representation are not separated here.
 
 - **Budget.** Agents are trained for 1M steps against a 200M-step reference. The
   curves show learning trends, not converged performance.
+- **Scores are compared against the reference, curves are not.** The source the lab
+  guidelines link publishes final scores only, with no per-game curve data, and LeWM's
+  own reference implementation produces no game score at all (it is evaluated by latent
+  planning). Overlaying the repo's own PPO would work in principle, but it is JAX and
+  therefore CPU-only on Apple silicon: measured at ~17 steps/s, so one 1M-step run is
+  ~15 h, and raising `NUM_ENVS` from 8 to 32 to 128 did not help. Cheap on a CUDA box,
+  and the first thing worth adding.
 - **Seeds.** Pong uses 3 seeds; every other agent number is a single seed and is
   indicative only. The Pong result shows why that matters: the final-return gap
   vanished into the noise once seeds were added, while the sample-efficiency gap
