@@ -220,6 +220,29 @@ class FlowerpotEnemyState:
             resume_floor=jnp.asarray(resume_floor, dtype=jnp.int32),
         )
 
+@chex.dataclass
+class ElectricSignState:
+    active: chex.Array
+    spawned: chex.Array
+    disabled: chex.Array
+    side: chex.Array
+    phase: chex.Array
+    timer: chex.Array
+    hits: chex.Array
+
+    @classmethod
+    def new(cls):
+        return cls(
+            active=jnp.array(False),
+            spawned=jnp.array(False),
+            disabled=jnp.array(False),
+            side=jnp.array(0, dtype=jnp.int32),
+            phase=jnp.array(0, dtype=jnp.int32),
+            timer=jnp.array(0, dtype=jnp.int32),
+            hits=jnp.array(0, dtype=jnp.int32),
+        )
+
+
 def _flowerpot_drop_origin(enemy, scroll_y=0):
     window_local_x = jnp.array([4, 16, 28, 44, 56, 68], dtype=jnp.int32)[enemy.window_col]
     window_center_x = 40 + window_local_x + 4
@@ -279,6 +302,7 @@ class CrazyClimberState(struct.PyTreeNode):
     player_move_state: PlayerMoveState
     bird_state: BirdState
     flowerpot_enemy_state: FlowerpotEnemyState
+    electric_sign_state: ElectricSignState
     falling_object_state: FallingObjectState
     tower_state: TowerState
     helicopter_state: HelicopterState
@@ -288,6 +312,7 @@ class CrazyClimberState(struct.PyTreeNode):
 
 class CrazyClimberObservation(struct.PyTreeNode):
     player: ObjectObservation
+    electric_sign: ObjectObservation
     falling_object: ObjectObservation
     flowerpot_enemy: ObjectObservation
     flower_pot_yellow: ObjectObservation
@@ -302,6 +327,12 @@ class CrazyClimberObservation(struct.PyTreeNode):
 
 class CrazyClimberInfo(struct.PyTreeNode):
     time: jnp.ndarray
+
+
+def _electric_sign_screen_y(state, consts):
+    floors = state.climbed_floors - consts.ELECTRIC_SIGN_SPAWN_FLOOR
+    return consts.ELECTRIC_SIGN_SPAWN_Y + 13 * floors + 3 * state.tower_state.tower_step
+
 
 def _create_block_sprite(color: tuple[int, int, int, int], shape: tuple[int, int]) -> jnp.ndarray:
     return jnp.tile(jnp.array(color, dtype=jnp.uint8), (*shape[:2], 1))
@@ -540,6 +571,15 @@ def _get_default_asset_config() -> tuple:
             'flowerpot_enemy/yellow_drop/yellow_drop_37.npy',
             'flowerpot_enemy/yellow_drop/yellow_drop_38.npy',
             ]},
+
+        {'name': 'electric_sign_group', 'type': 'group', 'files': [
+            'electric_sign/left/1.npy',
+            'electric_sign/left/2.npy',
+            'electric_sign/left/3.npy',
+            'electric_sign/right/1.npy',
+            'electric_sign/right/2.npy',
+        ]},
+
         {'name': 'helicopter_right', 'type': 'group', 'files': [
             'helicopter/right/0+2.npy',
             'helicopter/right/1.npy',
@@ -631,6 +671,20 @@ class CrazyClimberConstants(struct.PyTreeNode):
     HELICOPTER_SEQUENCE: chex.Array = struct.field(pytree_node=False, default_factory=lambda:jnp.array([0,1,0,2]))
     HELICOPTER_SKIDS_SIZE: int = struct.field(pytree_node=False, default=22)
 
+    ELECTRIC_SIGN_LEVEL: int = struct.field(pytree_node=False, default=2) # Set to 1 to test in level 1; original: 2.
+    ELECTRIC_SIGN_SPAWN_FLOOR: int = struct.field(pytree_node=False, default=164) # Temporary: set to 164 once level 2's tower and height are implemented.
+    ELECTRIC_SIGN_DEATH_LOOKBACK: int = struct.field(pytree_node=False, default=58)  # Death at or above (ELECTRIC_SIGN_SPAWN_FLOOR - this value) disables the sign for the rest of the level.
+    ELECTRIC_SIGN_FLOOR_COUNT: int = struct.field(pytree_node=False, default=9)
+    ELECTRIC_SIGN_HIT_FLOOR_OFFSET: int = struct.field(pytree_node=False, default=6)
+    ELECTRIC_SIGN_FATAL_HITS: int = struct.field(pytree_node=False, default=14)
+    ELECTRIC_SIGN_HIT_PENALTY: int = struct.field(pytree_node=False, default=100)
+    ELECTRIC_SIGN_SPAWN_Y: int = struct.field(pytree_node=False, default=61)
+    ELECTRIC_SIGN_SEQUENCE: chex.Array = struct.field(
+        pytree_node=False,
+        default_factory=lambda: jnp.array([[0, 1, 2, 2, 1, 0], [3, 4, 4, 3, 3, 3]], dtype=jnp.int32),
+    )
+
+    FLOWERPOT_SCORE_RANGES: jnp.ndarray = struct.field(
     FLOWERPOT_LEVEL: int = struct.field(pytree_node=False, default=1)
     FLOWERPOT_FLOOR_RANGES: jnp.ndarray = struct.field(
         pytree_node=False,
@@ -799,6 +853,7 @@ class JaxCrazyClimber(JaxEnvironment[CrazyClimberState, CrazyClimberObservation,
             tower_state=TowerState.new(level),
 
             bird_state=BirdState.new(),
+            electric_sign_state=ElectricSignState.new(),
             level_state=LevelState.new(level),
 
             climbed_floors=jnp.array(0, dtype=jnp.int32),
@@ -836,6 +891,7 @@ class JaxCrazyClimber(JaxEnvironment[CrazyClimberState, CrazyClimberObservation,
         state = self._climbed_floors_step(state)
         state = self._flowerpot_enemy_step(state)
         state = self._flowerpot_collision_step(state)
+        state = self._electric_sign_step(previous_state, state)
         state = self._falling_object_step(state)
         state = self._falling_object_collision_step(state)
         state = self._score_step(state)
@@ -1628,6 +1684,55 @@ class JaxCrazyClimber(JaxEnvironment[CrazyClimberState, CrazyClimberObservation,
         return state.replace(climbed_floors=next_climbed_floors)
 
     @partial(jax.jit, static_argnums=(0,))
+    def _electric_sign_step(self, previous_state: CrazyClimberState, state: CrazyClimberState) -> CrazyClimberState:
+        def update(s):
+            sign = s.electric_sign_state
+            player = s.player_move_state
+            dying = (player.falling_count > 0) | player.should_fall | s.tower_state.is_falling
+            suppression_floor = self.consts.ELECTRIC_SIGN_SPAWN_FLOOR - self.consts.ELECTRIC_SIGN_DEATH_LOOKBACK
+            disabled = sign.disabled | (dying & (previous_state.climbed_floors >= suppression_floor))
+            floor_offset = s.climbed_floors - self.consts.ELECTRIC_SIGN_SPAWN_FLOOR
+            spawn = (floor_offset == 0) & ~sign.spawned & ~disabled & ~dying
+            active = (sign.active | spawn) & ~dying & (floor_offset >= 0) & (floor_offset < self.consts.ELECTRIC_SIGN_FLOOR_COUNT)
+
+            # ROM player x is this game's sprite-origin x plus 11.
+            player_x = self.consts.PLAYER_POSSIBLE_X[player.pos_x] + 11
+            side = jnp.where(spawn, (player_x >= 83).astype(jnp.int32), sign.side)
+            ticks = jax.random.randint(jax.random.fold_in(s.key, 0xE1EC), (), 1, 9, dtype=jnp.int32)
+            timer = jnp.where(spawn, ticks + side, sign.timer)
+            phase = jnp.where(spawn, 0, sign.phase)
+            hits = jnp.where(spawn, 0, sign.hits)
+            update_due = active & (timer <= 1)
+            phase_count = jnp.where(side == 0, 6, 4)
+            phase = jnp.where(update_due, (phase + 1) % phase_count, phase)
+            timer = jnp.where(active, jnp.where(update_due, ticks, timer - 1), 0)
+
+            contact = update_due & (floor_offset == self.consts.ELECTRIC_SIGN_HIT_FLOOR_OFFSET) & (player_x != 63)
+            fatal = contact & ((player_x >= 109) | (hits + 1 >= self.consts.ELECTRIC_SIGN_FATAL_HITS))
+            hits = hits + contact.astype(jnp.int32)
+            penalty = jnp.where(contact & ~fatal, self.consts.ELECTRIC_SIGN_HIT_PENALTY, 0)
+            return s.replace(
+                electric_sign_state=sign.replace(
+                    active=active & ~fatal,
+                    spawned=sign.spawned | spawn,
+                    disabled=disabled | fatal,
+                    side=side,
+                    phase=phase,
+                    timer=timer,
+                    hits=hits,
+                ),
+                bonus=jnp.maximum(s.bonus - penalty, 0),
+                player_move_state=player.replace(should_fall=player.should_fall | fatal),
+            )
+
+        return jax.lax.cond(
+            state.level_state.current_level == self.consts.ELECTRIC_SIGN_LEVEL,
+            update,
+            lambda s: s.replace(electric_sign_state=ElectricSignState.new()),
+            state,
+        )
+
+    @partial(jax.jit, static_argnums=(0,))
     def _score_step(self, state: CrazyClimberState) -> CrazyClimberState:
         currently_at_apex = (state.player_move_state.sub_step == 9) & (state.player_move_state.main_state == PlayerStableStates.PULL_UP)
 
@@ -2284,6 +2389,7 @@ class JaxCrazyClimber(JaxEnvironment[CrazyClimberState, CrazyClimberObservation,
             ),
             falling_object_state=FallingObjectState.new(),
             climbed_floors=0,
+            electric_sign_state=ElectricSignState.new(),
             bonus=bonus_reset,
         )
 
@@ -2304,6 +2410,7 @@ class JaxCrazyClimber(JaxEnvironment[CrazyClimberState, CrazyClimberObservation,
 
         return spaces.Dict({
             "player": object_space,
+            "electric_sign": object_space,
             "falling_object": spaces.get_object_space(
                 screen_size=(self.consts.HEIGHT, self.consts.WIDTH),
                 xy_low=-max(self.renderer.FALLING_OBJECT_SPRITES.shape[1:]),
@@ -2472,6 +2579,13 @@ class JaxCrazyClimber(JaxEnvironment[CrazyClimberState, CrazyClimberObservation,
 
         return CrazyClimberObservation(
             player=player,
+            electric_sign=ObjectObservation.create(
+                x=jnp.where(state.electric_sign_state.active, 18 + 82 * state.electric_sign_state.side, -1),
+                y=jnp.where(state.electric_sign_state.active, _electric_sign_screen_y(state, self.consts), -1),
+                width=jnp.where(state.electric_sign_state.active, 32, 0),
+                height=jnp.where(state.electric_sign_state.active, 19, 0),
+                active=state.electric_sign_state.active.astype(jnp.int32),
+            ),
             falling_object=falling_object,
             flowerpot_enemy=flowerpot_enemy,
             flower_pot_yellow=flower_pot_yellow,
@@ -2570,6 +2684,11 @@ class JaxCrazyClimber(JaxEnvironment[CrazyClimberState, CrazyClimberObservation,
             self.PLAYER_SIDEWAYS_SPRITE_SEQUENCE = jnp.array([0, 0, 0, 0, 1, 1, 1, 1, 3, 3, 3, 3])
 
             self.FLOWERPOT_THROWER_SPRITES = self.SHAPE_MASKS["flowerpot_thrower_group"]
+            self.ELECTRIC_SIGN_SPRITES = self.SHAPE_MASKS["electric_sign_group"]
+            self.ELECTRIC_SIGN_COLOR_IDS = jnp.array([
+                self.ELECTRIC_SIGN_SPRITES[0].reshape(-1)[jnp.argmax((self.ELECTRIC_SIGN_SPRITES[0] != self.jr.TRANSPARENT_ID).reshape(-1))],
+                self.ELECTRIC_SIGN_SPRITES[3].reshape(-1)[jnp.argmax((self.ELECTRIC_SIGN_SPRITES[3] != self.jr.TRANSPARENT_ID).reshape(-1))],
+            ])
             _, self.FLOWERPOT_THROWER_BOTTOM_Y_OFFSETS = self._get_visible_sprite_anchors(
                 self.FLOWERPOT_THROWER_SPRITES
             )
@@ -2717,6 +2836,12 @@ class JaxCrazyClimber(JaxEnvironment[CrazyClimberState, CrazyClimberObservation,
             
             player_sprite = map_player_to_sprite(sprite_index_up, sprite_index_side, hand_index, side_index)
             player_raster = self.jr.render_at(player_raster, 0, 0, player_sprite)
+            shocked = state.electric_sign_state.active & (state.electric_sign_state.hits > 0)
+            player_raster = jnp.where(
+                shocked & (player_raster != 255) & (player_raster != self.jr.TRANSPARENT_ID),
+                self.ELECTRIC_SIGN_COLOR_IDS[state.electric_sign_state.side],
+                player_raster,
+            )
             
             return player_raster
         
@@ -2996,6 +3121,21 @@ class JaxCrazyClimber(JaxEnvironment[CrazyClimberState, CrazyClimberObservation,
             )
 
         @partial(jax.jit, static_argnums=(0,))
+        def _render_electric_sign(self, raster: jnp.ndarray, state: CrazyClimberState) -> jnp.ndarray:
+            sign = state.electric_sign_state
+            sprite_index = self.consts.ELECTRIC_SIGN_SEQUENCE[sign.side, sign.phase]
+            sprite = self.ELECTRIC_SIGN_SPRITES[sprite_index]
+            y = _electric_sign_screen_y(state, self.consts)
+            rows = y + jnp.arange(sprite.shape[0])
+            player_band = (rows >= self.consts.PLAYER_Y - 8) & (rows < self.consts.PLAYER_Y + self.consts.PLAYER_SIZE[0])
+            sprite = jnp.where(
+                ((state.step_counter % 2 == 1) & player_band)[:, None],
+                self.jr.TRANSPARENT_ID,
+                sprite,
+            )
+            return jax.lax.cond(
+                sign.active,
+                lambda r: self.jr.render_at_clipped(r, 18 + 82 * sign.side, y, sprite),
         def _render_falling_object(self, raster, state: CrazyClimberState) -> jnp.ndarray:
             obj = state.falling_object_state
             scroll_y = state.tower_state.tower_step * 3
@@ -3055,6 +3195,7 @@ class JaxCrazyClimber(JaxEnvironment[CrazyClimberState, CrazyClimberObservation,
                 lambda: raster)
             raster = self._render_flowerpot_thrower(raster, state)
             raster = self._render_flowerpot_drop(raster, state)
+            raster = self._render_electric_sign(raster, state)
             raster = self._render_falling_object(raster, state)
 
             raster = self._normalize_raster(raster)
