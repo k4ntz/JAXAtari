@@ -93,7 +93,7 @@ If you do not have ownership of the original Atari ROMs, you can continue with r
 You can also use your own sprites by placing them in the ~/.local/share/jaxatari/sprites directory.
 
 ```bash
-python3 scripts/install_sprites.py
+python3 src/jaxatari/install_sprites.py
 ```
 
 ---
