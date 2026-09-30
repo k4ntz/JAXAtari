@@ -684,7 +684,6 @@ class CrazyClimberConstants(struct.PyTreeNode):
         default_factory=lambda: jnp.array([[0, 1, 2, 2, 1, 0], [3, 4, 4, 3, 3, 3]], dtype=jnp.int32),
     )
 
-    FLOWERPOT_SCORE_RANGES: jnp.ndarray = struct.field(
     FLOWERPOT_LEVEL: int = struct.field(pytree_node=False, default=1)
     FLOWERPOT_FLOOR_RANGES: jnp.ndarray = struct.field(
         pytree_node=False,
@@ -3136,6 +3135,11 @@ class JaxCrazyClimber(JaxEnvironment[CrazyClimberState, CrazyClimberObservation,
             return jax.lax.cond(
                 sign.active,
                 lambda r: self.jr.render_at_clipped(r, 18 + 82 * sign.side, y, sprite),
+                lambda r: r,
+                raster,
+            )
+
+        @partial(jax.jit, static_argnums=(0,))
         def _render_falling_object(self, raster, state: CrazyClimberState) -> jnp.ndarray:
             obj = state.falling_object_state
             scroll_y = state.tower_state.tower_step * 3
