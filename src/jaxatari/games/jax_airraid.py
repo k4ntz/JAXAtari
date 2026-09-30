@@ -21,28 +21,33 @@ class AirRaidConstants(struct.PyTreeNode):
     PLAYER_WIDTH: int = struct.field(pytree_node=False, default=14)
     PLAYER_HEIGHT: int = struct.field(pytree_node=False, default=12)
     PLAYER_SPEED: int = struct.field(pytree_node=False, default=3)
-    PLAYER_INITIAL_X: int = struct.field(pytree_node=False, default=80)
-    PLAYER_INITIAL_Y: int = struct.field(pytree_node=False, default=140)
+    PLAYER_INITIAL_X: int = struct.field(pytree_node=False, default=61)
+    PLAYER_INITIAL_Y: int = struct.field(pytree_node=False, default=156)
     MAX_PLAYER_LIVES: int = struct.field(pytree_node=False, default=4)
 
     # Buildings
     NUM_BUILDINGS: int = struct.field(pytree_node=False, default=2)
-    BUILDING_WIDTH: int = struct.field(pytree_node=False, default=50)
-    BUILDING_HEIGHT: int = struct.field(pytree_node=False, default=25)
+    BUILDING_WIDTH: int = struct.field(pytree_node=False, default=32)
+    BUILDING_HEIGHT: int = struct.field(pytree_node=False, default=32)
     MAX_BUILDING_DAMAGE: int = struct.field(pytree_node=False, default=6)
-    BUILDING_INITIAL_Y: int = struct.field(pytree_node=False, default=205)
+    BUILDING_INITIAL_X: int = struct.field(pytree_node=False, default=34)
+    BUILDING_INITIAL_Y: int = struct.field(pytree_node=False, default=178)
     BUILDING_VELOCITY: int = struct.field(pytree_node=False, default=1)
-    BUILDING_SPACING: int = struct.field(pytree_node=False, default=90)
+    BUILDING_SPACING: int = struct.field(pytree_node=False, default=80)
 
-    # Height and Y position based on damage level (bottom of building anchored at y=230)
+    # Height and Y position based on damage level (bottom of building anchored at y=210)
     BUILDING_HEIGHTS: chex.Array = struct.field(
         pytree_node=False,
-        default_factory=lambda: jnp.array([25, 21, 17, 13, 9, 5, 0]),
+        default_factory=lambda: jnp.array([32, 28, 24, 20, 16, 12, 0]),
     )
     BUILDING_Y_POSITIONS: chex.Array = struct.field(
         pytree_node=False,
-        default_factory=lambda: jnp.array([205, 209, 213, 217, 221, 225, 230]),
+        default_factory=lambda: jnp.array([178, 182, 186, 190, 194, 198, 210]),
     )
+
+    # HUD
+    SCORE_X: int = struct.field(pytree_node=False, default=110)
+    SCORE_Y: int = struct.field(pytree_node=False, default=7)
 
     # Enemies
     NUM_ENEMIES_PER_TYPE: int = struct.field(pytree_node=False, default=3)
@@ -51,17 +56,19 @@ class AirRaidConstants(struct.PyTreeNode):
     ENEMY_INITIAL_Y: int = struct.field(pytree_node=False, default=69)
     ENEMY_SLOW_SPEED: int = struct.field(pytree_node=False, default=1)
     ENEMY_FAST_SPEED: int = struct.field(pytree_node=False, default=2)
-    ENEMY_SPAWN_Y: int = struct.field(pytree_node=False, default=30)
+    ENEMY_SPAWN_Y: int = struct.field(pytree_node=False, default=40)
     ENEMY_SPAWN_PROB: float = struct.field(pytree_node=False, default=0.04)
+    ENEMY_FIRE_MIN_Y: int = struct.field(pytree_node=False, default=100)
+    ENEMY_HITBOX_WIDTH: int = struct.field(pytree_node=False, default=6)  # 3x player missile width
 
     # Missiles
     MISSILE_WIDTH: int = struct.field(pytree_node=False, default=2)
     MISSILE_HEIGHT: int = struct.field(pytree_node=False, default=2)
     NUM_PLAYER_MISSILES: int = struct.field(pytree_node=False, default=1)
     NUM_ENEMY_MISSILES: int = struct.field(pytree_node=False, default=1)
-    PLAYER_MISSILE_SPEED: int = struct.field(pytree_node=False, default=-6)
+    PLAYER_MISSILE_SPEED: int = struct.field(pytree_node=False, default=-3)
     ENEMY_MISSILE_SPEED: int = struct.field(pytree_node=False, default=4)
-    ENEMY_FIRE_PROB: float = struct.field(pytree_node=False, default=0.05)
+    ENEMY_FIRE_PROB: float = struct.field(pytree_node=False, default=0.025)
 
 
 DEFAULT_AIRRAID_CONSTANTS = AirRaidConstants()
@@ -172,8 +179,8 @@ def spawn_enemy(state: AirRaidState) -> Tuple[chex.Array, chex.Array, chex.Array
 
     # Try two candidate positions
     candidates = jnp.array([
-        random.randint(pos_key1, shape=(), minval=10, maxval=AirRaidConstants.WIDTH - 30),
-        random.randint(pos_key2, shape=(), minval=10, maxval=AirRaidConstants.WIDTH - 30)
+        random.randint(pos_key1, shape=(), minval=20, maxval=AirRaidConstants.WIDTH - 20),
+        random.randint(pos_key2, shape=(), minval=20, maxval=AirRaidConstants.WIDTH - 20)
     ])
 
     # Check overlaps and select first valid position
@@ -209,8 +216,8 @@ def update_enemies(state: AirRaidState) -> Tuple[chex.Array, chex.Array, chex.Ar
     enemy_has_fired = state.enemy_has_fired
     building_damage = state.building_damage
 
-    # Move active enemies down
-
+    # Move active enemies down every frame.
+    # Movement frames cycle twice forward, once backward (net +1 step per 3 ticks).
     # 0, 1 slow: rakete und heli, flieger und ufo waren schnell
     # 0, 3 slow: ufo und heli
     # -> 0 ist heli, 1 ist rakete, 2 ist flieger, 3 ist ufo
@@ -219,7 +226,9 @@ def update_enemies(state: AirRaidState) -> Tuple[chex.Array, chex.Array, chex.Ar
         AirRaidConstants.ENEMY_SLOW_SPEED,
         AirRaidConstants.ENEMY_FAST_SPEED,
     )
-    enemy_y = jnp.where(enemy_active == 1, enemy_y + enemy_speeds, enemy_y)
+    movement_phase = state.step_counter % 3
+    direction = jnp.where(movement_phase == 2, jnp.int32(-1), jnp.int32(1))
+    enemy_y = jnp.where(enemy_active == 1, enemy_y + direction * enemy_speeds, enemy_y)
 
     # Deactivate enemies that reach the bottom
     reached_player = enemy_y > jnp.int32(AirRaidConstants.PLAYER_INITIAL_Y - 20)  # Changed from HEIGHT to PLAYER_INITIAL_Y
@@ -338,13 +347,14 @@ def fire_enemy_missiles(state: AirRaidState) -> Tuple[chex.Array, chex.Array, ch
     enemy_hasnt_fired = state.enemy_has_fired[firing_enemy_idx] == 0
     no_active_missiles = jnp.sum(enemy_missile_active) == 0  # Ensure no missiles are currently active
     player_targetable = jnp.logical_and(state.player_visible == 1, state.player_lives > 0)
+    deep_enough = state.enemy_y[firing_enemy_idx] >= AirRaidConstants.ENEMY_FIRE_MIN_Y
 
     can_fire = jnp.logical_and(
         jnp.logical_and(
             jnp.logical_and(fire_prob < AirRaidConstants.ENEMY_FIRE_PROB, first_inactive >= 0),
             jnp.logical_and(enemy_available, jnp.logical_and(selected_enemy_active, enemy_hasnt_fired))
         ),
-        jnp.logical_and(no_active_missiles, player_targetable)
+        jnp.logical_and(jnp.logical_and(no_active_missiles, player_targetable), deep_enough)
     )
 
     enemy_width = jnp.where(
@@ -434,7 +444,8 @@ def detect_collisions(state: AirRaidState) -> Tuple[chex.Array, chex.Array, chex
     building_damage = state.building_damage
 
     score_values = jnp.array([25, 50, 75, 100], dtype=jnp.int32)
-    enemy_widths = jnp.where(state.enemy_type == 0, 16, 14)
+    enemy_sprite_widths = jnp.where(state.enemy_type == 0, 16, 14)
+    enemy_hitbox_x = state.enemy_x + (enemy_sprite_widths - AirRaidConstants.ENEMY_HITBOX_WIDTH) // 2
     enemy_heights = jnp.where(state.enemy_type == 0, 18, jnp.where(state.enemy_type < 3, 16, 14))
 
     def process_player_missile(carry, pm):
@@ -443,11 +454,11 @@ def detect_collisions(state: AirRaidState) -> Tuple[chex.Array, chex.Array, chex
         missile_x = state.player_missile_x[pm]
         missile_y = state.player_missile_y[pm]
 
-        def enemy_collision_fn(ex, ey, ew, eh, ea):
+        def enemy_collision_fn(hx, ey, eh, ea):
             collision = jnp.logical_and(
                 jnp.logical_and(
-                    missile_x < ex + ew,
-                    missile_x + AirRaidConstants.MISSILE_WIDTH > ex,
+                    missile_x < hx + AirRaidConstants.ENEMY_HITBOX_WIDTH,
+                    missile_x + AirRaidConstants.MISSILE_WIDTH > hx,
                 ),
                 jnp.logical_and(
                     missile_y < ey + eh,
@@ -457,9 +468,8 @@ def detect_collisions(state: AirRaidState) -> Tuple[chex.Array, chex.Array, chex
             return jnp.logical_and(jnp.logical_and(collision, is_missile_active), ea == 1)
 
         effective_collisions = jax.vmap(enemy_collision_fn)(
-            state.enemy_x,
+            enemy_hitbox_x,
             state.enemy_y,
-            enemy_widths,
             enemy_heights,
             carry_enemy_active,
         )
@@ -564,10 +574,10 @@ class JaxAirRaid(JaxEnvironment[AirRaidState, AirRaidObservation, AirRaidInfo, A
         Returns:
             The initial observation and state
         """
-        # Initialize building positions
+        # Initialize building positions to match ALE (two houses on the ground line)
         building_x = jnp.array([
-            -AirRaidConstants.BUILDING_WIDTH,
-            -AirRaidConstants.BUILDING_WIDTH + AirRaidConstants.BUILDING_SPACING
+            AirRaidConstants.BUILDING_INITIAL_X,
+            AirRaidConstants.BUILDING_INITIAL_X + AirRaidConstants.BUILDING_SPACING,
         ])
         building_y = jnp.array([AirRaidConstants.BUILDING_INITIAL_Y, AirRaidConstants.BUILDING_INITIAL_Y])
         building_damage = jnp.zeros(AirRaidConstants.NUM_BUILDINGS, dtype=jnp.int32)
@@ -580,7 +590,7 @@ class JaxAirRaid(JaxEnvironment[AirRaidState, AirRaidObservation, AirRaidInfo, A
         enemy_has_fired = jnp.zeros(AirRaidConstants.TOTAL_ENEMIES, dtype=jnp.int32)  # Track firing status
 
         # Spawn first three enemies together at game start (left-to-right types: 1, 3, 1)
-        initial_enemy_x = jnp.array([20, 70, 120], dtype=jnp.int32)
+        initial_enemy_x = jnp.array([30, 80, 130], dtype=jnp.int32)
         initial_enemy_types = jnp.array([1, 3, 1], dtype=jnp.int32)
         enemy_x = enemy_x.at[:3].set(initial_enemy_x)
         enemy_y = enemy_y.at[:3].set(jnp.int32(AirRaidConstants.ENEMY_SPAWN_Y))
@@ -672,7 +682,7 @@ class JaxAirRaid(JaxEnvironment[AirRaidState, AirRaidObservation, AirRaidInfo, A
             operand=None,
         )
 
-        # Update existing enemies every second frame (effective half-speed with integer per-step speeds)
+        # Update existing enemies (2-forward, 1-back each frame)
         enemy_update_state = state.replace(
             player_x=new_player_x,
             enemy_x=new_enemy_x,
@@ -682,12 +692,8 @@ class JaxAirRaid(JaxEnvironment[AirRaidState, AirRaidObservation, AirRaidInfo, A
             enemy_has_fired=new_enemy_has_fired,
             rng=new_rng,
         )
-        should_update_enemies = (state.step_counter % 2) == 0
-        updated_enemy_y, updated_enemy_active, updated_enemy_has_fired, updated_building_damage = jax.lax.cond(
-            should_update_enemies,
-            lambda s: update_enemies(s),
-            lambda s: (s.enemy_y, s.enemy_active, s.enemy_has_fired, s.building_damage),
-            enemy_update_state,
+        updated_enemy_y, updated_enemy_active, updated_enemy_has_fired, updated_building_damage = update_enemies(
+            enemy_update_state
         )
 
         # Handle player firing missiles
@@ -1138,21 +1144,22 @@ class AirRaidRenderer(JAXGameRenderer):
 
         raster = self.jr.render_label_selective(
             raster,
-            30,
-            5,
+            AirRaidConstants.SCORE_X,
+            AirRaidConstants.SCORE_Y,
             score_digits,
             score_digit_masks,
             start_index,
             num_to_render,
             spacing=self.score_digit_spacing,
             max_digits_to_render=6,
+            right_align=True,
         )
 
         lives = state.player_lives
 
         def render_life(i, raster_in):
-            icon_x = 30 + i * self.life_spacing
-            render_result = self.jr.render_at(raster_in, icon_x, AirRaidConstants.HEIGHT - 17, life_mask)
+            icon_x = 40 + i * self.life_spacing
+            render_result = self.jr.render_at(raster_in, icon_x, AirRaidConstants.HEIGHT - 27, life_mask)
             return jnp.where(i < lives - 1, render_result, raster_in)
 
         raster = jax.lax.fori_loop(0, 2, render_life, raster)

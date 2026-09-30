@@ -142,10 +142,22 @@ Environments
        <div class="env-name">Breakout</div>
      </a>
 
-     <a class="env-card" href="casino.html">
-       <img data-src="../../_static/gifs/casino.gif" alt="Casino" onerror="this.style.display='none';this.nextElementSibling.style.display='flex'">
+     <a class="env-card" href="casino.html#casino-blackjack">
+       <img data-src="../../_static/gifs/casino.gif" alt="Casino Blackjack" onerror="this.style.display='none';this.nextElementSibling.style.display='flex'">
        <div class="env-placeholder" style="display:none">🕹</div>
-       <div class="env-name">Casino</div>
+       <div class="env-name">Casino Blackjack</div>
+     </a>
+
+     <a class="env-card" href="casino.html#casino-five-stud-poker">
+       <img data-src="../../_static/gifs/casino.gif" alt="Casino Five Stud Poker" onerror="this.style.display='none';this.nextElementSibling.style.display='flex'">
+       <div class="env-placeholder" style="display:none">🕹</div>
+       <div class="env-name">Casino Five Stud Poker</div>
+     </a>
+
+     <a class="env-card" href="casino.html#casino-poker-solitaire">
+       <img data-src="../../_static/gifs/casino.gif" alt="Casino Poker Solitaire" onerror="this.style.display='none';this.nextElementSibling.style.display='flex'">
+       <div class="env-placeholder" style="display:none">🕹</div>
+       <div class="env-name">Casino Poker Solitaire</div>
      </a>
 
      <a class="env-card" href="centipede.html">
@@ -323,3 +335,4 @@ Environments
    :hidden:
 
    seaquest
+   casino

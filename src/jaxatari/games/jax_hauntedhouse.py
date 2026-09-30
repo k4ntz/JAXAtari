@@ -290,6 +290,7 @@ class HauntedHouseObservation:
     player: ObjectObservation
     enemies: ObjectObservation  # Merged Ghost, Spider, Bat
     items: ObjectObservation    # Merged Scepter, Urn Parts, Full Urn
+    stairs: ObjectObservation
     item_held: jnp.ndarray
     match_duration: jnp.ndarray
     matches_used: jnp.ndarray
@@ -333,7 +334,6 @@ class JaxHauntedHouse(JaxEnvironment[HauntedHouseState, HauntedHouseObservation,
         consts = consts or HauntedHouseConstants()
         super().__init__(consts)
         self.renderer = HauntedHouseRenderer(self.consts)
-        self.obs_size = 3*4+1+1
 
 
 
@@ -1051,9 +1051,19 @@ class JaxHauntedHouse(JaxEnvironment[HauntedHouseState, HauntedHouseObservation,
             default=0.0
         )
 
+        camera_offset = jnp.clip(jnp.where(state.player[1] < 82, 0, state.player[1] - 82), 0, 356)
+        playfield_bottom = 161
+
+        def trim(x, y, w, h):
+            x0 = jnp.clip(x, 0, self.consts.WIDTH)
+            y0 = jnp.clip(y, 0, playfield_bottom)
+            x1 = jnp.clip(x + w, 0, self.consts.WIDTH)
+            y1 = jnp.clip(y + h, 0, playfield_bottom)
+            return x0, y0, x1 - x0, y1 - y0
+
         player = ObjectObservation.create(
-            x=jnp.clip(state.player[0], 0, self.consts.WIDTH),
-            y=jnp.clip(state.player[1], 0, self.consts.HEIGHT),
+            x=state.player[0],
+            y=state.player[1] - camera_offset,
             width=jnp.array(self.consts.PLAYER_SIZE[0], dtype=jnp.int32),
             height=jnp.array(self.consts.PLAYER_SIZE[1], dtype=jnp.int32),
             orientation=p_ori.astype(jnp.float32),
@@ -1064,28 +1074,16 @@ class JaxHauntedHouse(JaxEnvironment[HauntedHouseState, HauntedHouseObservation,
         # --- Enemies (Merged) ---
         # 0: Ghost, 1: Spider, 2: Bat
         en_pos = jnp.stack([state.ghost, state.spider, state.bat])
-        en_sizes = jnp.array([
-            self.consts.GHOST_SIZE, 
-            self.consts.SPIDER_SIZE, 
-            self.consts.BAT_SIZE
-        ])
-        
-        # Visibility Check
-        def check_enemy_vis(pos, size):
-            visible_floor = (state.player[2] == pos[2])
-            # Reconstruct EntityPosition just for the check function
-            e_ent = EntityPosition(pos[0], pos[1], pos[2], size[0], size[1])
-            visible_screen = self.check_visibility(state.player, e_ent)
-            return visible_floor & visible_screen
+        en_sizes = jnp.array([[8, 16], [8, 18], [8, 20]], dtype=jnp.int32)
+        en_x, en_y, en_w, en_h = trim(en_pos[:, 0], en_pos[:, 1] - camera_offset, en_sizes[:, 0], en_sizes[:, 1])
+        en_active = (en_pos[:, 2] == state.player[2]) & (en_w > 0) & (en_h > 0)
 
-        en_active = jax.vmap(check_enemy_vis)(en_pos, en_sizes)
-        
         enemies = ObjectObservation.create(
-            x=jnp.clip(en_pos[:, 0], 0, self.consts.WIDTH),
-            y=jnp.clip(en_pos[:, 1], 0, self.consts.HEIGHT),
-            width=en_sizes[:, 0].astype(jnp.int32),
-            height=en_sizes[:, 1].astype(jnp.int32),
-            visual_id=jnp.arange(3, dtype=jnp.int32), # ID distinguishes enemy type
+            x=en_x.astype(jnp.int32),
+            y=en_y.astype(jnp.int32),
+            width=en_w.astype(jnp.int32),
+            height=en_h.astype(jnp.int32),
+            visual_id=jnp.arange(3, dtype=jnp.int32),
             active=en_active.astype(jnp.int32)
         )
 
@@ -1109,27 +1107,47 @@ class JaxHauntedHouse(JaxEnvironment[HauntedHouseState, HauntedHouseObservation,
         
         is_lit = state.match_duration > 0
         
-        def check_item_vis(pos, size):
-            visible_floor = (state.player[2] == pos[2])
-            p_ent = EntityPosition(state.player[0], state.player[1], state.player[2], self.consts.PLAYER_SIZE[0], self.consts.PLAYER_SIZE[1])
-            visible_light = self.check_illuminated_single(p_ent, pos, size)
-            return visible_floor & is_lit & visible_light
-
-        item_active = jax.vmap(check_item_vis)(item_pos_stack, item_sizes)
+        item_on_floor = item_pos_stack[:, 2] == state.player[2]
+        illuminated = self.renderer._check_illuminated(state)
+        it_x, it_y, it_w, it_h = trim(item_pos_stack[:, 0], item_pos_stack[:, 1] - camera_offset, item_sizes[:, 0], item_sizes[:, 1])
+        item_active = item_on_floor & is_lit & illuminated & (it_w > 0) & (it_h > 0)
 
         items = ObjectObservation.create(
-            x=jnp.clip(item_pos_stack[:, 0], 0, self.consts.WIDTH),
-            y=jnp.clip(item_pos_stack[:, 1], 0, self.consts.HEIGHT),
-            width=item_sizes[:, 0].astype(jnp.int32),
-            height=item_sizes[:, 1].astype(jnp.int32),
-            visual_id=jnp.arange(8, dtype=jnp.int32), # Matches the item_held ID logic
+            x=it_x.astype(jnp.int32),
+            y=it_y.astype(jnp.int32),
+            width=it_w.astype(jnp.int32),
+            height=it_h.astype(jnp.int32),
+            visual_id=jnp.arange(8, dtype=jnp.int32),
             active=item_active.astype(jnp.int32)
+        )
+
+        floor_idx = state.player[2] - 1
+        stair_pos = jnp.array([[32, 7], [112, 7], [32, 478], [112, 478], [5, 226], [140, 225]], dtype=jnp.int32)
+        stair_sizes = jnp.array([[16, 32], [16, 32], [16, 32], [16, 32], [16, 34], [16, 34]], dtype=jnp.int32)
+        stair_on_floor = jnp.stack([
+            self.consts.STAIRS_TOP_LEFT[floor_idx],
+            self.consts.STAIRS_TOP_RIGHT[floor_idx],
+            self.consts.STAIRS_BOTTOM_LEFT[floor_idx],
+            self.consts.STAIRS_BOTTOM_RIGHT[floor_idx],
+            self.consts.STAIRS_LEFT[floor_idx],
+            self.consts.STAIRS_RIGHT[floor_idx],
+        ])
+        st_x, st_y, st_w, st_h = trim(stair_pos[:, 0], stair_pos[:, 1] - camera_offset, stair_sizes[:, 0], stair_sizes[:, 1])
+        stair_active = stair_on_floor & is_lit & (st_w > 0) & (st_h > 0)
+
+        stairs = ObjectObservation.create(
+            x=st_x.astype(jnp.int32),
+            y=st_y.astype(jnp.int32),
+            width=st_w.astype(jnp.int32),
+            height=st_h.astype(jnp.int32),
+            active=stair_active.astype(jnp.int32)
         )
 
         return HauntedHouseObservation(
             player=player,
             enemies=enemies,
             items=items,
+            stairs=stairs,
             item_held=state.item_held,
             match_duration=jnp.int32(state.match_duration > 0),
             matches_used=state.matches_used,
@@ -1149,6 +1167,7 @@ class JaxHauntedHouse(JaxEnvironment[HauntedHouseState, HauntedHouseObservation,
             
             # Items: Scepter, 6 Urn pieces, Full Urn (n=8)
             "items": spaces.get_object_space(n=8, screen_size=(self.consts.HEIGHT, self.consts.WIDTH)),
+            "stairs": spaces.get_object_space(n=6, screen_size=(self.consts.HEIGHT, self.consts.WIDTH)),
             
             # Integer boxes (not spaces.Discrete): OC / flatten wrappers only expand Box leaves.
             "item_held": spaces.Box(low=0, high=8, shape=(), dtype=jnp.int32),

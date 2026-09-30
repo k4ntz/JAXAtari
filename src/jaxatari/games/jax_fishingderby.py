@@ -152,6 +152,8 @@ class FishingDerbyConstants(struct.PyTreeNode):
     # Shark
     SHARK_WIDTH: int = struct.field(pytree_node=False, default=16)
     SHARK_HEIGHT: int = struct.field(pytree_node=False, default=7)
+    SHARK_SPRITE_WIDTH: int = struct.field(pytree_node=False, default=35)
+    SHARK_SPRITE_HEIGHT: int = struct.field(pytree_node=False, default=13) 
     SHARK_SPEED: float = struct.field(pytree_node=False, default=0.3)
     SHARK_Y: int = struct.field(pytree_node=False, default=78)
     SHARK_BURST_SPEED: float = struct.field(pytree_node=False, default=1.5)
@@ -202,6 +204,7 @@ class GameState:
 @struct.dataclass
 class FishingDerbyObservation:
     hook_p1: ObjectObservation
+    hook_p2: ObjectObservation
     fish: ObjectObservation
     shark: ObjectObservation
     score: chex.Array
@@ -372,6 +375,16 @@ class FishingDerby(JaxEnvironment):
             active=jnp.array(1, dtype=jnp.int32)
         )
 
+        hook2_x, hook2_y = self._get_hook_position_p2(self.consts.P2_START_X, state.p2)
+        hook_p2 = ObjectObservation.create(
+            x=jnp.array(hook2_x, dtype=jnp.int32),
+            y=jnp.array(hook2_y, dtype=jnp.int32),
+            width=jnp.array(self.consts.HOOK_WIDTH, dtype=jnp.int32),
+            height=jnp.array(self.consts.HOOK_HEIGHT, dtype=jnp.int32),
+            orientation=jnp.array(0.0, dtype=jnp.float32),
+            active=jnp.array(1, dtype=jnp.int32)
+        )
+
         # --- Fish ---
         # Orientation: 1.0 (Right) -> 90.0, -1.0 (Left) -> 270.0
         fish_dirs = state.fish_directions
@@ -393,14 +406,15 @@ class FishingDerby(JaxEnvironment):
         shark = ObjectObservation.create(
             x=jnp.clip(jnp.array(state.shark_x, dtype=jnp.int32), 0, self.consts.SCREEN_WIDTH),
             y=jnp.clip(jnp.array(self.consts.SHARK_Y, dtype=jnp.int32), 0, self.consts.SCREEN_HEIGHT),
-            width=jnp.array(self.consts.SHARK_WIDTH, dtype=jnp.int32),
-            height=jnp.array(self.consts.SHARK_HEIGHT, dtype=jnp.int32),
+            width=jnp.array(self.consts.SHARK_SPRITE_WIDTH, dtype=jnp.int32),
+            height=jnp.array(self.consts.SHARK_SPRITE_HEIGHT, dtype=jnp.int32),
             orientation=shark_orientation.astype(jnp.float32),
             active=jnp.array(1, dtype=jnp.int32)
         )
 
         return FishingDerbyObservation(
             hook_p1=hook_p1,
+            hook_p2=hook_p2,
             fish=fish,
             shark=shark,
             score=state.p1.score.astype(jnp.int32)
@@ -701,6 +715,7 @@ class FishingDerby(JaxEnvironment):
         """Returns the observation space of the environment."""
         return spaces.Dict({
             "hook_p1": spaces.get_object_space(n=None, screen_size=(self.consts.SCREEN_HEIGHT, self.consts.SCREEN_WIDTH)),
+            "hook_p2": spaces.get_object_space(n=None, screen_size=(self.consts.SCREEN_HEIGHT, self.consts.SCREEN_WIDTH)),
             "fish": spaces.get_object_space(n=self.consts.NUM_FISH, screen_size=(self.consts.SCREEN_HEIGHT, self.consts.SCREEN_WIDTH)),
             "shark": spaces.get_object_space(n=None, screen_size=(self.consts.SCREEN_HEIGHT, self.consts.SCREEN_WIDTH)),
             "score": spaces.Box(low=0, high=99, shape=(), dtype=jnp.int32),

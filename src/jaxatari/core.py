@@ -27,7 +27,7 @@ def _warn_deprecated_obs_to_flat_array(env: JaxEnvironment) -> None:
 # Map of game names to their module paths (commented out games are WIP and will be supported in the near future)
 GAME_MODULES = {
     "amidar": "jaxatari.games.jax_amidar",
-    # "airraid": "jaxatari.games.jax_airraid",
+    "airraid": "jaxatari.games.jax_airraid",
     "alien": "jaxatari.games.jax_alien",
     "asterix": "jaxatari.games.jax_asterix",
     "asteroids": "jaxatari.games.jax_asteroids",
@@ -37,9 +37,13 @@ GAME_MODULES = {
     "berzerk": "jaxatari.games.jax_berzerk",
     "blackjack": "jaxatari.games.jax_blackjack",
     "breakout": "jaxatari.games.jax_breakout",
+    "casinoblackjack": "jaxatari.games.jax_casino_blackjack",
+    "casinofivestudpoker": "jaxatari.games.jax_casino_five_stud_poker",
+    "casinopokersolitaire": "jaxatari.games.jax_casino_poker_solitaire",
     "centipede": "jaxatari.games.jax_centipede",
     "choppercommand": "jaxatari.games.jax_choppercommand",
     "crazyclimber": "jaxatari.games.jax_crazy_climber",
+    "donkeykong": "jaxatari.games.jax_donkeykong",
     "enduro": "jaxatari.games.jax_enduro",
     "fishingderby": "jaxatari.games.jax_fishingderby",
     "flagcapture": "jaxatari.games.jax_flagcapture",
@@ -47,12 +51,12 @@ GAME_MODULES = {
     "frostbite": "jaxatari.games.jax_frostbite",
     "galaxian": "jaxatari.games.jax_galaxian",
     "gravitar": "jaxatari.games.jax_gravitar",
-    # "hangman": "jaxatari.games.jax_hangman",
+    "hangman": "jaxatari.games.jax_hangman",
     "hauntedhouse": "jaxatari.games.jax_hauntedhouse",
     "humancannonball": "jaxatari.games.jax_humancannonball",
     "kangaroo": "jaxatari.games.jax_kangaroo",
     "kingkong": "jaxatari.games.jax_kingkong",
-    # "klax": "jaxatari.games.jax_klax",
+    "klax": "jaxatari.games.jax_klax",
     "lasergates": "jaxatari.games.jax_lasergates",
     "namethisgame": "jaxatari.games.jax_namethisgame",
     "phoenix": "jaxatari.games.jax_phoenix",
@@ -65,21 +69,26 @@ GAME_MODULES = {
     "slotmachine": "jaxatari.games.jax_slotmachine",
     "spaceinvaders": "jaxatari.games.jax_spaceinvaders",
     "spacewar": "jaxatari.games.jax_spacewar",
-    # "surround": "jaxatari.games.jax_surround", currently not in a state that can be used
+    "surround": "jaxatari.games.jax_surround",
     "tennis": "jaxatari.games.jax_tennis",
     "tetris": "jaxatari.games.jax_tetris",
     "timepilot": "jaxatari.games.jax_timepilot",
     "tron": "jaxatari.games.jax_tron",
     "turmoil": "jaxatari.games.jax_turmoil",
     "venture": "jaxatari.games.jax_venture",
-    # "videocheckers": "jaxatari.games.jax_videocheckers",
+    "videocheckers": "jaxatari.games.jax_videocheckers",
     "videocube": "jaxatari.games.jax_videocube",
     "videopinball": "jaxatari.games.jax_videopinball",
     "wordzapper": "jaxatari.games.jax_wordzapper",
     "mspacman": "jaxatari.games.jax_mspacman",
     "montezumarevenge": "jaxatari.games.jax_montezumarevenge",
-    # "pacman": "jaxatari.games.jax_pacman",
+    "pacman": "jaxatari.games.jax_pacman",
     # Add new games here
+}
+
+# ALE / Gymnasium names that differ from the JAXAtari registry key.
+GAME_ALIASES = {
+    "trondead": "tron",
 }
 
 # Mod modules registry: for each game, provide the Controller class path
@@ -106,7 +115,12 @@ MOD_MODULES = {
     "spaceinvaders": "jaxatari.games.mods.spaceinvaders_mods.SpaceInvadersEnvMod",
     "skiing": "jaxatari.games.mods.skiing_mods.SkiingEnvMod",
     "alien": "jaxatari.games.mods.alien_mods.AlienEnvMod",
-    "asteroids": "jaxatari.games.mods.asteroids_mods.AsteroidsEnvMod"
+    "asteroids": "jaxatari.games.mods.asteroids_mods.AsteroidsEnvMod",
+    "choppercommand": "jaxatari.games.mods.choppercommand_mods.ChopperCommandEnvMod",
+    "centipede": "jaxatari.games.mods.centipede_mods.CentipedeEnvMod",
+    "pacman": "jaxatari.games.mods.pacman_mods.PacmanEnvMod",
+    "amidar": "jaxatari.games.mods.amidar_mods.AmidarEnvMod",
+    "timepilot": "jaxatari.games.mods.timepilot_mods.TimePilotEnvMod",
 }
 
 
@@ -146,7 +160,12 @@ def make(game_name: str,
     check_ownership()  # Ensure ownership confirmed
 
     if isinstance(game_name, str):
-        game_name = game_name.lower()
+        game_name_clean = game_name.lower().replace("_", "").replace("-", "")
+        game_name_clean = GAME_ALIASES.get(game_name_clean, game_name_clean)
+        for key in GAME_MODULES:
+            if key.lower().replace("_", "").replace("-", "") == game_name_clean:
+                game_name = key
+                break
 
     if mods_config is not None:
         warnings.warn(
