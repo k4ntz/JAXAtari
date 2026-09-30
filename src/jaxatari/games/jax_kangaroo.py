@@ -1842,17 +1842,12 @@ class JaxKangaroo(JaxEnvironment[KangarooState, KangarooObservation, KangarooInf
         # add the time after finishing a level
         level_switch_score_addition = jnp.where(level_finished, state.level.timer, 0)
 
-        # add score if levelup from lvl3 to lvl1
+        # Calculate total score addition
         score_addition = (
             fruit_score_addition
             + monkey_hit_score_addition
             + level_switch_score_addition
             + falling_coco_score_addition
-        )
-        score_addition = jax.lax.cond(
-            new_current_level == 4,
-            lambda: score_addition + 1400,
-            lambda: score_addition,
         )
         new_current_level = jnp.where(new_current_level == 4, 1, new_current_level)
 
