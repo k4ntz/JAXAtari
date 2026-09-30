@@ -49,6 +49,7 @@ GAME_MODULES = {
     "galaxian": "jaxatari.games.jax_galaxian",
     "gravitar": "jaxatari.games.jax_gravitar",
     "hangman": "jaxatari.games.jax_hangman",
+    "hero": "jaxatari.games.jax_hero",
     "hauntedhouse": "jaxatari.games.jax_hauntedhouse",
     "humancannonball": "jaxatari.games.jax_humancannonball",
     "kangaroo": "jaxatari.games.jax_kangaroo",
@@ -86,6 +87,7 @@ GAME_MODULES = {
 MOD_MODULES = {
     "pong": "jaxatari.games.mods.pong_mods.PongEnvMod",
     "kangaroo": "jaxatari.games.mods.kangaroo_mods.KangarooEnvMod",
+    "hero": "jaxatari.games.mods.hero_mods.HeroEnvMod",
     "freeway": "jaxatari.games.mods.freeway_mods.FreewayEnvMod",
     "breakout": "jaxatari.games.mods.breakout_mods.BreakoutEnvMod",
     "seaquest": "jaxatari.games.mods.seaquest_mods.SeaquestEnvMod",
