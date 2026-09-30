@@ -161,6 +161,7 @@ class BirdState:
     pos_y: chex.Array
     dir: chex.Array
     stop: chex.Array
+    resume_floor: chex.Array
     egg_state: chex.dataclass
 
     @classmethod
@@ -171,6 +172,7 @@ class BirdState:
             pos_y=CrazyClimberConstants.BIRD_Y,
             dir=jnp.array(1),
             stop=jnp.array(False),
+            resume_floor=jnp.array(0, dtype=jnp.int32),
             egg_state=EggState.new()
         )
 
@@ -665,7 +667,11 @@ class CrazyClimberConstants(struct.PyTreeNode):
     HELICOPTER_BORDERS: Tuple[int, int] = struct.field(pytree_node=False, default=(10, 35+HELICOPTER_SIZE.default[1]))
     HELICOPTER_BORDERS_X: Tuple[int, int] = struct.field(pytree_node=False, default=(8, 110))
     HELICOPTER_BORDERS_Y: Tuple[int, int] = struct.field(pytree_node=False, default=(128,69))
-    HELICOPTER_SPAWN_HEIGHT: int = struct.field(pytree_node=False, default=161) # TODO: Should be set to max tower height when merged, maybe rename?
+    HELICOPTER_SPAWN_HEIGHT: int = struct.field(pytree_node=False, default=161)
+    TOWER_HEIGHTS: chex.Array = struct.field(
+        pytree_node=False,
+        default_factory=lambda: jnp.array([161, 252, 161, 161], dtype=jnp.int32),
+    )
     HELICOPTER_MOVEMENT_BEGIN: int = struct.field(pytree_node=False, default=116) # TODO: value is not pixel perfect yet
     HELICOPTER_MAX_STEPS: int = struct.field(pytree_node=False, default=1540) #TODO: not precise value yet
     HELICOPTER_SEQUENCE: chex.Array = struct.field(pytree_node=False, default_factory=lambda:jnp.array([0,1,0,2]))
@@ -750,7 +756,6 @@ class CrazyClimberConstants(struct.PyTreeNode):
         jnp.repeat(TowerLevelType.FULL, 18),
     ])
 
-    # TODO: Tower 2 - 4 currently placeholder. needs to be changed to correct design
     TOWER2 = jnp.concat([
         jnp.repeat(TowerLevelType.MIDDLE_CUT, 5),
         jnp.repeat(TowerLevelType.FULL, 9),
@@ -759,10 +764,14 @@ class CrazyClimberConstants(struct.PyTreeNode):
         jnp.repeat(TowerLevelType.MIDDLE_4, 8),
         jnp.repeat(TowerLevelType.FULL, 8),
         jnp.repeat(TowerLevelType.MIDDLE_CUT, 48),
-        jnp.repeat(TowerLevelType.MIDDLE_4, 45), # TODO: placeholder for the end of the tower, needs to be correctly mapped
+        jnp.repeat(TowerLevelType.MIDDLE_4, 48),
+        jnp.repeat(TowerLevelType.MIDDLE_CUT, 24),
+        jnp.repeat(TowerLevelType.MIDDLE_4, 64),
     ])
-    TOWER3 = jnp.repeat(TowerLevelType.FULL, 163)
-    TOWER4 = jnp.repeat(TowerLevelType.FULL, 163)
+    TOWER1 = jnp.pad(TOWER1, (0, 91), constant_values=TowerLevelType.FULL)
+    # TODO: Tower 3 and 4 are still placeholders and need their original designs.
+    TOWER3 = jnp.repeat(TowerLevelType.FULL, 254)
+    TOWER4 = jnp.repeat(TowerLevelType.FULL, 254)
     TOWERS = jnp.stack([TOWER1, TOWER2, TOWER3, TOWER4])
     TOWER_BLIND_SPAWN_CYCLE_PROB = jnp.array([0.5, 0.6, 0.6, 0.6])
     TOWER_BLIND_SPAWN_PROB = jnp.array([0.15, 0.2, 0.2, 0.2])
@@ -780,6 +789,11 @@ class CrazyClimberConstants(struct.PyTreeNode):
     BIRD_SPAWN_THRESHOLD: int = struct.field(pytree_node=False, default=5000) # should be 5000 for final version
     BIRD_DESPAWN_THRESHOLD: int = struct.field(pytree_node=False, default=7500) # should be 8500 for final version
     BIRD_MIN_CLIMBED_FLOORS: int = struct.field(pytree_node=False, default=50)
+    BIRD_LEVEL_2_PRE_AREA_START_FLOOR: int = struct.field(pytree_node=False, default=50)
+    BIRD_LEVEL_2_START_FLOOR: int = struct.field(pytree_node=False, default=58)
+    BIRD_LEVEL_2_SECOND_SECTION_FLOOR: int = struct.field(pytree_node=False, default=106)
+    BIRD_LEVEL_2_END_FLOOR: int = struct.field(pytree_node=False, default=154)
+    BIRD_LEVEL_2_POST_AREA_FLOOR: int = struct.field(pytree_node=False, default=178)
     BIRD_POSSIBLE_STEPS: chex.Array = struct.field(
         pytree_node=False, 
         default_factory= lambda: jnp.array(
@@ -881,6 +895,7 @@ class JaxCrazyClimber(JaxEnvironment[CrazyClimberState, CrazyClimberObservation,
         state = self._player_step(state, atari_action)
         state = self._flowerpot_death_step(previous_state, state)
         state = self._falling_object_death_step(previous_state, state)
+        state = self._bird_death_step(previous_state, state)
         state = self._tower_step(state)
 
         state = jax.lax.cond(state.level_state.condor_active,
@@ -895,7 +910,8 @@ class JaxCrazyClimber(JaxEnvironment[CrazyClimberState, CrazyClimberObservation,
         state = self._falling_object_collision_step(state)
         state = self._score_step(state)
         state = self._bonus_step(state)
-        state = jax.lax.cond(state.climbed_floors >= self.consts.HELICOPTER_SPAWN_HEIGHT,
+        tower_height = self.consts.TOWER_HEIGHTS[state.level_state.current_level - 1]
+        state = jax.lax.cond(state.climbed_floors >= tower_height,
             lambda: self._helicopter_step(state),
             lambda: state,
         )
@@ -960,8 +976,38 @@ class JaxCrazyClimber(JaxEnvironment[CrazyClimberState, CrazyClimberObservation,
 
     @partial(jax.jit, static_argnums=(0,))
     def _level_2_step(self, state: CrazyClimberState) -> CrazyClimberState:
-        """currently only a dummy method, runs level 1 step"""
-        return self._level_1_step(state)
+        level_state = state.level_state
+        h = state.climbed_floors
+        bird_area_active = (
+            (h >= self.consts.BIRD_LEVEL_2_START_FLOOR)
+            & (h < self.consts.BIRD_LEVEL_2_END_FLOOR)
+            & (h >= state.bird_state.resume_floor)
+        )
+        condor_activate = (
+            bird_area_active
+            & ~level_state.condor_active
+            & (level_state.next_enemy == Enemy.CONDOR)
+            & (state.player_move_state.falling_count == 0)
+            & ~state.player_move_state.should_fall
+            & ~state.tower_state.is_falling
+        )
+        condor_deactivate = (
+            level_state.condor_active
+            & ~level_state.pause_game
+            & (~bird_area_active | state.bird_state.stop)
+        )
+        return state.replace(level_state=level_state.replace(
+            condor_active=jnp.where(
+                condor_activate,
+                True,
+                jnp.where(condor_deactivate, False, level_state.condor_active),
+            ),
+            next_enemy=jnp.where(
+                condor_deactivate,
+                level_state.next_enemy + 1,
+                level_state.next_enemy,
+            ),
+        ))
 
     @partial(jax.jit, static_argnums=(0,))
     def _level_3_step(self, state: CrazyClimberState) -> CrazyClimberState:
@@ -1364,7 +1410,8 @@ class JaxCrazyClimber(JaxEnvironment[CrazyClimberState, CrazyClimberObservation,
         is_falling = player_move_state.falling_count > 0
         is_flying_away = (state.helicopter_state.fly_away_step > 0) | (state.helicopter_state.fly_away_state != HeliFlyAwayStates.NORMAL)
         movement_locked = jnp.logical_or(is_falling, is_flying_away)
-        on_top_of_tower = state.climbed_floors >= CrazyClimberConstants.HELICOPTER_SPAWN_HEIGHT
+        tower_height = self.consts.TOWER_HEIGHTS[state.level_state.current_level - 1]
+        on_top_of_tower = state.climbed_floors >= tower_height
 
         falling_conds = jnp.array([
             (~left_hand_safe) & (~right_hand_safe),
@@ -1760,6 +1807,41 @@ class JaxCrazyClimber(JaxEnvironment[CrazyClimberState, CrazyClimberObservation,
         enemy = state.flowerpot_enemy_state
         return state.replace(flowerpot_enemy_state=enemy.replace(
             resume_floor=jnp.where(death_started, resume_floor, enemy.resume_floor),
+        ))
+
+    @partial(jax.jit, static_argnums=(0,))
+    def _bird_death_step(
+        self, previous_state: CrazyClimberState, state: CrazyClimberState,
+    ) -> CrazyClimberState:
+        death_started = (
+            (previous_state.player_move_state.falling_count == 0)
+            & (state.player_move_state.falling_count > 0)
+            & (state.level_state.current_level == Level.LEVEL_2)
+        )
+        h = previous_state.climbed_floors
+        resume_floor = jnp.where(
+            h < self.consts.BIRD_LEVEL_2_PRE_AREA_START_FLOOR,
+            self.consts.BIRD_LEVEL_2_START_FLOOR,
+            jnp.where(
+                h < self.consts.BIRD_LEVEL_2_START_FLOOR,
+                self.consts.BIRD_LEVEL_2_SECOND_SECTION_FLOOR,
+                jnp.where(
+                    h < self.consts.BIRD_LEVEL_2_SECOND_SECTION_FLOOR,
+                    self.consts.BIRD_LEVEL_2_END_FLOOR,
+                    self.consts.BIRD_LEVEL_2_POST_AREA_FLOOR,
+                ),
+            ),
+        )
+        bird = state.bird_state
+        death_in_relevant_area = death_started & (
+            h < self.consts.BIRD_LEVEL_2_END_FLOOR
+        )
+        return state.replace(bird_state=bird.replace(
+            resume_floor=jnp.where(
+                death_in_relevant_area,
+                resume_floor,
+                bird.resume_floor,
+            ),
         ))
 
     @partial(jax.jit, static_argnums=(0,))
@@ -2376,6 +2458,7 @@ class JaxCrazyClimber(JaxEnvironment[CrazyClimberState, CrazyClimberObservation,
         next_state = state.replace(
             helicopter_state=heli_reset_state,
             player_move_state=player_reset_state,
+            bird_state=BirdState.new(),
             level_state=level_reset_state,
             tower_state=tower_reset_state,
             flowerpot_enemy_state=FlowerpotEnemyState.new(
@@ -2418,9 +2501,14 @@ class JaxCrazyClimber(JaxEnvironment[CrazyClimberState, CrazyClimberObservation,
             "flower_pot_yellow": object_space,
             "flower_pot_purple": object_space,
             "flower_pot_blue": object_space,
+            "window_blinds": spaces.get_object_space(
+                n=66,
+                screen_size=(self.consts.HEIGHT, self.consts.WIDTH),
+                xy_low=-1,
+            ),
             "bird": object_space,
             "egg": object_space,
-            "window_blinds": object_space,
+            "heli": object_space,
             "score": spaces.Box(low=0, high=999999, shape=(), dtype=jnp.int32),
             "bonus": spaces.Box(low=0, high=999999, shape=(), dtype=jnp.int32),
         })
@@ -2616,13 +2704,14 @@ class JaxCrazyClimber(JaxEnvironment[CrazyClimberState, CrazyClimberObservation,
     class CrazyClimberRenderer(JAXGameRenderer):
         def __init__(self, consts: CrazyClimberConstants = None, config: render_utils.RendererConfig = None):
             self.consts = consts or CrazyClimberConstants()
-            super().__init__(consts)
-            self.config = render_utils.RendererConfig(
+            config = config or render_utils.RendererConfig(
                 game_dimensions=(210, 160),
                 channels=3,
                 downscale=None
             )
-            self.jr = render_utils.JaxRenderingUtils(self.config)
+            super().__init__(self.consts, config)
+            # Tower clipping and sprite anchors use original pixel coordinates.
+            self.jr = render_utils.JaxRenderingUtils(self.config.replace(downscale=None))
             
             final_asset_config = list(self.consts.ASSET_CONFIG)
 
@@ -2925,7 +3014,7 @@ class JaxCrazyClimber(JaxEnvironment[CrazyClimberState, CrazyClimberObservation,
             )
 
             row_indices = state.tower_state.lowest_level + jnp.arange(13)
-            max_level = CrazyClimberConstants.HELICOPTER_SPAWN_HEIGHT
+            max_level = self.consts.TOWER_HEIGHTS[state.level_state.current_level - 1]
             valid_row_mask = row_indices < (max_level + 2) # needs to be two higher because of the unused rows at the bottom
 
             pixel_mask = jnp.repeat(valid_row_mask[::-1], 13)[:, None]
@@ -3183,7 +3272,8 @@ class JaxCrazyClimber(JaxEnvironment[CrazyClimberState, CrazyClimberObservation,
             helicopter_raster = self._render_helicopter(state)
             raster = self._clip_raster(raster, tower_raster, 40, 44) # self.jr.render_at_clipped(raster, 0, 0, tower_raster)
             raster = self._clip_raster(raster, player_raster, self.consts.PLAYER_POSSIBLE_X[state.player_move_state.pos_x], self.consts.PLAYER_Y) # self.jr.render_at_clipped(raster, state.player_move_state.pos_x, self.consts.PLAYER_Y, player_raster)
-            raster = jax.lax.cond(state.climbed_floors >= self.consts.HELICOPTER_SPAWN_HEIGHT,
+            tower_height = self.consts.TOWER_HEIGHTS[state.level_state.current_level - 1]
+            raster = jax.lax.cond(state.climbed_floors >= tower_height,
                 lambda: self._clip_raster(raster, helicopter_raster, state.helicopter_state.pos_x, state.helicopter_state.pos_y),
                 lambda: raster,
             )
@@ -3231,4 +3321,8 @@ class JaxCrazyClimber(JaxEnvironment[CrazyClimberState, CrazyClimberObservation,
             raster = self.jr.render_label_selective(raster, 57, 20, bonus_digits, digit_masks, start_index=0, num_to_render=5, spacing=8, max_digits_to_render=6)
             raster = self.jr.render_label_selective(raster, 49, 30, score_digits, digit_masks, start_index=0, num_to_render=6, spacing=8, max_digits_to_render=6)
 
+            if self.config.downscale is not None:
+                raster = jax.image.resize(
+                    raster, self.config.downscale, method="nearest",
+                ).astype(raster.dtype)
             return self.jr.render_from_palette(raster, self.PALETTE)
