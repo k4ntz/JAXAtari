@@ -218,6 +218,47 @@ class FlowerpotEnemyState:
             drop_type=drop_type,
         )
 
+@chex.dataclass
+class FallingObjectState:
+    x: chex.Array
+    y: chex.Array
+    vx: chex.Array
+    step: chex.Array
+    sprite_index: chex.Array
+    started: chex.Array
+    resume_floor: chex.Array
+
+    @classmethod
+    def new(cls, resume_floor=0):
+        return cls(
+            x=jnp.array(0.0, dtype=jnp.float32),
+            y=jnp.array(0.0, dtype=jnp.float32),
+            vx=jnp.array(0.0, dtype=jnp.float32),
+            step=jnp.array(0, dtype=jnp.int32),
+            sprite_index=jnp.array(-1, dtype=jnp.int32),
+            started=jnp.array(False),
+            resume_floor=jnp.asarray(resume_floor, dtype=jnp.int32),
+        )
+
+
+def _falling_object_visible(obj, consts, scroll_y=0):
+    return (
+        obj.started
+        & (obj.x >= consts.FALLING_OBJECT_X_MIN)
+        & (obj.x <= consts.FALLING_OBJECT_X_MAX)
+        & (obj.y + scroll_y >= consts.FALLING_OBJECT_Y_MIN)
+        & (obj.y + scroll_y <= consts.FALLING_OBJECT_Y_MAX)
+    )
+
+
+def _falling_object_sprite_bounds(obj, sizes, scroll_y=0):
+    index = jnp.clip(obj.sprite_index - 1, 0, sizes.shape[0] - 1)
+    width, height = sizes[index]
+    left = jnp.round(obj.x - width / 2).astype(jnp.int32)
+    top = jnp.round(obj.y - height / 2).astype(jnp.int32) + scroll_y
+    return left, top, width, height
+
+
 class CrazyClimberState(struct.PyTreeNode):
     key: chex.PRNGKey
     step_counter: chex.Array
@@ -230,6 +271,7 @@ class CrazyClimberState(struct.PyTreeNode):
     player_move_state: PlayerMoveState
     bird_state: BirdState
     flowerpot_enemy_state: FlowerpotEnemyState
+    falling_object_state: FallingObjectState
     tower_state: TowerState
     helicopter_state: HelicopterState
     level_state: LevelState
@@ -238,6 +280,7 @@ class CrazyClimberState(struct.PyTreeNode):
 
 class CrazyClimberObservation(struct.PyTreeNode):
     player: ObjectObservation
+    falling_object: ObjectObservation
     flowerpot_enemy: ObjectObservation
     flower_pot_yellow: ObjectObservation
     flower_pot_purple: ObjectObservation
@@ -318,6 +361,8 @@ def _get_default_asset_config() -> tuple:
 
     return tuple([
         {'name': 'background', 'type': 'background', 'file': 'misc/background.npy'},
+        *({'name': f'falling_object_{i}', 'type': 'single',
+           'file': f'falling_object/{i}.npy'} for i in range(1, 21)),
         {'name': 'digits', 'type': 'digits', 'pattern': 'numbers/score_{}.npy'},
         {'name': 'life', 'type': 'single', 'file': 'misc/life.npy'},
         {'name': 'player_upwards_left_group', 'type': 'group', 'files': [
@@ -540,6 +585,22 @@ class CrazyClimberConstants(struct.PyTreeNode):
     WIDTH: int = struct.field(pytree_node=False, default=160)
     HEIGHT: int = struct.field(pytree_node=False, default=210)
 
+    FALLING_OBJECT_LEVEL: int = struct.field(pytree_node=False, default=2) # can use default=1 to test falling object in level 1
+    FALLING_OBJECT_PRE_AREA_START_FLOOR: int = struct.field(pytree_node=False, default=2)
+    FALLING_OBJECT_START_FLOOR: int = struct.field(pytree_node=False, default=10)
+    FALLING_OBJECT_SECOND_SECTION_FLOOR: int = struct.field(pytree_node=False, default=42)
+    FALLING_OBJECT_END_FLOOR: int = struct.field(pytree_node=False, default=50)
+    FALLING_OBJECT_CYCLE_STEPS: int = struct.field(pytree_node=False, default=126)
+    FALLING_OBJECT_SPEED_Y: float = struct.field(pytree_node=False, default=1.2)
+    FALLING_OBJECT_SPEED_X_MIN: float = struct.field(pytree_node=False, default=1 / 50)
+    FALLING_OBJECT_SPEED_X_MAX: float = struct.field(pytree_node=False, default=1 / 5)
+    FALLING_OBJECT_SPAWN_Y: int = struct.field(pytree_node=False, default=50)
+    FALLING_OBJECT_SPAWN_MARGIN: int = struct.field(pytree_node=False, default=8)
+    FALLING_OBJECT_X_MIN: int = struct.field(pytree_node=False, default=0)
+    FALLING_OBJECT_X_MAX: int = struct.field(pytree_node=False, default=159)
+    FALLING_OBJECT_Y_MIN: int = struct.field(pytree_node=False, default=0)
+    FALLING_OBJECT_Y_MAX: int = struct.field(pytree_node=False, default=209)
+
     PLAYER_Y: int = struct.field(pytree_node=False, default=160)
     PLAYER_POSSIBLE_X: chex.Array = struct.field(pytree_node=False, default_factory=lambda: jnp.array([40, 46, 52, 58, 64, 72, 80, 86, 92, 98, 104]))
     PLAYER_SIZE: Tuple[int, int] = struct.field(pytree_node=False, default=(27, 16))
@@ -707,6 +768,7 @@ class JaxCrazyClimber(JaxEnvironment[CrazyClimberState, CrazyClimberObservation,
         self.FLOWERPOT_DROP_SPRITES = self.renderer.FLOWERPOT_DROP_SPRITES
         self.FLOWERPOT_DROP_CENTER_X_OFFSETS = self.renderer.FLOWERPOT_DROP_CENTER_X_OFFSETS
         self.FLOWERPOT_DROP_BOTTOM_Y_OFFSETS = self.renderer.FLOWERPOT_DROP_BOTTOM_Y_OFFSETS
+        self.FALLING_OBJECT_SIZES = self.renderer.FALLING_OBJECT_SIZES
 
     def reset(self, key: chex.PRNGKey = jax.random.PRNGKey(42)) -> tuple[CrazyClimberObservation, CrazyClimberState]:
         level = Level.LEVEL_1
@@ -734,6 +796,7 @@ class JaxCrazyClimber(JaxEnvironment[CrazyClimberState, CrazyClimberObservation,
                 jnp.array(0, dtype=jnp.int32),
             ),
             helicopter_state=HelicopterState.new(),
+            falling_object_state=FallingObjectState.new(),
         )
         initial_obs = self._get_observation(state)
 
@@ -747,6 +810,7 @@ class JaxCrazyClimber(JaxEnvironment[CrazyClimberState, CrazyClimberObservation,
         state = self._step_counter(state)
         state = self._level_step(state)
         state = self._player_step(state, atari_action)
+        state = self._falling_object_death_step(previous_state, state)
         state = self._tower_step(state)
 
         state = jax.lax.cond(state.level_state.condor_active,
@@ -756,6 +820,8 @@ class JaxCrazyClimber(JaxEnvironment[CrazyClimberState, CrazyClimberObservation,
         state = self._climbed_floors_step(state)
         state = self._flowerpot_enemy_step(state)
         state = self._flowerpot_collision_step(state)
+        state = self._falling_object_step(state)
+        state = self._falling_object_collision_step(state)
         state = self._score_step(state)
         state = self._bonus_step(state)
         state = jax.lax.cond(state.climbed_floors >= self.consts.HELICOPTER_SPAWN_HEIGHT,
@@ -1796,6 +1862,134 @@ class JaxCrazyClimber(JaxEnvironment[CrazyClimberState, CrazyClimberObservation,
         )
 
     @partial(jax.jit, static_argnums=(0,))
+    def _get_falling_object_spawn_bounds(self, state: CrazyClimberState):
+        tower = self.renderer._render_tower(state)
+        local_y = self.consts.FALLING_OBJECT_SPAWN_Y - 44
+        row = tower[jnp.clip(local_y, 0, tower.shape[0] - 1)]
+        solid = (row != 0) & (row != 255) & (row != self.renderer.jr.TRANSPARENT_ID)
+        present = jnp.any(solid) & (local_y >= 0) & (local_y < tower.shape[0])
+        left_x = 40 + jnp.argmax(solid).astype(jnp.int32)
+        right_x = 40 + tower.shape[1] - jnp.argmax(solid[::-1]).astype(jnp.int32)
+        return left_x, jnp.where(present, right_x, left_x)
+
+    @partial(jax.jit, static_argnums=(0,))
+    def _falling_object_death_step(
+        self, previous_state: CrazyClimberState, state: CrazyClimberState,
+    ) -> CrazyClimberState:
+        death_started = (
+            (previous_state.player_move_state.falling_count == 0)
+            & (state.player_move_state.falling_count > 0)
+            & (state.level_state.current_level == self.consts.FALLING_OBJECT_LEVEL)
+        )
+        h = previous_state.tower_state.lowest_level
+        resume_floor = jnp.where(
+            h < self.consts.FALLING_OBJECT_PRE_AREA_START_FLOOR,
+            self.consts.FALLING_OBJECT_START_FLOOR,
+            jnp.where(
+                h < self.consts.FALLING_OBJECT_START_FLOOR,
+                self.consts.FALLING_OBJECT_SECOND_SECTION_FLOOR,
+                self.consts.FALLING_OBJECT_END_FLOOR,
+            ),
+        )
+        obj = state.falling_object_state
+        return state.replace(falling_object_state=obj.replace(
+            resume_floor=jnp.where(death_started, resume_floor, obj.resume_floor),
+        ))
+
+    @partial(jax.jit, static_argnums=(0,))
+    def _falling_object_step(self, state: CrazyClimberState) -> CrazyClimberState:
+        h = state.tower_state.lowest_level
+        can_spawn = (
+            (h >= self.consts.FALLING_OBJECT_START_FLOOR)
+            & (h < self.consts.FALLING_OBJECT_END_FLOOR)
+            & (h >= state.falling_object_state.resume_floor)
+            & ~jnp.asarray(state.player_move_state.should_fall)
+        )
+
+        def clear_object(s):
+            return s.replace(falling_object_state=FallingObjectState.new(
+                resume_floor=s.falling_object_state.resume_floor,
+            ))
+
+        def spawn(s):
+            next_key, sprite_key, speed_key, direction_key, x_key = jax.random.split(s.key, 5)
+            left_x, right_x = self._get_falling_object_spawn_bounds(s)
+            min_x = left_x + self.consts.FALLING_OBJECT_SPAWN_MARGIN
+            max_x = right_x - self.consts.FALLING_OBJECT_SPAWN_MARGIN
+            interval = jax.random.randint(
+                speed_key, (),
+                int(round(1 / self.consts.FALLING_OBJECT_SPEED_X_MAX)),
+                int(round(1 / self.consts.FALLING_OBJECT_SPEED_X_MIN)) + 1,
+            )
+            direction = jnp.where(jax.random.bernoulli(direction_key), 1.0, -1.0)
+            obj = FallingObjectState(
+                x=jax.random.randint(x_key, (), min_x, jnp.maximum(min_x, max_x) + 1).astype(jnp.float32),
+                y=jnp.array(self.consts.FALLING_OBJECT_SPAWN_Y, dtype=jnp.float32),
+                vx=(direction / interval).astype(jnp.float32),
+                step=jnp.array(1, dtype=jnp.int32),
+                sprite_index=jax.random.randint(sprite_key, (), 1, self.FALLING_OBJECT_SIZES.shape[0] + 1),
+                started=jnp.array(True),
+                resume_floor=s.falling_object_state.resume_floor,
+            )
+            obj = jax.lax.cond(
+                max_x >= min_x, lambda: obj,
+                lambda: FallingObjectState.new(resume_floor=s.falling_object_state.resume_floor),
+            )
+            return s.replace(key=next_key, falling_object_state=obj)
+
+        def advance(s):
+            obj = s.falling_object_state
+            moving = _falling_object_visible(obj, self.consts)
+            return s.replace(falling_object_state=obj.replace(
+                step=obj.step + 1,
+                x=jnp.where(moving, obj.x + obj.vx, obj.x),
+                y=jnp.where(moving, obj.y + self.consts.FALLING_OBJECT_SPEED_Y, obj.y),
+                sprite_index=jnp.where(
+                    moving, obj.sprite_index % self.FALLING_OBJECT_SIZES.shape[0] + 1, obj.sprite_index,
+                ),
+            ))
+
+        def update(s):
+            obj = s.falling_object_state
+            return jax.lax.cond(
+                ~obj.started | (obj.step >= self.consts.FALLING_OBJECT_CYCLE_STEPS),
+                lambda s: jax.lax.cond(can_spawn, spawn, clear_object, s),
+                advance, s,
+            )
+
+        running = (
+            (state.level_state.current_level == self.consts.FALLING_OBJECT_LEVEL)
+            & (state.player_move_state.falling_count == 0)
+            & ~jnp.asarray(state.tower_state.is_falling)
+        )
+        return jax.lax.cond(
+            running, update, clear_object,
+            state,
+        )
+
+    @partial(jax.jit, static_argnums=(0,))
+    def _falling_object_collision_step(self, state: CrazyClimberState) -> CrazyClimberState:
+        obj = state.falling_object_state
+        left, top, width, height = _falling_object_sprite_bounds(obj, self.FALLING_OBJECT_SIZES)
+        player = state.player_move_state
+        player_x = self.consts.PLAYER_POSSIBLE_X[player.pos_x]
+        player_y = self.consts.PLAYER_Y
+        hit = (
+            _falling_object_visible(obj, self.consts)
+            & (left < player_x + self.consts.PLAYER_SIZE[1])
+            & (left + width > player_x)
+            & (top < player_y + self.consts.PLAYER_SIZE[0])
+            & (top + height > player_y)
+            & (player.falling_count == 0)
+            & ~state.tower_state.is_falling
+            & (state.helicopter_state.fly_away_state == HeliFlyAwayStates.NORMAL)
+        )
+        return state.replace(
+            player_move_state=player.replace(should_fall=player.should_fall | hit),
+            bonus=jnp.where(hit, jnp.maximum(state.bonus - 100, 0), state.bonus),
+        )
+
+    @partial(jax.jit, static_argnums=(0,))
     def _bonus_step(self, state: CrazyClimberState) -> CrazyClimberState: 
         bonus_condition = ((state.step_counter > (self.consts.BONUS_DECREASE_THRESHOLD - 1))
             & ((state.step_counter - self.consts.BONUS_DECREASE_THRESHOLD) % self.consts.BONUS_DECREASE_INTERVAL == 0))
@@ -2040,6 +2234,7 @@ class JaxCrazyClimber(JaxEnvironment[CrazyClimberState, CrazyClimberObservation,
             player_move_state=player_reset_state,
             level_state=level_reset_state,
             tower_state=tower_reset_state,
+            falling_object_state=FallingObjectState.new(),
             climbed_floors=0,
             bonus=bonus_reset,
         )
@@ -2061,6 +2256,10 @@ class JaxCrazyClimber(JaxEnvironment[CrazyClimberState, CrazyClimberObservation,
 
         return spaces.Dict({
             "player": object_space,
+            "falling_object": spaces.get_object_space(
+                screen_size=(self.consts.HEIGHT, self.consts.WIDTH),
+                xy_low=-max(self.renderer.FALLING_OBJECT_SPRITES.shape[1:]),
+            ),
             "flowerpot_enemy": object_space,
             "flower_pot_yellow": object_space,
             "flower_pot_purple": object_space,
@@ -2104,6 +2303,18 @@ class JaxCrazyClimber(JaxEnvironment[CrazyClimberState, CrazyClimberObservation,
 
     @partial(jax.jit, static_argnums=(0,))
     def _get_observation(self, state: CrazyClimberState) -> CrazyClimberObservation:
+        obj = state.falling_object_state
+        scroll_y = state.tower_state.tower_step * 3
+        visible = _falling_object_visible(obj, self.consts, scroll_y)
+        left, top, width, height = _falling_object_sprite_bounds(obj, self.FALLING_OBJECT_SIZES, scroll_y)
+        falling_object = ObjectObservation.create(
+            x=jnp.where(visible, left, -1),
+            y=jnp.where(visible, top, -1),
+            width=jnp.where(visible, width, 0),
+            height=jnp.where(visible, height, 0),
+            active=visible.astype(jnp.int32),
+            visual_id=jnp.where(visible, obj.sprite_index, 0),
+        )
         player = ObjectObservation.create(
             x=state.player_move_state.pos_x,
             y=jnp.array(self.consts.PLAYER_Y),
@@ -2219,6 +2430,7 @@ class JaxCrazyClimber(JaxEnvironment[CrazyClimberState, CrazyClimberObservation,
 
         return CrazyClimberObservation(
             player=player,
+            falling_object=falling_object,
             flowerpot_enemy=flowerpot_enemy,
             flower_pot_yellow=flower_pot_yellow,
             flower_pot_purple=flower_pot_purple,
@@ -2334,6 +2546,19 @@ class JaxCrazyClimber(JaxEnvironment[CrazyClimberState, CrazyClimberObservation,
 
             self.TOWER_SPRITES = self._generate_tower_sprites()
             self.TOWER_CUTOUTS = self._generate_tower_cutouts()
+
+            falling_sprites = [self.SHAPE_MASKS[f"falling_object_{i}"] for i in range(1, 21)]
+            self.FALLING_OBJECT_SIZES = jnp.array(
+                [(sprite.shape[1], sprite.shape[0]) for sprite in falling_sprites], dtype=jnp.int32,
+            )
+            max_height = max(sprite.shape[0] for sprite in falling_sprites)
+            max_width = max(sprite.shape[1] for sprite in falling_sprites)
+            self.FALLING_OBJECT_SPRITES = jnp.stack([
+                jnp.pad(sprite, ((0, max_height - sprite.shape[0]), (0, max_width - sprite.shape[1])),
+                        constant_values=self.jr.TRANSPARENT_ID)
+                for sprite in falling_sprites
+            ])
+
 
         def _get_visible_sprite_anchors(self, sprites: jnp.ndarray) -> tuple[jnp.ndarray, jnp.ndarray]:
             visible = sprites != self.jr.TRANSPARENT_ID
@@ -2735,6 +2960,19 @@ class JaxCrazyClimber(JaxEnvironment[CrazyClimberState, CrazyClimberObservation,
             )
 
         @partial(jax.jit, static_argnums=(0,))
+        def _render_falling_object(self, raster, state: CrazyClimberState) -> jnp.ndarray:
+            obj = state.falling_object_state
+            scroll_y = state.tower_state.tower_step * 3
+            left, top, _, _ = _falling_object_sprite_bounds(obj, self.FALLING_OBJECT_SIZES, scroll_y)
+            index = jnp.clip(obj.sprite_index - 1, 0, self.FALLING_OBJECT_SPRITES.shape[0] - 1)
+            return jax.lax.cond(
+                _falling_object_visible(obj, self.consts, scroll_y),
+                lambda r: self.jr.render_at_clipped(r, left, top, self.FALLING_OBJECT_SPRITES[index]),
+                lambda r: r,
+                raster,
+            )
+
+        @partial(jax.jit, static_argnums=(0,))
         def _render_helicopter(self, state: CrazyClimberState) -> jnp.ndarray:
             helicopter_raster = self._create_raster(self.consts.HELICOPTER_SIZE)
 
@@ -2781,6 +3019,7 @@ class JaxCrazyClimber(JaxEnvironment[CrazyClimberState, CrazyClimberObservation,
                 lambda: raster)
             raster = self._render_flowerpot_thrower(raster, state)
             raster = self._render_flowerpot_drop(raster, state)
+            raster = self._render_falling_object(raster, state)
 
             raster = self._normalize_raster(raster)
 
