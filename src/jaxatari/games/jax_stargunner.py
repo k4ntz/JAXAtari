@@ -92,6 +92,20 @@ ENEMY_SPRITE = jnp.array([
     [1, 0, 0, 0, 0, 1, 0],
     [0, 1, 1, 1, 1, 0, 0],
 ], dtype=jnp.bool_)
+
+ENEMY_SPRITE_DOUBLE = jnp.array([
+    [1, 1, 1, 0, 0, 0, 0],
+    [1, 0, 1, 0, 0, 0, 0],
+    [1, 1, 1, 1, 1, 1, 0],
+    [0, 0, 1, 0, 1, 1, 0],
+    [0, 0, 1, 1, 1, 1, 0],
+    [0, 0, 0, 0, 0, 0, 0],
+    [0, 0, 0, 0, 0, 0, 0],
+    [0, 0, 0, 0, 0, 0, 0],
+    [0, 0, 0, 0, 0, 0, 0],
+    [0, 0, 0, 0, 0, 0, 0],
+], dtype=jnp.bool_)
+
 SAUCER_SPRITE = ENEMY_SPRITE
 BUZZIE_SPRITE = ENEMY_SPRITE
 SQUEEZER_SPRITE = ENEMY_SPRITE
@@ -835,10 +849,14 @@ class JaxStarGunner(
         new_enemy_state = jnp.where(goes_to_reform, ENEMY_REFORMING, new_enemy_state)
         new_enemy_state = jnp.where(goes_empty, ENEMY_EMPTY, new_enemy_state)
         # When an enemy finishes reforming and becomes ALIVE again,
-        respawn_x, respawn_y = self._spawn_positions()
-        key_r = state.key
+        key_r, k_x = jax.random.split(state.key)
+        respawn_x = jax.random.uniform(k_x, (n,), minval=10.0,
+                                       maxval=float(self.consts.WIDTH - 10))
+        respawn_y = jnp.full((n,), float(self.consts.ENEMY_Y_MIN), jnp.float32)
 
-        # Only reset position for enemies that JUST finished reforming
+        # Nur Gegner, die gerade durch Kill fertig reformiert sind, bekommen
+        # eine zufaellige Position. Spielertod setzt die Position separat
+        # in _resolve_collisions auf die feste Slot-Position.
         reset_pos = finished_reform
 
         new_enemy_state = jnp.where(finished_reform, ENEMY_ALIVE, new_enemy_state)
@@ -1272,11 +1290,9 @@ class StarGunnerRenderer:
                     # Green/yellow palette during WAVE
                     color = enemy_cycle_color
 
+                    use_double = state.subwave == 1
+                    sprite = jax.lax.select(use_double, ENEMY_SPRITE_DOUBLE, ENEMY_SPRITE)
 
-                    sprite = jax.lax.switch(
-                        state.enemy_type[i],
-                        [lambda: SAUCER_SPRITE, lambda: BUZZIE_SPRITE, lambda: SQUEEZER_SPRITE],
-                    )
                     return jax.lax.cond(
                         state.player_explosion_active,
                         lambda _: img,
