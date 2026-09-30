@@ -603,7 +603,7 @@ class CrazyClimberConstants(struct.PyTreeNode):
     HELICOPTER_SKIDS_SIZE: int = struct.field(pytree_node=False, default=22)
 
     ELECTRIC_SIGN_LEVEL: int = struct.field(pytree_node=False, default=2) # Set to 1 to test in level 1; original: 2.
-    ELECTRIC_SIGN_SPAWN_FLOOR: int = struct.field(pytree_node=False, default=100) # Temporary: set to 164 once level 2's tower and height are implemented.
+    ELECTRIC_SIGN_SPAWN_FLOOR: int = struct.field(pytree_node=False, default=164) # Temporary: set to 164 once level 2's tower and height are implemented.
     ELECTRIC_SIGN_DEATH_LOOKBACK: int = struct.field(pytree_node=False, default=58)  # Death at or above (ELECTRIC_SIGN_SPAWN_FLOOR - this value) disables the sign for the rest of the level.
     ELECTRIC_SIGN_FLOOR_COUNT: int = struct.field(pytree_node=False, default=9)
     ELECTRIC_SIGN_HIT_FLOOR_OFFSET: int = struct.field(pytree_node=False, default=6)
