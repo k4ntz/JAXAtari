@@ -1,0 +1,473 @@
+{
+  "game": "seaquest",
+  "oc_game": "Seaquest",
+  "n": 150,
+  "tau_strict": 2.0,
+  "soft_tau": 12.0,
+  "persist": 5,
+  "t0_mode": "random",
+  "num_t0": 5,
+  "skip_frames": 0,
+  "oracle_lookahead": false,
+  "oracle_horizon": 150,
+  "aggregate": {
+    "num_runs": 5,
+    "n": 150,
+    "survival_at_n": 0.0,
+    "survival_soft_at_n": 0.0,
+    "survival_strict_at_n": 0.0,
+    "median_first_diverge": 34.0,
+    "mean_first_diverge": 37.0,
+    "median_first_diverge_soft": 34.0,
+    "mean_first_diverge_soft": 37.0,
+    "median_first_diverge_strict": 0.0,
+    "mean_first_diverge_strict": 0.4,
+    "mean_entity_l1_at_0": 1.2666666666666666,
+    "mean_entity_l1_at_end": 10.366666666666667,
+    "mean_score_abs_at_0": 0.0,
+    "mean_score_abs_at_end": 8.733333333333333,
+    "mean_pixel_mae_at_0": 1.0385079264640809,
+    "mean_pixel_mae_at_end": 1.3943690419197083,
+    "mean_pixel_mae_excess_at_end": 0.35586111545562743,
+    "mean_pixel_mae_delta_at_end": 1.6520159006118775,
+    "mean_mae0": 1.0385079264640809,
+    "first_diverges": [
+      25,
+      66,
+      22,
+      38,
+      34
+    ],
+    "first_diverges_soft": [
+      25,
+      66,
+      22,
+      38,
+      34
+    ],
+    "first_diverges_strict": [
+      1,
+      1,
+      0,
+      0,
+      0
+    ]
+  },
+  "runs": [
+    {
+      "traj_path": "/home/paul/Documents/JAXAtari/data/oc_parity_corpus/raw/seaquest_play01.npz",
+      "t0": 391,
+      "traj_seed": 0,
+      "first_diverge_soft": 25,
+      "survived_soft": false,
+      "first_diverge_strict": 1,
+      "survived_strict": false,
+      "metrics_at_0": {
+        "entity_mean_l1": 1.0,
+        "entity_max_linf": 2.0,
+        "entity_presence": 1.0,
+        "score_mean_abs": 0.0,
+        "score_max_abs": 0.0,
+        "pixel_mae": 1.0195337533950806,
+        "pixel_equal_frac": 0.9691964285714286,
+        "pixel_mae_excess": 0.0,
+        "pixel_mae_delta": 0.0,
+        "pixel_mae_signed_delta": 0.0
+      },
+      "metrics_at_end": {
+        "entity_mean_l1": 43.0,
+        "entity_max_linf": 23.0,
+        "entity_presence": 0.25,
+        "score_mean_abs": 16.333333333333332,
+        "score_max_abs": 28.0,
+        "pixel_mae": 2.2535316944122314,
+        "pixel_equal_frac": 0.9720535714285714,
+        "pixel_mae_excess": 1.2339979410171509,
+        "pixel_mae_delta": 2.770267963409424,
+        "pixel_mae_signed_delta": 2.8145534992218018
+      },
+      "per_entity_at_0": {
+        "diver_2": {
+          "l1": 0.0,
+          "linf": 0.0,
+          "present_both": 1.0
+        },
+        "player": {
+          "l1": 0.0,
+          "linf": 0.0,
+          "present_both": 1.0
+        },
+        "shark_0": {
+          "l1": 2.0,
+          "linf": 2.0,
+          "present_both": 1.0
+        },
+        "shark_9": {
+          "l1": 2.0,
+          "linf": 2.0,
+          "present_both": 1.0
+        }
+      },
+      "per_entity_at_end": {
+        "diver_2": {
+          "l1": Infinity,
+          "linf": Infinity,
+          "present_both": 0.0
+        },
+        "player": {
+          "l1": 43.0,
+          "linf": 23.0,
+          "present_both": 1.0
+        },
+        "shark_0": {
+          "l1": Infinity,
+          "linf": Infinity,
+          "present_both": 0.0
+        },
+        "shark_6": {
+          "l1": Infinity,
+          "linf": Infinity,
+          "present_both": 0.0
+        }
+      }
+    },
+    {
+      "traj_path": "/home/paul/Documents/JAXAtari/data/oc_parity_corpus/raw/seaquest_play01.npz",
+      "t0": 446,
+      "traj_seed": 0,
+      "first_diverge_soft": 66,
+      "survived_soft": false,
+      "first_diverge_strict": 1,
+      "survived_strict": false,
+      "metrics_at_0": {
+        "entity_mean_l1": 0.0,
+        "entity_max_linf": 0.0,
+        "entity_presence": 1.0,
+        "score_mean_abs": 0.0,
+        "score_max_abs": 0.0,
+        "pixel_mae": 0.6620535850524902,
+        "pixel_equal_frac": 0.9792857142857143,
+        "pixel_mae_excess": 0.0,
+        "pixel_mae_delta": 0.0,
+        "pixel_mae_signed_delta": 0.0
+      },
+      "metrics_at_end": {
+        "entity_mean_l1": 2.5,
+        "entity_max_linf": 2.0,
+        "entity_presence": 0.5,
+        "score_mean_abs": 0.3333333333333333,
+        "score_max_abs": 1.0,
+        "pixel_mae": 0.7383531928062439,
+        "pixel_equal_frac": 0.9930357142857142,
+        "pixel_mae_excess": 0.07629960775375366,
+        "pixel_mae_delta": 1.1537400484085083,
+        "pixel_mae_signed_delta": 1.1537400484085083
+      },
+      "per_entity_at_0": {
+        "diver_2": {
+          "l1": 0.0,
+          "linf": 0.0,
+          "present_both": 1.0
+        },
+        "player": {
+          "l1": 0.0,
+          "linf": 0.0,
+          "present_both": 1.0
+        },
+        "shark_0": {
+          "l1": 0.0,
+          "linf": 0.0,
+          "present_both": 1.0
+        },
+        "shark_3": {
+          "l1": 0.0,
+          "linf": 0.0,
+          "present_both": 1.0
+        }
+      },
+      "per_entity_at_end": {
+        "diver_2": {
+          "l1": 2.0,
+          "linf": 2.0,
+          "present_both": 1.0
+        },
+        "player": {
+          "l1": 3.0,
+          "linf": 2.0,
+          "present_both": 1.0
+        },
+        "shark_6": {
+          "l1": Infinity,
+          "linf": Infinity,
+          "present_both": 0.0
+        },
+        "shark_9": {
+          "l1": Infinity,
+          "linf": Infinity,
+          "present_both": 0.0
+        }
+      }
+    },
+    {
+      "traj_path": "/home/paul/Documents/JAXAtari/data/oc_parity_corpus/raw/seaquest_play01.npz",
+      "t0": 740,
+      "traj_seed": 0,
+      "first_diverge_soft": 22,
+      "survived_soft": false,
+      "first_diverge_strict": 0,
+      "survived_strict": false,
+      "metrics_at_0": {
+        "entity_mean_l1": 1.3333333333333333,
+        "entity_max_linf": 3.0,
+        "entity_presence": 1.0,
+        "score_mean_abs": 0.0,
+        "score_max_abs": 0.0,
+        "pixel_mae": 1.3643749952316284,
+        "pixel_equal_frac": 0.9591369047619047,
+        "pixel_mae_excess": 0.0,
+        "pixel_mae_delta": 0.0,
+        "pixel_mae_signed_delta": 0.0
+      },
+      "metrics_at_end": {
+        "entity_mean_l1": 2.0,
+        "entity_max_linf": 2.0,
+        "entity_presence": 0.16666666666666666,
+        "score_mean_abs": 6.666666666666667,
+        "score_max_abs": 20.0,
+        "pixel_mae": 1.4279662370681763,
+        "pixel_equal_frac": 0.973125,
+        "pixel_mae_excess": 0.06359124183654785,
+        "pixel_mae_delta": 1.4805952310562134,
+        "pixel_mae_signed_delta": 1.4849603176116943
+      },
+      "per_entity_at_0": {
+        "player": {
+          "l1": 0.0,
+          "linf": 0.0,
+          "present_both": 1.0
+        },
+        "shark_0": {
+          "l1": 3.0,
+          "linf": 3.0,
+          "present_both": 1.0
+        },
+        "shark_9": {
+          "l1": 1.0,
+          "linf": 1.0,
+          "present_both": 1.0
+        }
+      },
+      "per_entity_at_end": {
+        "diver_3": {
+          "l1": Infinity,
+          "linf": Infinity,
+          "present_both": 0.0
+        },
+        "player": {
+          "l1": 2.0,
+          "linf": 2.0,
+          "present_both": 1.0
+        },
+        "shark_0": {
+          "l1": Infinity,
+          "linf": Infinity,
+          "present_both": 0.0
+        },
+        "shark_3": {
+          "l1": Infinity,
+          "linf": Infinity,
+          "present_both": 0.0
+        },
+        "shark_6": {
+          "l1": Infinity,
+          "linf": Infinity,
+          "present_both": 0.0
+        },
+        "shark_9": {
+          "l1": Infinity,
+          "linf": Infinity,
+          "present_both": 0.0
+        }
+      }
+    },
+    {
+      "traj_path": "/home/paul/Documents/JAXAtari/data/oc_parity_corpus/raw/seaquest_play01.npz",
+      "t0": 922,
+      "traj_seed": 0,
+      "first_diverge_soft": 38,
+      "survived_soft": false,
+      "first_diverge_strict": 0,
+      "survived_strict": false,
+      "metrics_at_0": {
+        "entity_mean_l1": 3.0,
+        "entity_max_linf": 6.0,
+        "entity_presence": 1.0,
+        "score_mean_abs": 0.0,
+        "score_max_abs": 0.0,
+        "pixel_mae": 1.2678074836730957,
+        "pixel_equal_frac": 0.9697619047619047,
+        "pixel_mae_excess": 0.0,
+        "pixel_mae_delta": 0.0,
+        "pixel_mae_signed_delta": 0.0
+      },
+      "metrics_at_end": {
+        "entity_mean_l1": 2.0,
+        "entity_max_linf": 3.0,
+        "entity_presence": 0.4,
+        "score_mean_abs": 13.666666666666666,
+        "score_max_abs": 40.0,
+        "pixel_mae": 1.0484920740127563,
+        "pixel_equal_frac": 0.9793154761904762,
+        "pixel_mae_excess": -0.21931540966033936,
+        "pixel_mae_delta": 1.696537733078003,
+        "pixel_mae_signed_delta": 1.696537733078003
+      },
+      "per_entity_at_0": {
+        "diver_3": {
+          "l1": 0.0,
+          "linf": 0.0,
+          "present_both": 1.0
+        },
+        "player": {
+          "l1": 0.0,
+          "linf": 0.0,
+          "present_both": 1.0
+        },
+        "shark_0": {
+          "l1": 6.0,
+          "linf": 6.0,
+          "present_both": 1.0
+        },
+        "shark_3": {
+          "l1": 6.0,
+          "linf": 6.0,
+          "present_both": 1.0
+        }
+      },
+      "per_entity_at_end": {
+        "diver_3": {
+          "l1": 3.0,
+          "linf": 3.0,
+          "present_both": 1.0
+        },
+        "player": {
+          "l1": 1.0,
+          "linf": 1.0,
+          "present_both": 1.0
+        },
+        "shark_0": {
+          "l1": Infinity,
+          "linf": Infinity,
+          "present_both": 0.0
+        },
+        "shark_3": {
+          "l1": Infinity,
+          "linf": Infinity,
+          "present_both": 0.0
+        },
+        "shark_6": {
+          "l1": Infinity,
+          "linf": Infinity,
+          "present_both": 0.0
+        }
+      }
+    },
+    {
+      "traj_path": "/home/paul/Documents/JAXAtari/data/oc_parity_corpus/raw/seaquest_play01.npz",
+      "t0": 1230,
+      "traj_seed": 0,
+      "first_diverge_soft": 34,
+      "survived_soft": false,
+      "first_diverge_strict": 0,
+      "survived_strict": false,
+      "metrics_at_0": {
+        "entity_mean_l1": 1.0,
+        "entity_max_linf": 4.0,
+        "entity_presence": 1.0,
+        "score_mean_abs": 0.0,
+        "score_max_abs": 0.0,
+        "pixel_mae": 0.8787698149681091,
+        "pixel_equal_frac": 0.980297619047619,
+        "pixel_mae_excess": 0.0,
+        "pixel_mae_delta": 0.0,
+        "pixel_mae_signed_delta": 0.0
+      },
+      "metrics_at_end": {
+        "entity_mean_l1": 2.3333333333333335,
+        "entity_max_linf": 5.0,
+        "entity_presence": 0.375,
+        "score_mean_abs": 6.666666666666667,
+        "score_max_abs": 20.0,
+        "pixel_mae": 1.5035020112991333,
+        "pixel_equal_frac": 0.9638392857142857,
+        "pixel_mae_excess": 0.6247321963310242,
+        "pixel_mae_delta": 1.1589385271072388,
+        "pixel_mae_signed_delta": 1.1602083444595337
+      },
+      "per_entity_at_0": {
+        "diver_2": {
+          "l1": 0.0,
+          "linf": 0.0,
+          "present_both": 1.0
+        },
+        "player": {
+          "l1": 0.0,
+          "linf": 0.0,
+          "present_both": 1.0
+        },
+        "shark_0": {
+          "l1": 4.0,
+          "linf": 4.0,
+          "present_both": 1.0
+        },
+        "shark_9": {
+          "l1": 0.0,
+          "linf": 0.0,
+          "present_both": 1.0
+        }
+      },
+      "per_entity_at_end": {
+        "diver_0": {
+          "l1": Infinity,
+          "linf": Infinity,
+          "present_both": 0.0
+        },
+        "diver_2": {
+          "l1": 2.0,
+          "linf": 2.0,
+          "present_both": 1.0
+        },
+        "diver_3": {
+          "l1": Infinity,
+          "linf": Infinity,
+          "present_both": 0.0
+        },
+        "missile": {
+          "l1": 5.0,
+          "linf": 5.0,
+          "present_both": 1.0
+        },
+        "player": {
+          "l1": 0.0,
+          "linf": 0.0,
+          "present_both": 1.0
+        },
+        "shark_3": {
+          "l1": Infinity,
+          "linf": Infinity,
+          "present_both": 0.0
+        },
+        "shark_6": {
+          "l1": Infinity,
+          "linf": Infinity,
+          "present_both": 0.0
+        },
+        "shark_9": {
+          "l1": Infinity,
+          "linf": Infinity,
+          "present_both": 0.0
+        }
+      }
+    }
+  ]
+}

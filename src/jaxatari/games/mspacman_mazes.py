@@ -259,10 +259,15 @@ class MsPacmanMaze:
               return dof_grid
 
        @staticmethod
-       def load_background(maze_id: int):
+       def load_background(maze_id: int, wall_color: jnp.ndarray = None, path_color: jnp.ndarray = None):
               """
               Constructs the background based on the level.
               """
+              if wall_color is None:
+                     wall_color = MsPacmanMaze.WALL_COLOR
+              if path_color is None:
+                     path_color = MsPacmanMaze.PATH_COLOR
+              
               # 1. Expand the maze layout to pixel scale
               maze = MsPacmanMaze.MAZES[maze_id]  # (height, width)
               maze_expanded = jnp.repeat(jnp.repeat(maze, MsPacmanMaze.TILE_SCALE, axis=0), MsPacmanMaze.TILE_SCALE, axis=1)  # (height*scale, width*scale)
@@ -270,8 +275,8 @@ class MsPacmanMaze:
               # 2. Assign color to each pixel
               background = jnp.where(
                   maze_expanded[..., None],  # (height*scale, width*scale, 1)
-                  MsPacmanMaze.WALL_COLOR,  # (3,)
-                  MsPacmanMaze.PATH_COLOR  # (3,)
+                  wall_color,  # (3,)
+                  path_color  # (3,)
               )
               
               # 3. Pad to a height of 210 to accomodate UI

@@ -1417,7 +1417,7 @@ class BankHeistRenderer(JAXGameRenderer):
         sprite_path = self.consts.SPRITES_DIR
         final_asset_config = list(self.consts.ASSET_CONFIG)
         
-        city_asset = next((a for a in final_asset_config if a['name'] == 'cities'), None)
+        city_asset = next((a for a in final_asset_config if a.get('name') == 'cities'), None)
         if city_asset:
             final_asset_config.remove(city_asset)
             city_files = city_asset['files']
@@ -1603,7 +1603,17 @@ class BankHeistRenderer(JAXGameRenderer):
         masks.append(self.DYNAMITE_BATCH_MASK)
         
         # --- Score ---
-        score_digits = self.jr.int_to_digits(state.money, max_digits=4)
+        is_negative = state.money < 0
+        abs_money = jnp.abs(state.money)
+        score_digits = self.jr.int_to_digits(abs_money, max_digits=4)
+        
+        minus_mask = jnp.full(self.BATCH_SHAPE, self.jr.TRANSPARENT_ID, dtype=jnp.uint8)
+        minus_mask = minus_mask.at[3, 1:5].set(jnp.uint8(self.black_color_id))
+        
+        xs.append(jax.lax.select(is_negative, jnp.array(74), jnp.array(-100)))
+        ys.append(jnp.array(179))
+        masks.append(minus_mask)
+        
         for i in range(4):
             xs.append(jnp.array(90 + i * 12))
             ys.append(jnp.array(179))

@@ -593,3 +593,81 @@ class CollectingBonusOnlyMod(JaxAtariInternalModPlugin):
         "ROUND_COMPLETE_REWARD": 0
     }
 
+
+class IcePyramidMod(JaxAtariInternalModPlugin):
+    """
+    Changes the pyramid to an icy aesthetic.
+    """
+    constants_overrides = {
+        "RGB_CUBE_START": (173, 216, 230),
+        "RGB_CUBE_INTER": (135, 206, 235),
+        "RGB_CUBE_DEST": (70, 130, 180),
+    }
+
+class DarkPyramidMod(JaxAtariInternalModPlugin):
+    """
+    Changes the pyramid to a dark/obsidian aesthetic.
+    """
+    constants_overrides = {
+        "RGB_CUBE_START": (40, 40, 40),
+        "RGB_CUBE_INTER": (80, 80, 80),
+        "RGB_CUBE_DEST": (20, 20, 20),
+        "RGB_BACKGROUND": (15, 15, 15),
+    }
+
+class NightMod(JaxAtariInternalModPlugin):
+    """
+    Dims the background and the characters for a night-time aesthetic.
+    """
+    constants_overrides = {
+        "RGB_BACKGROUND": (10, 10, 20),
+        "RGB_QBERT": (90, 41, 20),
+        "RGB_COILY": (73, 35, 96),
+        "RGB_SAM": (25, 66, 25),
+        "RGB_CUBE_START": (22, 43, 88),
+        "RGB_CUBE_INTER": (55, 78, 33),
+        "RGB_CUBE_DEST": (105, 105, 32),
+    }
+
+class GrayscaleMod(JaxAtariInternalModPlugin):
+    """
+    Makes the entire game grayscale.
+    """
+    constants_overrides = {
+        "RGB_QBERT": (120, 120, 120),
+        "RGB_COILY": (100, 100, 100),
+        "RGB_SAM": (80, 80, 80),
+        "RGB_CUBE_START": (60, 60, 60),
+        "RGB_CUBE_INTER": (120, 120, 120),
+        "RGB_CUBE_DEST": (180, 180, 180),
+        "RGB_BACKGROUND": (20, 20, 20),
+    }
+
+class InvertedColorsMod(JaxAtariInternalModPlugin):
+    """
+    Swaps Q*bert's and Coily's colors.
+    """
+    constants_overrides = {
+        "RGB_QBERT": (146, 70, 192),
+        "RGB_COILY": (181, 83, 40),
+    }
+
+
+class SwapCollectiblesEnemiesMod(JaxAtariInternalModPlugin):
+    """
+    Swaps the colors of the collectibles (Green Ball) and Enemies (Red Ball/Coily).
+    """
+    constants_overrides = {
+        "RGB_SAM": (173, 5, 64),
+        "RGB_RED_BALL": (50, 132, 50),
+        "RGB_COILY": (50, 132, 50),
+    }
+
+class RedCoilyMod(JaxAtariInternalModPlugin):
+    """
+    Makes Coily red.
+    """
+    constants_overrides = {
+        "RGB_COILY": (173, 5, 64),
+    }
+

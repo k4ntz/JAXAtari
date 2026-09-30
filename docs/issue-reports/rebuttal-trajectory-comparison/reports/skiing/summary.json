@@ -1,0 +1,748 @@
+{
+  "game": "skiing",
+  "oc_game": "Skiing",
+  "n": 150,
+  "tau_strict": 2.0,
+  "soft_tau": 12.0,
+  "persist": 5,
+  "t0_mode": "random",
+  "num_t0": 5,
+  "skip_frames": 0,
+  "oracle_lookahead": false,
+  "oracle_horizon": 150,
+  "aggregate": {
+    "num_runs": 5,
+    "n": 150,
+    "survival_at_n": 0.0,
+    "survival_soft_at_n": 0.0,
+    "survival_strict_at_n": 0.0,
+    "median_first_diverge": 0.0,
+    "mean_first_diverge": 0.0,
+    "median_first_diverge_soft": 0.0,
+    "mean_first_diverge_soft": 0.0,
+    "median_first_diverge_strict": 0.0,
+    "mean_first_diverge_strict": 0.0,
+    "mean_entity_l1_at_0": 6.9642857142857135,
+    "mean_entity_l1_at_end": 97.81203209161758,
+    "mean_score_abs_at_0": 20.0,
+    "mean_score_abs_at_end": 19.8,
+    "mean_pixel_mae_at_0": 24.280331802368163,
+    "mean_pixel_mae_at_end": 24.764253616333008,
+    "mean_pixel_mae_excess_at_end": 0.48392181396484374,
+    "mean_pixel_mae_delta_at_end": 9.026414585113525,
+    "mean_mae0": 24.280331802368163,
+    "first_diverges": [
+      0,
+      0,
+      0,
+      0,
+      0
+    ],
+    "first_diverges_soft": [
+      0,
+      0,
+      0,
+      0,
+      0
+    ],
+    "first_diverges_strict": [
+      0,
+      0,
+      0,
+      0,
+      0
+    ]
+  },
+  "runs": [
+    {
+      "traj_path": "/home/paul/Documents/JAXAtari/data/oc_parity_corpus/raw/skiing_play01.npz",
+      "t0": 391,
+      "traj_seed": 0,
+      "first_diverge_soft": 0,
+      "survived_soft": false,
+      "first_diverge_strict": 0,
+      "survived_strict": false,
+      "metrics_at_0": {
+        "entity_mean_l1": 0.8571428571428571,
+        "entity_max_linf": 6.0,
+        "entity_presence": 0.875,
+        "score_mean_abs": 20.0,
+        "score_max_abs": 20.0,
+        "pixel_mae": 24.739593505859375,
+        "pixel_equal_frac": 0.11494047619047619,
+        "pixel_mae_excess": 0.0,
+        "pixel_mae_delta": 0.0,
+        "pixel_mae_signed_delta": 0.0
+      },
+      "metrics_at_end": {
+        "entity_mean_l1": 111.90936279296875,
+        "entity_max_linf": 190.49798583984375,
+        "entity_presence": 0.6363636363636364,
+        "score_mean_abs": 20.0,
+        "score_max_abs": 20.0,
+        "pixel_mae": 25.006210327148438,
+        "pixel_equal_frac": 0.11479166666666667,
+        "pixel_mae_excess": 0.2666168212890625,
+        "pixel_mae_delta": 8.601418495178223,
+        "pixel_mae_signed_delta": 9.126338958740234
+      },
+      "per_entity_at_0": {
+        "flag_0": {
+          "l1": 0.0,
+          "linf": 0.0,
+          "present_both": 1.0
+        },
+        "flag_1": {
+          "l1": Infinity,
+          "linf": Infinity,
+          "present_both": 0.0
+        },
+        "mogul_0": {
+          "l1": 0.0,
+          "linf": 0.0,
+          "present_both": 1.0
+        },
+        "skier": {
+          "l1": 6.0,
+          "linf": 6.0,
+          "present_both": 1.0
+        },
+        "tree_0": {
+          "l1": 0.0,
+          "linf": 0.0,
+          "present_both": 1.0
+        },
+        "tree_1": {
+          "l1": 0.0,
+          "linf": 0.0,
+          "present_both": 1.0
+        },
+        "tree_2": {
+          "l1": 0.0,
+          "linf": 0.0,
+          "present_both": 1.0
+        },
+        "tree_3": {
+          "l1": 0.0,
+          "linf": 0.0,
+          "present_both": 1.0
+        }
+      },
+      "per_entity_at_end": {
+        "flag_0": {
+          "l1": 51.49800109863281,
+          "linf": 26.498001098632812,
+          "present_both": 1.0
+        },
+        "flag_1": {
+          "l1": Infinity,
+          "linf": Infinity,
+          "present_both": 0.0
+        },
+        "flag_2": {
+          "l1": Infinity,
+          "linf": Infinity,
+          "present_both": 0.0
+        },
+        "flag_3": {
+          "l1": Infinity,
+          "linf": Infinity,
+          "present_both": 0.0
+        },
+        "mogul_0": {
+          "l1": 86.50199890136719,
+          "linf": 77.50199890136719,
+          "present_both": 1.0
+        },
+        "mogul_1": {
+          "l1": 220.49798583984375,
+          "linf": 190.49798583984375,
+          "present_both": 1.0
+        },
+        "skier": {
+          "l1": 26.369552612304688,
+          "linf": 20.369552612304688,
+          "present_both": 1.0
+        },
+        "tree_0": {
+          "l1": 156.50201416015625,
+          "linf": 97.0,
+          "present_both": 1.0
+        },
+        "tree_1": {
+          "l1": 83.49800109863281,
+          "linf": 78.49800109863281,
+          "present_both": 1.0
+        },
+        "tree_2": {
+          "l1": 158.49798583984375,
+          "linf": 132.0,
+          "present_both": 1.0
+        },
+        "tree_3": {
+          "l1": Infinity,
+          "linf": Infinity,
+          "present_both": 0.0
+        }
+      }
+    },
+    {
+      "traj_path": "/home/paul/Documents/JAXAtari/data/oc_parity_corpus/raw/skiing_play01.npz",
+      "t0": 446,
+      "traj_seed": 0,
+      "first_diverge_soft": 0,
+      "survived_soft": false,
+      "first_diverge_strict": 0,
+      "survived_strict": false,
+      "metrics_at_0": {
+        "entity_mean_l1": 0.75,
+        "entity_max_linf": 6.0,
+        "entity_presence": 0.7272727272727273,
+        "score_mean_abs": 20.0,
+        "score_max_abs": 20.0,
+        "pixel_mae": 23.833293914794922,
+        "pixel_equal_frac": 0.11461309523809524,
+        "pixel_mae_excess": 0.0,
+        "pixel_mae_delta": 0.0,
+        "pixel_mae_signed_delta": 0.0
+      },
+      "metrics_at_end": {
+        "entity_mean_l1": 118.24581694602966,
+        "entity_max_linf": 151.7998046875,
+        "entity_presence": 0.8888888888888888,
+        "score_mean_abs": 20.0,
+        "score_max_abs": 20.0,
+        "pixel_mae": 24.72327423095703,
+        "pixel_equal_frac": 0.11467261904761905,
+        "pixel_mae_excess": 0.8899803161621094,
+        "pixel_mae_delta": 10.635753631591797,
+        "pixel_mae_signed_delta": 10.663848876953125
+      },
+      "per_entity_at_0": {
+        "flag_0": {
+          "l1": 0.0,
+          "linf": 0.0,
+          "present_both": 1.0
+        },
+        "flag_1": {
+          "l1": Infinity,
+          "linf": Infinity,
+          "present_both": 0.0
+        },
+        "flag_2": {
+          "l1": Infinity,
+          "linf": Infinity,
+          "present_both": 0.0
+        },
+        "flag_3": {
+          "l1": Infinity,
+          "linf": Infinity,
+          "present_both": 0.0
+        },
+        "mogul_0": {
+          "l1": 0.0,
+          "linf": 0.0,
+          "present_both": 1.0
+        },
+        "mogul_1": {
+          "l1": 0.0,
+          "linf": 0.0,
+          "present_both": 1.0
+        },
+        "skier": {
+          "l1": 6.0,
+          "linf": 6.0,
+          "present_both": 1.0
+        },
+        "tree_0": {
+          "l1": 0.0,
+          "linf": 0.0,
+          "present_both": 1.0
+        },
+        "tree_1": {
+          "l1": 0.0,
+          "linf": 0.0,
+          "present_both": 1.0
+        },
+        "tree_2": {
+          "l1": 0.0,
+          "linf": 0.0,
+          "present_both": 1.0
+        },
+        "tree_3": {
+          "l1": 0.0,
+          "linf": 0.0,
+          "present_both": 1.0
+        }
+      },
+      "per_entity_at_end": {
+        "flag_0": {
+          "l1": 40.20024871826172,
+          "linf": 24.0,
+          "present_both": 1.0
+        },
+        "flag_1": {
+          "l1": 140.7998046875,
+          "linf": 100.7998046875,
+          "present_both": 1.0
+        },
+        "mogul_0": {
+          "l1": 161.79981994628906,
+          "linf": 127.79981994628906,
+          "present_both": 1.0
+        },
+        "mogul_1": {
+          "l1": Infinity,
+          "linf": Infinity,
+          "present_both": 0.0
+        },
+        "skier": {
+          "l1": 26.16675567626953,
+          "linf": 20.16675567626953,
+          "present_both": 1.0
+        },
+        "tree_0": {
+          "l1": 84.79972839355469,
+          "linf": 84.79972839355469,
+          "present_both": 1.0
+        },
+        "tree_1": {
+          "l1": 139.20019721984863,
+          "linf": 120.20019721984863,
+          "present_both": 1.0
+        },
+        "tree_2": {
+          "l1": 121.20017623901367,
+          "linf": 120.20017623901367,
+          "present_both": 1.0
+        },
+        "tree_3": {
+          "l1": 231.7998046875,
+          "linf": 151.7998046875,
+          "present_both": 1.0
+        }
+      }
+    },
+    {
+      "traj_path": "/home/paul/Documents/JAXAtari/data/oc_parity_corpus/raw/skiing_play01.npz",
+      "t0": 740,
+      "traj_seed": 0,
+      "first_diverge_soft": 0,
+      "survived_soft": false,
+      "first_diverge_strict": 0,
+      "survived_strict": false,
+      "metrics_at_0": {
+        "entity_mean_l1": 0.8571428571428571,
+        "entity_max_linf": 6.0,
+        "entity_presence": 0.6363636363636364,
+        "score_mean_abs": 20.0,
+        "score_max_abs": 20.0,
+        "pixel_mae": 24.265268325805664,
+        "pixel_equal_frac": 0.1155952380952381,
+        "pixel_mae_excess": 0.0,
+        "pixel_mae_delta": 0.0,
+        "pixel_mae_signed_delta": 0.0
+      },
+      "metrics_at_end": {
+        "entity_mean_l1": 64.46259457724435,
+        "entity_max_linf": 90.0,
+        "entity_presence": 0.7777777777777778,
+        "score_mean_abs": 19.0,
+        "score_max_abs": 19.0,
+        "pixel_mae": 23.826913833618164,
+        "pixel_equal_frac": 0.11413690476190476,
+        "pixel_mae_excess": -0.4383544921875,
+        "pixel_mae_delta": 8.864206314086914,
+        "pixel_mae_signed_delta": 9.78007984161377
+      },
+      "per_entity_at_0": {
+        "flag_0": {
+          "l1": 0.0,
+          "linf": 0.0,
+          "present_both": 1.0
+        },
+        "flag_1": {
+          "l1": Infinity,
+          "linf": Infinity,
+          "present_both": 0.0
+        },
+        "flag_2": {
+          "l1": Infinity,
+          "linf": Infinity,
+          "present_both": 0.0
+        },
+        "flag_3": {
+          "l1": Infinity,
+          "linf": Infinity,
+          "present_both": 0.0
+        },
+        "mogul_0": {
+          "l1": 0.0,
+          "linf": 0.0,
+          "present_both": 1.0
+        },
+        "mogul_1": {
+          "l1": 0.0,
+          "linf": 0.0,
+          "present_both": 1.0
+        },
+        "skier": {
+          "l1": 6.0,
+          "linf": 6.0,
+          "present_both": 1.0
+        },
+        "tree_0": {
+          "l1": 0.0,
+          "linf": 0.0,
+          "present_both": 1.0
+        },
+        "tree_1": {
+          "l1": 0.0,
+          "linf": 0.0,
+          "present_both": 1.0
+        },
+        "tree_2": {
+          "l1": 0.0,
+          "linf": 0.0,
+          "present_both": 1.0
+        },
+        "tree_3": {
+          "l1": Infinity,
+          "linf": Infinity,
+          "present_both": 0.0
+        }
+      },
+      "per_entity_at_end": {
+        "flag_0": {
+          "l1": 70.70689010620117,
+          "linf": 68.70689010620117,
+          "present_both": 1.0
+        },
+        "flag_1": {
+          "l1": Infinity,
+          "linf": Infinity,
+          "present_both": 0.0
+        },
+        "mogul_0": {
+          "l1": 66.29306030273438,
+          "linf": 35.293060302734375,
+          "present_both": 1.0
+        },
+        "mogul_1": {
+          "l1": Infinity,
+          "linf": Infinity,
+          "present_both": 0.0
+        },
+        "skier": {
+          "l1": 36.238250732421875,
+          "linf": 30.238250732421875,
+          "present_both": 1.0
+        },
+        "tree_0": {
+          "l1": 90.70691299438477,
+          "linf": 68.70691299438477,
+          "present_both": 1.0
+        },
+        "tree_1": {
+          "l1": 23.706889152526855,
+          "linf": 16.706889152526855,
+          "present_both": 1.0
+        },
+        "tree_2": {
+          "l1": 42.29309844970703,
+          "linf": 35.29309844970703,
+          "present_both": 1.0
+        },
+        "tree_3": {
+          "l1": 121.29306030273438,
+          "linf": 90.0,
+          "present_both": 1.0
+        }
+      }
+    },
+    {
+      "traj_path": "/home/paul/Documents/JAXAtari/data/oc_parity_corpus/raw/skiing_play01.npz",
+      "t0": 922,
+      "traj_seed": 0,
+      "first_diverge_soft": 0,
+      "survived_soft": false,
+      "first_diverge_strict": 0,
+      "survived_strict": false,
+      "metrics_at_0": {
+        "entity_mean_l1": 17.857142857142858,
+        "entity_max_linf": 104.0,
+        "entity_presence": 0.6363636363636364,
+        "score_mean_abs": 20.0,
+        "score_max_abs": 20.0,
+        "pixel_mae": 23.864147186279297,
+        "pixel_equal_frac": 0.11488095238095238,
+        "pixel_mae_excess": 0.0,
+        "pixel_mae_delta": 0.0,
+        "pixel_mae_signed_delta": 0.0
+      },
+      "metrics_at_end": {
+        "entity_mean_l1": 126.20449835062027,
+        "entity_max_linf": 142.12820434570312,
+        "entity_presence": 0.7272727272727273,
+        "score_mean_abs": 20.0,
+        "score_max_abs": 20.0,
+        "pixel_mae": 24.573699951171875,
+        "pixel_equal_frac": 0.11514880952380953,
+        "pixel_mae_excess": 0.7095527648925781,
+        "pixel_mae_delta": 9.684791564941406,
+        "pixel_mae_signed_delta": 9.69883918762207
+      },
+      "per_entity_at_0": {
+        "flag_0": {
+          "l1": 119.0,
+          "linf": 104.0,
+          "present_both": 1.0
+        },
+        "flag_1": {
+          "l1": Infinity,
+          "linf": Infinity,
+          "present_both": 0.0
+        },
+        "flag_2": {
+          "l1": Infinity,
+          "linf": Infinity,
+          "present_both": 0.0
+        },
+        "flag_3": {
+          "l1": Infinity,
+          "linf": Infinity,
+          "present_both": 0.0
+        },
+        "mogul_0": {
+          "l1": 0.0,
+          "linf": 0.0,
+          "present_both": 1.0
+        },
+        "mogul_1": {
+          "l1": 0.0,
+          "linf": 0.0,
+          "present_both": 1.0
+        },
+        "skier": {
+          "l1": 6.0,
+          "linf": 6.0,
+          "present_both": 1.0
+        },
+        "tree_0": {
+          "l1": 0.0,
+          "linf": 0.0,
+          "present_both": 1.0
+        },
+        "tree_1": {
+          "l1": 0.0,
+          "linf": 0.0,
+          "present_both": 1.0
+        },
+        "tree_2": {
+          "l1": 0.0,
+          "linf": 0.0,
+          "present_both": 1.0
+        },
+        "tree_3": {
+          "l1": Infinity,
+          "linf": Infinity,
+          "present_both": 0.0
+        }
+      },
+      "per_entity_at_end": {
+        "flag_0": {
+          "l1": 119.8718376159668,
+          "linf": 105.8718376159668,
+          "present_both": 1.0
+        },
+        "flag_1": {
+          "l1": 20.871726989746094,
+          "linf": 12.0,
+          "present_both": 1.0
+        },
+        "flag_2": {
+          "l1": Infinity,
+          "linf": Infinity,
+          "present_both": 0.0
+        },
+        "flag_3": {
+          "l1": Infinity,
+          "linf": Infinity,
+          "present_both": 0.0
+        },
+        "mogul_0": {
+          "l1": 119.87183046340942,
+          "linf": 105.87183046340942,
+          "present_both": 1.0
+        },
+        "mogul_1": {
+          "l1": Infinity,
+          "linf": Infinity,
+          "present_both": 0.0
+        },
+        "skier": {
+          "l1": 14.76422119140625,
+          "linf": 8.76422119140625,
+          "present_both": 1.0
+        },
+        "tree_0": {
+          "l1": 153.12814331054688,
+          "linf": 115.0,
+          "present_both": 1.0
+        },
+        "tree_1": {
+          "l1": 186.12818908691406,
+          "linf": 108.0,
+          "present_both": 1.0
+        },
+        "tree_2": {
+          "l1": 201.12820434570312,
+          "linf": 142.12820434570312,
+          "present_both": 1.0
+        },
+        "tree_3": {
+          "l1": 193.87183380126953,
+          "linf": 127.87183380126953,
+          "present_both": 1.0
+        }
+      }
+    },
+    {
+      "traj_path": "/home/paul/Documents/JAXAtari/data/oc_parity_corpus/raw/skiing_play01.npz",
+      "t0": 1230,
+      "traj_seed": 0,
+      "first_diverge_soft": 0,
+      "survived_soft": false,
+      "first_diverge_strict": 0,
+      "survived_strict": false,
+      "metrics_at_0": {
+        "entity_mean_l1": 14.5,
+        "entity_max_linf": 104.0,
+        "entity_presence": 0.7272727272727273,
+        "score_mean_abs": 20.0,
+        "score_max_abs": 20.0,
+        "pixel_mae": 24.699356079101562,
+        "pixel_equal_frac": 0.11526785714285714,
+        "pixel_mae_excess": 0.0,
+        "pixel_mae_delta": 0.0,
+        "pixel_mae_signed_delta": 0.0
+      },
+      "metrics_at_end": {
+        "entity_mean_l1": 68.23788779122489,
+        "entity_max_linf": 145.1553497314453,
+        "entity_presence": 0.7777777777777778,
+        "score_mean_abs": 20.0,
+        "score_max_abs": 20.0,
+        "pixel_mae": 25.69116973876953,
+        "pixel_equal_frac": 0.11461309523809524,
+        "pixel_mae_excess": 0.9918136596679688,
+        "pixel_mae_delta": 7.345902919769287,
+        "pixel_mae_signed_delta": 7.494593143463135
+      },
+      "per_entity_at_0": {
+        "flag_0": {
+          "l1": 110.0,
+          "linf": 104.0,
+          "present_both": 1.0
+        },
+        "flag_1": {
+          "l1": Infinity,
+          "linf": Infinity,
+          "present_both": 0.0
+        },
+        "flag_2": {
+          "l1": Infinity,
+          "linf": Infinity,
+          "present_both": 0.0
+        },
+        "flag_3": {
+          "l1": Infinity,
+          "linf": Infinity,
+          "present_both": 0.0
+        },
+        "mogul_0": {
+          "l1": 0.0,
+          "linf": 0.0,
+          "present_both": 1.0
+        },
+        "mogul_1": {
+          "l1": 0.0,
+          "linf": 0.0,
+          "present_both": 1.0
+        },
+        "skier": {
+          "l1": 6.0,
+          "linf": 6.0,
+          "present_both": 1.0
+        },
+        "tree_0": {
+          "l1": 0.0,
+          "linf": 0.0,
+          "present_both": 1.0
+        },
+        "tree_1": {
+          "l1": 0.0,
+          "linf": 0.0,
+          "present_both": 1.0
+        },
+        "tree_2": {
+          "l1": 0.0,
+          "linf": 0.0,
+          "present_both": 1.0
+        },
+        "tree_3": {
+          "l1": 0.0,
+          "linf": 0.0,
+          "present_both": 1.0
+        }
+      },
+      "per_entity_at_end": {
+        "flag_0": {
+          "l1": 58.84465789794922,
+          "linf": 46.84465789794922,
+          "present_both": 1.0
+        },
+        "flag_1": {
+          "l1": Infinity,
+          "linf": Infinity,
+          "present_both": 0.0
+        },
+        "mogul_0": {
+          "l1": 90.84465789794922,
+          "linf": 46.84465789794922,
+          "present_both": 1.0
+        },
+        "mogul_1": {
+          "l1": Infinity,
+          "linf": Infinity,
+          "present_both": 0.0
+        },
+        "skier": {
+          "l1": 12.286514282226562,
+          "linf": 6.2865142822265625,
+          "present_both": 1.0
+        },
+        "tree_0": {
+          "l1": 145.1553497314453,
+          "linf": 145.1553497314453,
+          "present_both": 1.0
+        },
+        "tree_1": {
+          "l1": 59.84468078613281,
+          "linf": 46.84468078613281,
+          "present_both": 1.0
+        },
+        "tree_2": {
+          "l1": 60.84468078613281,
+          "linf": 46.84468078613281,
+          "present_both": 1.0
+        },
+        "tree_3": {
+          "l1": 49.84467315673828,
+          "linf": 28.0,
+          "present_both": 1.0
+        }
+      }
+    }
+  ]
+}

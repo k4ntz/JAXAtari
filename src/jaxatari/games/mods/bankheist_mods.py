@@ -10,6 +10,12 @@ from jaxatari.games.mods.bankheist.bankheist_mod_plugins import (
     RevisitCityMod,
     MovingBanksMod,
     DoubleSpeedMod,
+    GreyRoadMod,
+    RedPoliceCarsMod,
+    GoldenBanksMod,
+    BluePlayerMod,
+    DynamitePenaltyMod,
+    FuelForBanksMod,
 )
 
 # --- The Registry ---
@@ -22,6 +28,12 @@ BANKHEIST_MOD_REGISTRY = {
     "revisit_city": RevisitCityMod,
     "moving_banks": MovingBanksMod,
     "double_speed": DoubleSpeedMod,
+    "grey_road": GreyRoadMod,
+    "red_police_cars": RedPoliceCarsMod,
+    "golden_banks": GoldenBanksMod,
+    "blue_player": BluePlayerMod,
+    "dynamite_penalty": DynamitePenaltyMod,
+    "fuel_for_banks": FuelForBanksMod,
 }
 
 class BankHeistEnvMod(JaxAtariModController):

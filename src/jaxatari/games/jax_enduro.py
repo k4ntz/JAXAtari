@@ -32,6 +32,7 @@ class EnduroGameState:
     track_top_x_curve_offset: jnp.ndarray
     collision_mode: jnp.ndarray  # bool
     collision_steps: jnp.ndarray  # int
+    collision_mode_is_opponent: jnp.ndarray  # bool
     mountain_left_x: jnp.ndarray
     mountain_right_x: jnp.ndarray
     # opponents
@@ -1100,6 +1101,10 @@ class JaxEnduro(JaxEnvironment[EnduroGameState, EnduroObservation, EnduroInfo, E
             jnp.array(initial_opp_density, dtype=jnp.float32),
             jnp.array(-1, dtype=jnp.int32),
             jnp.array(-1, dtype=jnp.int32),
+            jnp.array(self.consts.player_x_start, dtype=jnp.float32),
+            jnp.array(self.consts.player_x_start, dtype=jnp.float32),
+            jnp.array(self.consts.player_y_start, dtype=jnp.float32),
+            jnp.array(self.consts.initial_speed, dtype=jnp.float32),
             visible_track_left,
             visible_track_right
         )
@@ -1119,6 +1124,7 @@ class JaxEnduro(JaxEnvironment[EnduroGameState, EnduroObservation, EnduroInfo, E
             track_top_x_curve_offset=jnp.array(self.consts.initial_track_top_x_curve_offset, dtype=jnp.float32),
             collision_mode=jnp.array(False, dtype=jnp.bool_),
             collision_steps=jnp.array(0, dtype=jnp.int32),
+            collision_mode_is_opponent=jnp.array(False, dtype=jnp.bool_),
             mountain_left_x=jnp.array(self.consts.mountain_left_x_pos, dtype=jnp.float32),
             mountain_right_x=jnp.array(self.consts.mountain_right_x_pos, dtype=jnp.float32),
             adjusted_opponent_index=jnp.array(-1, dtype=jnp.int32),
@@ -1139,23 +1145,24 @@ class JaxEnduro(JaxEnvironment[EnduroGameState, EnduroObservation, EnduroInfo, E
                                         opponent_density: jnp.ndarray,
                                         adjusted_opponent_index: jnp.ndarray,
                                         adjusted_opponent_lane: jnp.ndarray,
+                                        player_prev_x: jnp.ndarray,
+                                        player_x: jnp.ndarray,
+                                        player_y: jnp.ndarray,
+                                        player_speed: jnp.ndarray,
                                         visible_track_left: jnp.ndarray,
                                         visible_track_right: jnp.ndarray) -> jnp.ndarray:
         """
-        Calculate the x,y positions and colors of all 7 opponent slots.
-        Adapted from jax_enduro.py
+        Compute (x, y, color) for all 7 opponent slots.
         """
         base_y_positions = self.consts.opponent_slot_ys
-        slot_heights = jnp.diff(base_y_positions, prepend=self.consts.game_window_height)
-        slot_heights = jnp.abs(slot_heights)
+        slot_heights = jnp.abs(jnp.diff(base_y_positions, prepend=self.consts.game_window_height))
 
         index_integer = jnp.floor(opponent_index).astype(jnp.int32)
         index_decimal = opponent_index - index_integer
 
-        opponent_array_size = base_opponents.shape[1]
-        slot_indices = (index_integer + jnp.arange(7)) % opponent_array_size
-        
-        # New structure: row 0 = lane, row 1 = color, row 2 = spawn_priority
+        spawnable_len = self.consts.length_of_opponent_array
+        slot_indices = (index_integer + jnp.arange(7)) % spawnable_len
+
         current_slots = base_opponents[0][slot_indices].astype(jnp.int32)
         current_colors = base_opponents[1][slot_indices].astype(jnp.int32)
         spawn_priorities = base_opponents[2][slot_indices]
@@ -1188,6 +1195,45 @@ class JaxEnduro(JaxEnvironment[EnduroGameState, EnduroObservation, EnduroInfo, E
             return jnp.where(lane_code == -1, -1.0, leftmost_x)
 
         local_slot_indices = jnp.arange(7)
+        x_positions = jax.vmap(calculate_x_for_lane)(
+            local_slot_indices, current_slots, left_boundaries, track_widths
+        ).astype(jnp.int32)
+
+        # Build an envelope around both current and predicted player x.
+        player_w = self.consts.player_collision_width
+        cur_left = jnp.floor(player_x).astype(jnp.int32)
+        cur_right = cur_left + player_w
+        pred_left = jnp.floor(player_prev_x).astype(jnp.int32)
+        pred_right = pred_left + player_w
+        env_left = jnp.minimum(cur_left, pred_left)
+        env_right = jnp.maximum(cur_right, pred_right)
+        player_top = jnp.floor(player_y).astype(jnp.int32)
+        player_bottom = player_top + self.consts.collision_box_height
+
+        # Opponent AABBs.
+        opp_left = x_positions
+        opp_right = x_positions + car_widths[local_slot_indices]
+        opp_top = y_positions
+        opp_bottom = opp_top + self.consts.collision_box_height
+
+        # Cull against swept envelope (current U predicted) with small x pad
+        # and a y band that covers both rear spawns and close overtakes.
+        danger_x_pad = 2
+        danger_y_above = 6
+        danger_y_below = 14
+        env_left_padded = env_left - danger_x_pad
+        env_right_padded = env_right + danger_x_pad
+        band_top = player_top - danger_y_above
+        band_bottom = player_bottom + danger_y_below
+
+        x_overlap_envelope = (env_left_padded < opp_right) & (opp_left < env_right_padded)
+        y_in_band = (band_top < opp_bottom) & (opp_top < band_bottom)
+        in_danger_zone = x_overlap_envelope & y_in_band
+
+        # Cull every car in the danger zone, including slot 0.
+        spawn_inside = in_danger_zone & (current_slots != -1)
+        current_slots = jnp.where(spawn_inside, -1, current_slots)
+
         x_positions = jax.vmap(calculate_x_for_lane)(
             local_slot_indices, current_slots, left_boundaries, track_widths
         ).astype(jnp.int32)
@@ -1391,28 +1437,31 @@ class JaxEnduro(JaxEnvironment[EnduroGameState, EnduroObservation, EnduroInfo, E
         # the immediate ghost-car effect (index drifts negative → passed cars snap back
         # into view, then vanish when the player accelerates).
         new_opponent_index = jnp.where(
-            state.collision_mode,
+            state.collision_mode_is_opponent,
             state.opponent_index,
             new_opponent_index
         )
 
-        # Watermark: track the furthest slot we have ever advanced to.
-        # Cars within LOOKBACK slots behind the watermark can still re-overtake the player;
-        # anything further back is considered permanently gone and stays masked.
-        # This prevents ghost spawns caused by density changes on re-visited slots or
-        # index wrap-around on very long runs.
-        _LOOKBACK = 10
         new_watermark = jnp.maximum(
             state.opponent_index_watermark,
             jnp.floor(new_opponent_index).astype(jnp.int32)
         )
-        new_opponent_index = jnp.maximum(
-            new_opponent_index,
-            (new_watermark - _LOOKBACK).astype(jnp.float32)
-        )
 
         new_adjusted_idx, new_adjusted_lane = self._adjust_opponent_positions_when_overtaking(
             state, new_opponent_index, state.base_opponents, visible_track_left, visible_track_right
+        )
+
+        # Predict where the player will be after this frame's lateral move so
+        # the cull can catch cars the player is about to slide into.
+        player_width_f = jnp.float32(self.consts.player_collision_width)
+        predicted_player_x = jnp.where(
+            state.collision_mode,
+            state.player_x,
+            jnp.clip(
+                state.player_x + steering_delta + drift_delta,
+                0.0,
+                self.consts.screen_width - player_width_f,
+            ),
         )
 
         new_visible_opponent_positions = self._get_visible_opponent_positions(
@@ -1421,6 +1470,10 @@ class JaxEnduro(JaxEnvironment[EnduroGameState, EnduroObservation, EnduroInfo, E
             state.opponent_density,
             new_adjusted_idx,
             new_adjusted_lane,
+            predicted_player_x,
+            state.player_x,
+            state.player_y,
+            new_speed,
             visible_track_left,
             visible_track_right
         )
@@ -1461,7 +1514,16 @@ class JaxEnduro(JaxEnvironment[EnduroGameState, EnduroObservation, EnduroInfo, E
             coll_player_x = state.player_x + push_direction * self.consts.collision_push_back
             # During collision, move back to base y
             coll_player_y = self.consts.player_y_start
-            return coll_player_x, coll_player_y, coll_speed, new_collision_mode, new_collision_steps
+            # When collision_mode ends, also clear the opponent flag.
+            new_collision_mode_is_opponent = state.collision_mode_is_opponent & new_collision_mode
+            return (
+                coll_player_x,
+                coll_player_y,
+                coll_speed,
+                new_collision_mode,
+                new_collision_steps,
+                new_collision_mode_is_opponent,
+            )
 
         def normal_update(_):
             # Apply horizontal movement
@@ -1481,15 +1543,41 @@ class JaxEnduro(JaxEnvironment[EnduroGameState, EnduroObservation, EnduroInfo, E
                 new_visible_opponent_positions
             )
             
+            opp_collision_speed = jnp.minimum(
+                new_speed * self.consts.side_collision_speed_drop,
+                self.consts.min_speed,
+            )
+            side_collision_speed = new_speed * self.consts.side_collision_speed_drop
             is_colliding = is_side_colliding | is_opponent_colliding
-            
+
             return jax.lax.cond(
                 is_colliding,
-                lambda: (state.player_x, state.player_y, jnp.where(is_opponent_colliding, jnp.minimum(new_speed * self.consts.side_collision_speed_drop, self.consts.min_speed), new_speed * self.consts.side_collision_speed_drop), True, jnp.array(self.consts.collision_duration, dtype=jnp.int32)),
-                lambda: (normal_player_x, normal_player_y, new_speed, False, jnp.array(0, dtype=jnp.int32))
+                lambda: (
+                    state.player_x,
+                    state.player_y,
+                    jnp.where(is_opponent_colliding, opp_collision_speed, side_collision_speed),
+                    jnp.array(True, dtype=jnp.bool_),
+                    jnp.array(self.consts.collision_duration, dtype=jnp.int32),
+                    is_opponent_colliding,
+                ),
+                lambda: (
+                    normal_player_x,
+                    normal_player_y,
+                    new_speed,
+                    jnp.array(False, dtype=jnp.bool_),
+                    jnp.array(0, dtype=jnp.int32),
+                    jnp.array(False, dtype=jnp.bool_),
+                ),
             )
 
-        new_player_x, new_player_y, new_speed, new_collision_mode, new_collision_steps = jax.lax.cond(
+        (
+            new_player_x,
+            new_player_y,
+            new_speed,
+            new_collision_mode,
+            new_collision_steps,
+            new_collision_mode_is_opponent,
+        ) = jax.lax.cond(
             state.collision_mode,
             collision_update,
             normal_update,
@@ -1603,6 +1691,7 @@ class JaxEnduro(JaxEnvironment[EnduroGameState, EnduroObservation, EnduroInfo, E
             track_top_x_curve_offset=new_top_x_curve_offset,
             collision_mode=new_collision_mode,
             collision_steps=new_collision_steps,
+            collision_mode_is_opponent=new_collision_mode_is_opponent,
             mountain_left_x=new_mountain_left_x,
             mountain_right_x=new_mountain_right_x,
             opponent_index=new_opponent_index,

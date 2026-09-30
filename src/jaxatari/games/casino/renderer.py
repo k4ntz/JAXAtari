@@ -4,7 +4,6 @@ from functools import partial
 import jax
 import jax.numpy as jnp
 
-from jaxatari.environment import JaxEnvironment
 from jaxatari.renderers import JAXGameRenderer
 from jaxatari.rendering import jax_rendering_utils as render_utils
 
@@ -53,6 +52,7 @@ class CasinoRenderer(JAXGameRenderer):
         self.config = config or render_utils.RendererConfig(
             game_dimensions=(210, 160),
             channels=3,
+            downscale=None,
         )
         self.jr = render_utils.JaxRenderingUtils(self.config)
 
@@ -82,20 +82,18 @@ class CasinoRenderer(JAXGameRenderer):
 
         # Card IDs: -2 empty, -1 face-down, 0 empty, 1..52 real cards.
         safe_cards = jnp.where(card_matrix < -1, 0, card_matrix).astype(jnp.int32)
-
-        def draw_row(i, acc):
-            def draw_col(j, row_acc):
-                card = safe_cards[i, j]
-                return jax.lax.cond(
-                    card != 0,
-                    lambda v: self.jr.render_at(v, 12 + j * 32, y_positions[i], self.SHAPE_MASKS["cards"][card + 1]),
-                    lambda v: v,
-                    row_acc,
-                )
-
-            return jax.lax.fori_loop(0, safe_cards.shape[1], draw_col, acc)
-
-        raster = jax.lax.fori_loop(0, safe_cards.shape[0], draw_row, raster)
+        n_rows, n_cols = safe_cards.shape
+        flat_cards = safe_cards.reshape(-1)
+        col_idx = jnp.tile(jnp.arange(n_cols, dtype=jnp.int32), n_rows)
+        row_idx = jnp.repeat(jnp.arange(n_rows, dtype=jnp.int32), n_cols)
+        xs = jnp.where(flat_cards != 0, 12 + col_idx * 32, -1000)
+        ys = jnp.where(flat_cards != 0, y_positions[row_idx], -1000)
+        raster = self.jr.render_at_batch(
+            raster,
+            xs,
+            ys,
+            self.SHAPE_MASKS["cards"][flat_cards + 1],
+        )
 
         score_digits = self.jr.int_to_digits(player_score.astype(jnp.int32), max_digits=4)
         raster = self.jr.render_label_selective(
@@ -181,7 +179,6 @@ class CasinoRenderer(JAXGameRenderer):
 
         return self.jr.render_from_palette(raster, self.PALETTE)
 
-    @partial(jax.jit, static_argnums=(0,))
     def _render_blackjack(self, state) -> jnp.ndarray:
         card_matrix = jnp.zeros((6, 5), dtype=jnp.int32)
         card_matrix = card_matrix.at[0, :].set(state.cards_dealer[:5])
@@ -225,7 +222,6 @@ class CasinoRenderer(JAXGameRenderer):
             blinking_card=jnp.array([-1, -1], dtype=jnp.int32),
         )
 
-    @partial(jax.jit, static_argnums=(0,))
     def _render_five_stud(self, state) -> jnp.ndarray:
         card_matrix = jnp.zeros((6, 5), dtype=jnp.int32)
         card_matrix = card_matrix.at[0, :].set(state.dealer_cards[:5])
@@ -250,7 +246,6 @@ class CasinoRenderer(JAXGameRenderer):
             blinking_card=jnp.array([-1, -1], dtype=jnp.int32),
         )
 
-    @partial(jax.jit, static_argnums=(0,))
     def _render_poker_solitaire(self, state) -> jnp.ndarray:
         board = state.board.reshape(5, 5).astype(jnp.int32)
         card_matrix = jnp.zeros((6, 5), dtype=jnp.int32)
@@ -279,8 +274,8 @@ class CasinoRenderer(JAXGameRenderer):
             blinking_card=cursor,
         )
 
-    @partial(jax.jit, static_argnums=(0,))
     def render(self, state) -> jnp.ndarray:
+        # Python dispatch so each cartridge game traces a single jitted frame path.
         if hasattr(state, "cards_player_main"):
             return self._render_blackjack(state)
         if hasattr(state, "player_cards"):
@@ -290,66 +285,3 @@ class CasinoRenderer(JAXGameRenderer):
 
         # Fallback to table background if an unknown state object is provided.
         return self.jr.render_from_palette(self.BACKGROUND, self.PALETTE)
-
-
-class JaxCasino(JaxEnvironment):
-    def __init__(self, consts=None, mode: str = "blackjack"):
-        mode = (mode or "blackjack").lower()
-
-        if mode == "blackjack":
-            from jaxatari.games.jax_casino_blackjack import JaxCasinoBlackjack
-
-            self.env = JaxCasinoBlackjack() if consts is None else JaxCasinoBlackjack(consts=consts)
-        elif mode in ("five_stud", "five_stud_poker", "five-stud", "5stud"):
-            from jaxatari.games.jax_casino_five_stud_poker import JaxCasinoFiveStudPoker
-
-            self.env = JaxCasinoFiveStudPoker() if consts is None else JaxCasinoFiveStudPoker(consts=consts)
-        elif mode in ("poker_solitaire", "poker_solitair", "solitaire", "poker-solitaire"):
-            from jaxatari.games.jax_casino_poker_solitaire import JaxCasinoPokerSolitaire
-
-            self.env = JaxCasinoPokerSolitaire() if consts is None else JaxCasinoPokerSolitaire(consts=consts)
-        else:
-            raise ValueError(
-                f"Unknown mode '{mode}'. Supported modes: blackjack, five_stud, poker_solitaire"
-            )
-
-        super().__init__(self.env.consts)
-        # Expose renderer/action set like concrete game envs so external tools
-        # (e.g. scripts/play.py) can treat this wrapper identically.
-        self.renderer = self.env.renderer
-        if hasattr(self.env, "ACTION_SET"):
-            self.ACTION_SET = self.env.ACTION_SET
-
-    def reset(self, key=None):
-        if key is None:
-            return self.env.reset()
-        return self.env.reset(key)
-
-    def step(self, state, action):
-        return self.env.step(state, action)
-
-    def render(self, state):
-        # Use the wrapper-level renderer so renderer hot-swaps (e.g. native
-        # downscaling) applied to this environment are respected.
-        return self.renderer.render(state)
-
-    def action_space(self):
-        return self.env.action_space()
-
-    def observation_space(self):
-        return self.env.observation_space()
-
-    def image_space(self):
-        return self.env.image_space()
-
-    def _get_observation(self, state):
-        return self.env._get_observation(state)
-
-    def _get_info(self, state, *args, **kwargs):
-        return self.env._get_info(state)
-
-    def _get_reward(self, previous_state, state):
-        return self.env._get_reward(previous_state, state)
-
-    def _get_done(self, state):
-        return self.env._get_done(state)

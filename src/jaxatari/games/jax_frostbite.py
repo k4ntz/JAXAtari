@@ -1,6 +1,7 @@
 import os
 from functools import partial
 from typing import Tuple, NamedTuple, Optional
+import numpy as _np
 import chex
 import jax
 from jax import tree_util
@@ -76,7 +77,8 @@ class FrostbiteConstants(struct.PyTreeNode):
     
     # Debug/Testing
     START_LEVEL: int = struct.field(pytree_node=False, default=1)
-    
+    START_IGLOO_COMPLETE: bool = struct.field(pytree_node=False, default=False)  # start with igloo fully built
+
     # Bailey jump offset tables (Y deltas per ALE frame; consumed 2 entries per step for 60 Hz parity)
     BAILEY_JUMP_OFFSETS: tuple = struct.field(pytree_node=False, default_factory=lambda: (
         6, 5, 5, 5, 4, 3, 2, 1, 0, 0, 0, 0, -1, -2, -3,
@@ -96,10 +98,30 @@ class FrostbiteConstants(struct.PyTreeNode):
     # RGB Overrides for mods (if set, overrides the actual rendered color of the ice blocks)
     RGB_ICE_WHITE: Optional[Tuple[int, int, int]] = struct.field(pytree_node=False, default=None)
     RGB_ICE_BLUE: Optional[Tuple[int, int, int]] = struct.field(pytree_node=False, default=None)
+    
+    # RGB Overrides for obstacles
+    RGB_FISH: Optional[Tuple[int, int, int]] = struct.field(pytree_node=False, default=None)
+    RGB_GEESE: Optional[Tuple[int, int, int]] = struct.field(pytree_node=False, default=None)
+    RGB_CRAB: Optional[Tuple[int, int, int]] = struct.field(pytree_node=False, default=None)
+    RGB_CLAM: Optional[Tuple[int, int, int]] = struct.field(pytree_node=False, default=None)
+
+    # Sprite overrides
+    BEAR_SPRITE_0: str = struct.field(pytree_node=False, default="bear_00.npy")
+    BEAR_SPRITE_1: str = struct.field(pytree_node=False, default="bear_01.npy")
+
+    # Igloo overrides
+    IGLOO_X_OFFSET: int = struct.field(pytree_node=False, default=0)
+    RGB_IGLOO: Optional[Tuple[int, int, int]] = struct.field(pytree_node=False, default=None)
+    TARGET_IGLOO_X: int = struct.field(pytree_node=False, default=122)
 
     # Igloo constants    IGLOO_X: int = struct.field(pytree_node=False, default=154)  # X position of igloo (far right side of screen)
     IGLOO_X: int = struct.field(pytree_node=False, default=154)
     IGLOO_Y: int = struct.field(pytree_node=False, default=44)   # Y position at top of Bailey's head when on shore
+    
+    # Environment mode overrides
+    CONSTANT_NIGHT: bool = struct.field(pytree_node=False, default=False)
+    RGB_NIGHT: Optional[Tuple[int, int, int]] = struct.field(pytree_node=False, default=None)
+    DRAW_SHORE_LINE: bool = struct.field(pytree_node=False, default=False)
     
     # Game Constants
     MAX_IGLOO_INDEX: int = struct.field(pytree_node=False, default=15)  # Complete igloo has 16 blocks (0-15)
@@ -180,6 +202,8 @@ class FrostbiteConstants(struct.PyTreeNode):
     INIT_DELAY_ACTION_VALUE: int = struct.field(pytree_node=False, default=120)  # 2 seconds for block removal
     INCREMENT_SCORE_FRAME_DELAY: int = struct.field(pytree_node=False, default=8)   # 120/16 ≈ 8 frames per block
     TEMP_DECREMENT_DELAY: int = struct.field(pytree_node=False, default=1)  # 1 frame per temperature degree
+    TEMP_DRAIN_INTERVAL: int = struct.field(pytree_node=False, default=65)  # frames between each in-game temperature drop (~2.17s at 60fps)
+    IGLOO_DOOR_HALF_WIDTH: int = struct.field(pytree_node=False, default=4)  # half-width of igloo door collision box
 
     # Sprite duplication modes
     SPRITE_SINGLE: int = struct.field(pytree_node=False, default=0b000)
@@ -658,7 +682,7 @@ class JaxFrostbite(JaxEnvironment[FrostbiteState, FrostbiteObservation, Frostbit
             # Level and score
             level=level,
             score=jnp.zeros(3, dtype=jnp.int32),
-            building_igloo_idx=jnp.array(-1, dtype=jnp.int32),
+            building_igloo_idx=jnp.array(self.consts.MAX_IGLOO_INDEX if self.consts.START_IGLOO_COMPLETE else -1, dtype=jnp.int32),
             igloo_entry_status=jnp.array(0, dtype=jnp.int32),
             temperature=jnp.array(self.consts.INIT_TEMPERATURE, dtype=jnp.int32),
             remaining_lives=jnp.array(self.consts.INIT_LIVES, dtype=jnp.int32),
@@ -751,7 +775,7 @@ class JaxFrostbite(JaxEnvironment[FrostbiteState, FrostbiteObservation, Frostbit
             completed_ice_blocks_delay=jnp.array(0, dtype=jnp.int32),
             level=level,
             score=jnp.zeros(3, dtype=jnp.int32),
-            building_igloo_idx=jnp.array(-1, dtype=jnp.int32),
+            building_igloo_idx=jnp.array(self.consts.MAX_IGLOO_INDEX if self.consts.START_IGLOO_COMPLETE else -1, dtype=jnp.int32),
             igloo_entry_status=jnp.array(0, dtype=jnp.int32),
             temperature=jnp.array(self.consts.INIT_TEMPERATURE, dtype=jnp.int32),
             remaining_lives=jnp.array(self.consts.INIT_LIVES, dtype=jnp.int32),
@@ -1199,7 +1223,7 @@ class JaxFrostbite(JaxEnvironment[FrostbiteState, FrostbiteObservation, Frostbit
             return jax.lax.cond((tens == 0) & (ones == 0), lambda: 0, lambda: result)
 
         # Temperature decreases every ~2.17 seconds (130 frames at 60 FPS)
-        should_decrease_temp = (state.frame_count % 130) == 0
+        should_decrease_temp = (state.frame_count % self.consts.TEMP_DRAIN_INTERVAL) == 0
 
         # Only decrease temperature during active gameplay
         is_playing = (state.bailey_death_frame == 0)  # Not in death animation
@@ -1570,7 +1594,7 @@ class JaxFrostbite(JaxEnvironment[FrostbiteState, FrostbiteObservation, Frostbit
         x_max = self.consts.SHORE_X_MAX
 
         # Automatic movement toward igloo during entry sequence
-        target_igloo_x = 123  # Fixed igloo X position
+        target_igloo_x = self.consts.TARGET_IGLOO_X  # Mod-aware igloo X position
         auto_dx = jnp.where(
             is_entering_igloo,
             jnp.sign(target_igloo_x - state.bailey_x) * jnp.minimum(2, jnp.abs(target_igloo_x - state.bailey_x)),
@@ -1615,7 +1639,7 @@ class JaxFrostbite(JaxEnvironment[FrostbiteState, FrostbiteObservation, Frostbit
         can_start_jump = state.bailey_jumping_idx == 0  # Not already jumping
 
         # Special case: automatic jump when entering igloo
-        at_igloo_x = jnp.abs(state.bailey_x - 123) <= 1
+        at_igloo_x = jnp.abs(state.bailey_x - target_igloo_x) <= 1
         should_jump_for_igloo = is_entering_igloo & at_igloo_x
 
         # Determine jump intent using the refactored method
@@ -2837,10 +2861,9 @@ class JaxFrostbite(JaxEnvironment[FrostbiteState, FrostbiteObservation, Frostbit
         not_jumping = state.bailey_jumping_idx == 0
         not_entering = state.igloo_entry_status == 0
 
-        # Door collision box (igloo door is at specific X position)
-        door_x = 122
-        bailey_right_edge = state.bailey_x + 16
-        near_door = (bailey_right_edge >= door_x) & (state.bailey_x <= door_x + 8)
+        # Door collision: asymmetric window around TARGET_IGLOO_X (left side 1px narrower)
+        near_door = (state.bailey_x >= self.consts.TARGET_IGLOO_X - self.consts.IGLOO_DOOR_HALF_WIDTH + 1) & \
+                    (state.bailey_x <= self.consts.TARGET_IGLOO_X + self.consts.IGLOO_DOOR_HALF_WIDTH)
 
         # Check if player is pressing UP (or diagonal up)
         pressing_up = (action == Action.UP) | (action == Action.UPLEFT) | (action == Action.UPRIGHT)
@@ -2982,8 +3005,8 @@ class FrostbiteRenderer(JAXGameRenderer):
         crab_1 = self._load_frame_legacy("king_crab_01.npy")
         clam_0 = jnp.flip(self._load_frame_legacy("clam_00.npy"), axis=1)
         clam_1 = jnp.flip(self._load_frame_legacy("clam_01.npy"), axis=1)
-        bear_0 = self._load_frame_legacy("bear_00.npy")
-        bear_1 = self._load_frame_legacy("bear_01.npy")
+        bear_0 = self._load_frame_legacy(self.consts.BEAR_SPRITE_0)
+        bear_1 = self._load_frame_legacy(self.consts.BEAR_SPRITE_1)
         igloo_block = self._load_frame_legacy("igloo_block_00.npy")
         igloo_door = self._load_frame_legacy("igloo_door.npy")
         degree_symbol = self._load_frame_legacy("degree_symbol.npy")
@@ -3005,50 +3028,50 @@ class FrostbiteRenderer(JAXGameRenderer):
         # Apply custom RGB colors if set by mods
         if self.consts.RGB_ICE_WHITE is not None:
             r, g, b = self.consts.RGB_ICE_WHITE
-            ice_wide_white = jnp.where(
-                ice_wide_white[..., 3:4] > 0,
-                jnp.concatenate([
-                    jnp.full_like(ice_wide_white[..., 0:1], r),
-                    jnp.full_like(ice_wide_white[..., 1:2], g),
-                    jnp.full_like(ice_wide_white[..., 2:3], b),
-                    ice_wide_white[..., 3:4]
-                ], axis=-1),
-                ice_wide_white
-            ).astype(ice_wide_white.dtype)
-            ice_narrow_white = jnp.where(
-                ice_narrow_white[..., 3:4] > 0,
-                jnp.concatenate([
-                    jnp.full_like(ice_narrow_white[..., 0:1], r),
-                    jnp.full_like(ice_narrow_white[..., 1:2], g),
-                    jnp.full_like(ice_narrow_white[..., 2:3], b),
-                    ice_narrow_white[..., 3:4]
-                ], axis=-1),
-                ice_narrow_white
-            ).astype(ice_narrow_white.dtype)
+            ice_wide_white = self._apply_custom_tint(ice_wide_white, r, g, b)
+            ice_narrow_white = self._apply_custom_tint(ice_narrow_white, r, g, b)
 
         if self.consts.RGB_ICE_BLUE is not None:
             r, g, b = self.consts.RGB_ICE_BLUE
-            ice_wide_blue = jnp.where(
-                ice_wide_blue[..., 3:4] > 0,
-                jnp.concatenate([
-                    jnp.full_like(ice_wide_blue[..., 0:1], r),
-                    jnp.full_like(ice_wide_blue[..., 1:2], g),
-                    jnp.full_like(ice_wide_blue[..., 2:3], b),
-                    ice_wide_blue[..., 3:4]
-                ], axis=-1),
-                ice_wide_blue
-            ).astype(ice_wide_blue.dtype)
-            ice_narrow_blue = jnp.where(
-                ice_narrow_blue[..., 3:4] > 0,
-                jnp.concatenate([
-                    jnp.full_like(ice_narrow_blue[..., 0:1], r),
-                    jnp.full_like(ice_narrow_blue[..., 1:2], g),
-                    jnp.full_like(ice_narrow_blue[..., 2:3], b),
-                    ice_narrow_blue[..., 3:4]
-                ], axis=-1),
-                ice_narrow_blue
-            ).astype(ice_narrow_blue.dtype)
-        
+            ice_wide_blue = self._apply_custom_tint(ice_wide_blue, r, g, b)
+            ice_narrow_blue = self._apply_custom_tint(ice_narrow_blue, r, g, b)
+
+        if self.consts.RGB_GEESE is not None:
+            r, g, b = self.consts.RGB_GEESE
+            geese_0 = self._apply_custom_tint(geese_0, r, g, b)
+            geese_1 = self._apply_custom_tint(geese_1, r, g, b)
+
+        if self.consts.RGB_FISH is not None:
+            r, g, b = self.consts.RGB_FISH
+            fish_0 = self._apply_custom_tint(fish_0, r, g, b)
+            fish_1 = self._apply_custom_tint(fish_1, r, g, b)
+
+        if self.consts.RGB_CRAB is not None:
+            r, g, b = self.consts.RGB_CRAB
+            crab_0 = self._apply_custom_tint(crab_0, r, g, b)
+            crab_1 = self._apply_custom_tint(crab_1, r, g, b)
+
+        if self.consts.RGB_CLAM is not None:
+            r, g, b = self.consts.RGB_CLAM
+            clam_0 = self._apply_custom_tint(clam_0, r, g, b)
+            clam_1 = self._apply_custom_tint(clam_1, r, g, b)
+
+        if self.consts.RGB_IGLOO is not None:
+            r, g, b = self.consts.RGB_IGLOO
+            igloo_block = self._apply_custom_tint(igloo_block, r, g, b)
+            # The door is black (0,0,0); tinting it makes it disappear into the igloo blocks.
+            # We leave igloo_door as-is.
+
+        if self.consts.RGB_NIGHT is not None:
+            r, g, b = self.consts.RGB_NIGHT
+            bg_night = self._apply_custom_tint(bg_night, r, g, b)
+            bg_day = self._apply_custom_tint(bg_day, r, g, b)
+
+        if self.consts.DRAW_SHORE_LINE:
+            line_color = jnp.array([255, 255, 255, 255], dtype=jnp.uint8)
+            bg_night = bg_night.at[78, :].set(line_color)
+            bg_day = bg_day.at[78, :].set(line_color)
+
         # Bear (Lightened for Night)
         bear_0_light = self._lighten_bear(bear_0)
         bear_1_light = self._lighten_bear(bear_1)
@@ -3115,11 +3138,14 @@ class FrostbiteRenderer(JAXGameRenderer):
             self.COLOR_TO_ID,
             self.FLIP_OFFSETS
         ) = self.jr.load_and_setup_assets(asset_config, self.sprite_path)
-        
+
         # 5. Store helper dimensions
         self.DIGIT_MASKS = self.SHAPE_MASKS['digits']
         self.BAILEY_MASKS = self.SHAPE_MASKS['bailey']
         self.BAILEY_FROZEN_MASKS = self.SHAPE_MASKS['bailey_frozen']
+        # Pre-flipped Bailey stacks to avoid runtime jnp.flip in render hot path.
+        self.BAILEY_MASKS_FLIPPED = jnp.flip(self.BAILEY_MASKS, axis=2)
+        self.BAILEY_FROZEN_MASKS_FLIPPED = jnp.flip(self.BAILEY_FROZEN_MASKS, axis=2)
         self.ICE_MASKS = self.SHAPE_MASKS['ice']
         self.GEESE_MASKS = self.SHAPE_MASKS['geese']
         self.FISH_MASKS = self.SHAPE_MASKS['fish']
@@ -3175,6 +3201,9 @@ class FrostbiteRenderer(JAXGameRenderer):
 
         self.BEAR_MASKS = self.SHAPE_MASKS['bear']
         self.BEAR_LIGHT_MASKS = self.SHAPE_MASKS['bear_light']
+        # Pre-flipped Bear stacks to avoid runtime jnp.flip in render hot path.
+        self.BEAR_MASKS_FLIPPED = jnp.flip(self.BEAR_MASKS, axis=2)
+        self.BEAR_LIGHT_MASKS_FLIPPED = jnp.flip(self.BEAR_LIGHT_MASKS, axis=2)
         self.IGLOO_BLOCK_MASK = self.SHAPE_MASKS['igloo'][0]
         self.IGLOO_DOOR_MASK = self.SHAPE_MASKS['igloo'][1]
         self.DEGREE_MASK = self.SHAPE_MASKS['degree']
@@ -3253,10 +3282,8 @@ class FrostbiteRenderer(JAXGameRenderer):
         # Each canvas is a 24×32 palette-ID sprite covering the full igloo bounding box.
         # At render time we index once and stamp with a single render_at call instead of
         # running fori_loop(0,16) with multiple lax.cond calls per iteration.
-        import numpy as _np
-
         _CH, _CW = 24, 32
-        _cx0, _cy0 = 111, 35   # canvas origin in raster coords
+        _cx0, _cy0 = 111 + self.consts.IGLOO_X_OFFSET, 35   # canvas origin in raster coords
 
         _bm = _np.array(self.IGLOO_BLOCK_MASK)   # (8,8) palette IDs
         _dm = _np.array(self.IGLOO_DOOR_MASK)    # (8,8) palette IDs
@@ -3320,6 +3347,20 @@ class FrostbiteRenderer(JAXGameRenderer):
     
     # --- Tinting helpers (used only in __init__) ---
     
+    @staticmethod
+    def _apply_custom_tint(sprite, r, g, b):
+        """Apply a custom RGB tint to a sprite, preserving alpha."""
+        return jnp.where(
+            sprite[..., 3:4] > 0,
+            jnp.concatenate([
+                jnp.full_like(sprite[..., 0:1], r),
+                jnp.full_like(sprite[..., 1:2], g),
+                jnp.full_like(sprite[..., 2:3], b),
+                sprite[..., 3:4]
+            ], axis=-1),
+            sprite
+        ).astype(sprite.dtype)
+
     @staticmethod
     def _apply_ice_color(block_sprite, is_blue):
         """Apply color tinting to ice block sprites."""
@@ -3412,7 +3453,7 @@ class FrostbiteRenderer(JAXGameRenderer):
 
     @partial(jax.jit, static_argnums=(0,))
     def _render_hud_and_obstacles(self, raster, state):
-        """Render HUD and obstacles in a single render_at_batch call (saves one intermediate raster)."""
+        """Render HUD and obstacles without using render_at_batch."""
         score_y, lives_y, temp_y = 10, 22, 22
         should_flash = state.temperature < 0x10
         is_visible = ~should_flash | ((state.frame_count % 45) < 22)
@@ -3497,20 +3538,29 @@ class FrostbiteRenderer(JAXGameRenderer):
         is_fish    = ob_type == self.consts.ID_FISH
         should_show = is_active & in_range & (~is_fish | fish_alive)
 
-        # Geese use the same spawn/despawn model as other obstacles:
-        # spawn off-screen and move in. Do not render a wrap copy.
-        obs_xs = jnp.stack([x_pos, jnp.full_like(x_pos, jnp.int32(-100))], axis=1).flatten()
-        obs_ys = jnp.stack([y_pos, y_pos], axis=1).flatten()
-        obs_masks = jnp.repeat(obs_masks, 2, axis=0)
-        wrap_active = jnp.stack([should_show, jnp.zeros_like(should_show)], axis=1).flatten()
-        obs_xs = jnp.where(wrap_active, obs_xs, -100)
-        obs_ys = jnp.where(wrap_active, obs_ys, -100)
+        # Obstacles do not need horizontal wrap copies in Frostbite.
+        obs_xs = jnp.where(should_show, x_pos, -100)
+        obs_ys = jnp.where(should_show, y_pos, -100)
 
-        # --- Combine HUD + Obstacles into one scatter call ---
+        # --- Combine HUD + Obstacles ---
         all_xs = jnp.concatenate([hud_x, obs_xs])
         all_ys = jnp.concatenate([hud_y, obs_ys])
         all_masks = jnp.concatenate([hud_masks, obs_masks], axis=0)
-        return self.jr.render_at_batch(raster, all_xs, all_ys, all_masks)
+
+        def draw_one(i, r):
+            x_i = all_xs[i]
+            y_i = all_ys[i]
+            m_i = all_masks[i]
+            should_draw = (x_i >= 0) & (y_i >= 0)
+            return jax.lax.cond(
+                should_draw,
+                # Use clipped draw so edge sprites don't wrap/pop on boundaries.
+                lambda rr: self.jr.render_at_clipped(rr, x_i, y_i, m_i),
+                lambda rr: rr,
+                r
+            )
+
+        return jax.lax.fori_loop(0, all_xs.shape[0], draw_one, raster)
 
     
     @partial(jax.jit, static_argnums=(0,))
@@ -3530,36 +3580,54 @@ class FrostbiteRenderer(JAXGameRenderer):
         """Render the polar grizzly (bear) when active."""
         should_render = state.polar_grizzly_active == 1
         def draw_bear(r):
-            is_night = ((state.level - 1) // 4) % 2 == 1
-            
-            bear_stack = jax.lax.select(is_night, self.BEAR_LIGHT_MASKS, self.BEAR_MASKS)
+            is_night = jnp.logical_or(((state.level - 1) // 4) % 2 == 1, self.consts.CONSTANT_NIGHT)
+            bear_right_stack = jax.lax.select(is_night, self.BEAR_LIGHT_MASKS, self.BEAR_MASKS)
+            bear_left_stack = jax.lax.select(is_night, self.BEAR_LIGHT_MASKS_FLIPPED, self.BEAR_MASKS_FLIPPED)
             
             anim_idx = jnp.clip(state.polar_grizzly_animation_idx, 0, 7)
             animation_frame_idx = jnp.array(self.consts.POLAR_GRIZZLY_ANIM_MAP)[anim_idx]
-            bear_sprite = bear_stack[animation_frame_idx]
+            bear_sprite_right = bear_right_stack[animation_frame_idx]
+            bear_sprite_left = bear_left_stack[animation_frame_idx]
+            bear_sprite = jax.lax.select(state.polar_grizzly_direction == 0, bear_sprite_left, bear_sprite_right)
             bear_y_offset = jnp.where(animation_frame_idx == 1, 1, 0)
             bear_y = self.consts.YMIN_BAILEY + bear_y_offset
-            
-            bear_sprite_flipped = jax.lax.cond(
-                state.polar_grizzly_direction == 0,
-                lambda s: jnp.flip(s, axis=1),
-                lambda s: s,
-                bear_sprite
-            )
-            
-            return self.jr.render_at(r, state.polar_grizzly_x, bear_y, bear_sprite_flipped)
+            return self.jr.render_at(r, state.polar_grizzly_x, bear_y, bear_sprite)
         return jax.lax.cond(should_render, draw_bear, lambda r: r, raster)
 
     @partial(jax.jit, static_argnums=(0,))
-    def _render_ice_vectorized(self, raster, state):
-        """Render all ice segments using vectorized render_at_batch."""
-        # 4 rows, 6 segments per row = 24 segments
-        # Each can have 3 wrap copies = 72 total entries
+    def _render_ice_strip_rows(self, raster, state):
+        """Render ice as one prebuilt strip per row (plus one wrap copy)."""
+        # Use persistent row anchors, not segment[0], to avoid wrap-order jumps
+        # when individual blocks are sorted/rewrapped near screen boundaries.
+        row_x = state.ice_x
+        row_w = jnp.where(state.ice_block_counts == 6, jnp.int32(12), jnp.int32(24))
+        row_y = self.ICE_ROW_Y_ARRAY
+        row_active = state.ice_block_counts > 0
+
+        is_blue = state.ice_colors == self.consts.COLOR_ICE_BLUE
+        is_narrow = row_w == 12
+        base_idx = is_blue.astype(jnp.int32)
+        strip_idx = jnp.where(is_narrow, 2 + base_idx, base_idx)
+        row_masks = self.ICE_STRIPS[strip_idx]  # (4, H, 152)
+
+        def draw_row(i, r):
+            return jax.lax.cond(
+                row_active[i],
+                lambda rr: self._render_with_wrap(rr, row_x[i], row_y[i], row_masks[i]),
+                lambda rr: rr,
+                r,
+            )
+
+        return jax.lax.fori_loop(0, 4, draw_row, raster)
+
+    @partial(jax.jit, static_argnums=(0,))
+    def _render_ice_segments_vectorized(self, raster, state):
+        """Render all ice segments without using render_at_batch."""
         row_indices = jnp.arange(4)
         seg_indices = jnp.arange(6)
         R, S = jnp.meshgrid(row_indices, seg_indices, indexing='ij')
-        R = R.flatten() # (24,)
-        S = S.flatten() # (24,)
+        R = R.flatten()  # (24,)
+        S = S.flatten()  # (24,)
 
         y_pos = self.ICE_ROW_Y_ARRAY[R]
         is_blue = state.ice_colors[R] == self.consts.COLOR_ICE_BLUE
@@ -3568,27 +3636,43 @@ class FrostbiteRenderer(JAXGameRenderer):
         seg_w = state.ice_segments_w[R, S]
         active = seg_w > 0
 
-        # Mask selection
         is_narrow = seg_w == 12
         base_idx = jnp.int32(is_blue)
         mask_idx = jnp.where(is_narrow, 2 + base_idx, base_idx)
-        masks = self.ICE_MASKS[mask_idx] # (24, H, W)
+        masks = self.ICE_MASKS[mask_idx]  # (24, H, W)
 
-        # Single wrap: x+W if segment is left of centre, x-W if right of centre.
-        # PLAYFIELD_WIDTH=152 < SCREEN_WIDTH=160, so x-W and x+W are never both
-        # on-screen simultaneously — one wrap entry per segment is sufficient.
         W = self.consts.PLAYFIELD_WIDTH
         wrap_x = jnp.where(seg_x < W // 2, seg_x + W, seg_x - W)
 
-        xs = jnp.stack([seg_x, wrap_x], axis=1).flatten()   # (48,)
+        xs = jnp.stack([seg_x, wrap_x], axis=1).flatten()  # (48,)
         ys = jnp.stack([y_pos, y_pos], axis=1).flatten()
-        final_masks = jnp.repeat(masks, 2, axis=0)           # (48, H, W)
+        final_masks = jnp.repeat(masks, 2, axis=0)  # (48, H, W)
+        draw_active = jnp.stack([active, active], axis=1).flatten()
 
-        wrap_active = jnp.stack([active, active], axis=1).flatten()
-        xs = jnp.where(wrap_active, xs, -100)
-        ys = jnp.where(wrap_active, ys, -100)
+        def draw_seg(i, r):
+            return jax.lax.cond(
+                draw_active[i],
+                lambda rr: self.jr.render_at_clipped(rr, xs[i], ys[i], final_masks[i]),
+                lambda rr: rr,
+                r,
+            )
 
-        return self.jr.render_at_batch(raster, xs, ys, final_masks)
+        return jax.lax.fori_loop(0, xs.shape[0], draw_seg, raster)
+
+    @partial(jax.jit, static_argnums=(0,))
+    def _render_ice_vectorized(self, raster, state):
+        """
+        Fast path: prebuilt strip per row for regular geometry.
+        Correctness path: per-segment renderer for breathing levels where segment
+        spacing is dynamic and cannot be represented by a single static strip.
+        """
+        is_breathing_level = (state.level >= self.consts.ICE_BREATH_MIN_LEVEL) & ((state.level & 1) == 1)
+        return jax.lax.cond(
+            is_breathing_level,
+            lambda r: self._render_ice_segments_vectorized(r, state),
+            lambda r: self._render_ice_strip_rows(r, state),
+            raster,
+        )
 
     @partial(jax.jit, static_argnums=(0,))
     def render(self, state: FrostbiteState) -> jnp.ndarray:
@@ -3596,7 +3680,7 @@ class FrostbiteRenderer(JAXGameRenderer):
 
         # 1. Create raster and render background (day/night)
         raster = self.jr.create_object_raster(self.BACKGROUND).astype(self.PALETTE.dtype)
-        is_night = ((state.level - 1) // 4) % 2 == 1
+        is_night = jnp.logical_or(((state.level - 1) // 4) % 2 == 1, self.consts.CONSTANT_NIGHT)
         raster = jax.lax.cond(
             is_night,
             lambda r: self.jr.render_at(r, 0, 0, self.SHAPE_MASKS['background_night']),
@@ -3626,16 +3710,19 @@ class FrostbiteRenderer(JAXGameRenderer):
             self.BAILEY_FROZEN_MASKS,
             self.BAILEY_MASKS
         )
+        bailey_stack_flipped = jax.lax.select(
+            state.bailey_frozen == 1,
+            self.BAILEY_FROZEN_MASKS_FLIPPED,
+            self.BAILEY_MASKS_FLIPPED
+        )
 
         # Get the final mask
         frame_bailey = bailey_stack[animation_idx] # Dynamic slice
+        frame_bailey_flipped = bailey_stack_flipped[animation_idx]
 
         # Flip sprite horizontally when facing left
         flip = (state.bailey_direction == 1) & (animation_idx < 3)
-        frame_bailey_flipped = jax.lax.cond(
-            flip,
-            lambda f: jnp.flip(f, axis=1), lambda f: f, frame_bailey
-        )
+        final_bailey_mask = jax.lax.select(flip, frame_bailey_flipped, frame_bailey)
 
         # Adjust Y for walking frame
         y_offset = jnp.where(animation_idx == 1, -1, 0)
@@ -3643,7 +3730,7 @@ class FrostbiteRenderer(JAXGameRenderer):
         # Render if visible
         raster = jax.lax.cond(
             is_visible,
-            lambda r: self.jr.render_at(r, state.bailey_x, adjusted_y, frame_bailey_flipped),
+            lambda r: self.jr.render_at(r, state.bailey_x, adjusted_y, final_bailey_mask),
             lambda r: r, 
             raster
         )

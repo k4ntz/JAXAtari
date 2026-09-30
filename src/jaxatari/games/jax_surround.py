@@ -23,40 +23,43 @@ def _get_default_asset_config() -> tuple:
 class SurroundConstants(AutoDerivedConstants):
     """Parameters defining the Surround grid and visuals."""
 
-    # Playfield layout
+    # Playfield layout. ALE uses 20 rows of 9px (8px block + 1px scanline).
     GRID_WIDTH: int = struct.field(pytree_node=False, default=40)
-    GRID_HEIGHT: int = struct.field(pytree_node=False, default=24)
+    GRID_HEIGHT: int = struct.field(pytree_node=False, default=20)
 
     # Mapping from grid cells to screen pixels
-    CELL_SIZE: Tuple[int, int] = struct.field(pytree_node=False, default_factory=lambda: (4, 8))  # (width, height)
+    CELL_SIZE: Tuple[int, int] = struct.field(pytree_node=False, default_factory=lambda: (4, 9))  # (width, height)
 
-    # Atari-typische Bildschirmgröße (W,H)
+    # Native Atari screen size (W, H)
     SCREEN_SIZE: Tuple[int, int] = struct.field(pytree_node=False, default_factory=lambda: (160, 210))
 
+    # First full grid row. ALE also has a 3px pink cap above this (y=23-25).
+    PLAYFIELD_Y_OFFSET: int = struct.field(pytree_node=False, default=27)
+    BORDER_CAP_PX: int = struct.field(pytree_node=False, default=3)
+    # Heads sit 1px above the cell origin so they fill the previous scanline gap (ALE is 9px).
+    HEAD_Y_NUDGE: int = struct.field(pytree_node=False, default=-1)
     # Colors
-    P1_TRAIL_COLOR: Tuple[int, int, int] = struct.field(pytree_node=False, default_factory=lambda: (255, 102, 204))  # Border color
-    P2_TRAIL_COLOR: Tuple[int, int, int] = struct.field(pytree_node=False, default_factory=lambda: (255, 102, 204))  # Border color
-    BACKGROUND_COLOR: Tuple[int, int, int] = struct.field(pytree_node=False, default_factory=lambda: (153, 153, 255))  # Blau-Lila Hintergrund
+    P1_TRAIL_COLOR: Tuple[int, int, int] = struct.field(pytree_node=False, default_factory=lambda: (212, 108, 195))
+    P2_TRAIL_COLOR: Tuple[int, int, int] = struct.field(pytree_node=False, default_factory=lambda: (212, 108, 195))
+    BACKGROUND_COLOR: Tuple[int, int, int] = struct.field(pytree_node=False, default_factory=lambda: (84, 92, 214))
     # Head colors (small square on top of the trail)
-    P1_HEAD_COLOR: Tuple[int, int, int] = struct.field(pytree_node=False, default_factory=lambda: (221, 51, 136))    # yellow (score color)
-    P2_HEAD_COLOR: Tuple[int, int, int] = struct.field(pytree_node=False, default_factory=lambda: (255, 221, 51))    # magenta (score color)
+    P1_HEAD_COLOR: Tuple[int, int, int] = struct.field(pytree_node=False, default_factory=lambda: (200, 72, 72))
+    P2_HEAD_COLOR: Tuple[int, int, int] = struct.field(pytree_node=False, default_factory=lambda: (183, 194, 95))
     HEAD_SCALE: float = struct.field(pytree_node=False, default=0.5)  # fraction of the cell size (0< scale ≤1)
 
     # Border 
-    BORDER_CELLS_X: int = struct.field(pytree_node=False, default=2)    # linke/rechte Dicke in Zellen
+    BORDER_CELLS_X: int = struct.field(pytree_node=False, default=1)    # ALE side walls are 4px (one cell)
     BORDER_CELLS_Y: int = struct.field(pytree_node=False, default=1)    # obere/untere Dicke in Zellen
-    BORDER_COLOR: Tuple[int, int, int] = struct.field(pytree_node=False, default_factory=lambda: (255, 102, 204))
+    BORDER_COLOR: Tuple[int, int, int] = struct.field(pytree_node=False, default_factory=lambda: (212, 108, 195))
 
-    # Divider stripes (thin red lines across the middle of each occupied cell)
+    # 1px scanline gap at the bottom of each occupied cell (not through the middle).
+    # Vertical trails stay stacked blocks; horizontal trails composite into one solid bar.
     DIVIDER_COLOR: Tuple[int, int, int] = struct.field(pytree_node=False, default_factory=lambda: (153, 153, 255))   # Match playfield background color
     DIVIDER_THICKNESS: int = struct.field(pytree_node=False, default=1)  # pixels (in screen space)
 
-    # Starting positions (x, y) - snapped to nearest rectangle (cell) on the field
-    # These should be integers and not between cells. Adjusted to be inside the playfield, not on borders.
-    # Middle of the playfield, within a rectangle (cell)
-    # Set to the exact center row of the grid
-    P1_START_POS: Tuple[int, int] = struct.field(pytree_node=False, default_factory=lambda: (4, 10))  # left side, vertical center
-    P2_START_POS: Tuple[int, int] = struct.field(pytree_node=False, default_factory=lambda: (35, 10)) # right side, vertical center
+    # Starting positions in grid cells. Matches ALE spawn at (40, 116) and (120, 116).
+    P1_START_POS: Tuple[int, int] = struct.field(pytree_node=False, default_factory=lambda: (10, 10))  # left
+    P2_START_POS: Tuple[int, int] = struct.field(pytree_node=False, default_factory=lambda: (30, 10))  # right
 
     # Starting directions
     P1_START_DIR: int = struct.field(pytree_node=False, default=Action.RIGHT)
@@ -109,6 +112,8 @@ class SurroundObservation:
     player1: ObjectObservation
     player2: ObjectObservation
     agent_id: jnp.ndarray  # () int32
+    score0: jnp.ndarray
+    score1: jnp.ndarray
 
 
 @struct.dataclass
@@ -568,6 +573,8 @@ class JaxSurround(
             player1=p1,
             player2=p2,
             agent_id=jnp.array(0, dtype=jnp.int32),
+            score0=state.score0,
+            score1=state.score1,
         )
 
     @partial(jax.jit, static_argnums=(0,))
@@ -612,6 +619,8 @@ class JaxSurround(
             "player1": single_obj,
             "player2": single_obj,
             "agent_id": spaces.Box(0, 1, shape=(), dtype=jnp.int32),
+            "score0": spaces.Box(low=0, high=c.WIN_SCORE, shape=(), dtype=jnp.int32),
+            "score1": spaces.Box(low=0, high=c.WIN_SCORE, shape=(), dtype=jnp.int32),
         })
 
     def image_space(self) -> spaces.Box:
@@ -642,11 +651,11 @@ class SurroundRenderer(JAXGameRenderer):
             self.config = config
         self.jr = render_utils.JaxRenderingUtils(self.config)
 
-        self.P1_HEAD_COLOR_TUPLE = (214, 214, 42)    # Yellow
-        self.P2_HEAD_COLOR_TUPLE = (198, 89, 179)    # Red/Pink
-        self.PLAYFIELD_COLOR_TUPLE = (181, 119, 181) # Lavender
-        self.BORDER_COLOR_TUPLE = (214, 92, 92)      # Pink
-        self.DIVIDER_COLOR_TUPLE = (142, 142, 142)   # Grey
+        self.P1_HEAD_COLOR_TUPLE = (200, 72, 72)
+        self.P2_HEAD_COLOR_TUPLE = (183, 194, 95)
+        self.PLAYFIELD_COLOR_TUPLE = (84, 92, 214)
+        self.BORDER_COLOR_TUPLE = (212, 108, 195)
+        self.DIVIDER_COLOR_TUPLE = (84, 92, 214)
 
         # 1. Start from (possibly modded) asset config provided via constants
         final_asset_config = list(self.consts.ASSET_CONFIG)
@@ -704,8 +713,8 @@ class SurroundRenderer(JAXGameRenderer):
         cell_w, cell_h = self.consts.CELL_SIZE
         field_h = self.consts.GRID_HEIGHT * cell_h
         field_w = self.consts.GRID_WIDTH * cell_w
-        slack = self.consts.SCREEN_SIZE[1] - field_h
-        y_off = (slack // cell_h) * cell_h
+        y_off = self.consts.PLAYFIELD_Y_OFFSET
+        cap = self.consts.BORDER_CAP_PX
 
         raster = self.jr.draw_rects(
             raster,
@@ -720,8 +729,22 @@ class SurroundRenderer(JAXGameRenderer):
 
         bx = self.consts.BORDER_CELLS_X * cell_w
         by = self.consts.BORDER_CELLS_Y * cell_h
-        border_positions = jnp.array([[0, y_off], [0, y_off + field_h - by], [0, y_off], [field_w - bx, y_off]])
-        border_sizes = jnp.array([[field_w, by], [field_w, by], [bx, field_h], [bx, field_h]])
+        border_positions = jnp.array([
+            [0, y_off - cap - 1],
+            [0, y_off],
+            [0, y_off + field_h - by],
+            [0, y_off + field_h],
+            [0, y_off],
+            [field_w - bx, y_off],
+        ])
+        border_sizes = jnp.array([
+            [field_w, cap],
+            [field_w, by],
+            [field_w, by],
+            [field_w, cap],
+            [bx, field_h],
+            [bx, field_h],
+        ])
         raster = self.jr.draw_rects(raster, border_positions, border_sizes, self.COLOR_TO_ID[self.BORDER_COLOR_TUPLE])
 
         occupied_grid = jnp.logical_or(state.trail != 0, state.border).T.astype(jnp.int32)
@@ -731,16 +754,17 @@ class SurroundRenderer(JAXGameRenderer):
         )
         yy = self.jr._yy
         relative_y = yy - y_off
-        mid = cell_h // 2
         divider_thickness = max(1, self.consts.DIVIDER_THICKNESS)
-        band_mask = (relative_y % cell_h >= mid) & (relative_y % cell_h < mid + divider_thickness)
+        # Gap at the bottom edge of each cell so horizontal runs stay one solid bar.
+        band_start = cell_h - divider_thickness
+        band_mask = (relative_y % cell_h >= band_start) & (relative_y % cell_h < cell_h)
         final_divider_mask = jnp.logical_and(grid_mask_raster, band_mask)
         raster = jnp.where(final_divider_mask, self.COLOR_TO_ID[self.DIVIDER_COLOR_TUPLE], raster)
 
         p1x = state.pos0[0] * cell_w
-        p1y = state.pos0[1] * cell_h + y_off
+        p1y = state.pos0[1] * cell_h + y_off + self.consts.HEAD_Y_NUDGE
         p2x = state.pos1[0] * cell_w
-        p2y = state.pos1[1] * cell_h + y_off
+        p2y = state.pos1[1] * cell_h + y_off + self.consts.HEAD_Y_NUDGE
 
         p1_trail_mask = jnp.ones((cell_h, cell_w), dtype=jnp.uint8) * self.COLOR_TO_ID[self.consts.P1_TRAIL_COLOR]
         p2_trail_mask = jnp.ones((cell_h, cell_w), dtype=jnp.uint8) * self.COLOR_TO_ID[self.consts.P2_TRAIL_COLOR]
@@ -752,9 +776,7 @@ class SurroundRenderer(JAXGameRenderer):
         raster = self.jr.render_at(raster, p1x, p1y, p1_head_mask)
         raster = self.jr.render_at(raster, p2x, p2y, p2_head_mask)
 
-        border_y_abs = y_off + self.consts.BORDER_CELLS_Y * cell_h
-        digit_h = self.SHAPE_MASKS['p1_digits'].shape[1]
-        score_y = max(0, border_y_abs - digit_h - 8)
+        score_y = 5
         padding_x = 30
         p1_digit_val = jnp.clip(state.score0 % 10, 0, 9)
         p2_digit_val = jnp.clip(state.score1 % 10, 0, 9)

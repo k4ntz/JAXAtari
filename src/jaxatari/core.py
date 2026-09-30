@@ -37,8 +37,12 @@ GAME_MODULES = {
     "berzerk": "jaxatari.games.jax_berzerk",
     "blackjack": "jaxatari.games.jax_blackjack",
     "breakout": "jaxatari.games.jax_breakout",
+    "casinoblackjack": "jaxatari.games.jax_casino_blackjack",
+    "casinofivestudpoker": "jaxatari.games.jax_casino_five_stud_poker",
+    "casinopokersolitaire": "jaxatari.games.jax_casino_poker_solitaire",
     "centipede": "jaxatari.games.jax_centipede",
     "choppercommand": "jaxatari.games.jax_choppercommand",
+    "donkeykong": "jaxatari.games.jax_donkeykong",
     "enduro": "jaxatari.games.jax_enduro",
     "fishingderby": "jaxatari.games.jax_fishingderby",
     "flagcapture": "jaxatari.games.jax_flagcapture",
@@ -64,7 +68,7 @@ GAME_MODULES = {
     "slotmachine": "jaxatari.games.jax_slotmachine",
     "spaceinvaders": "jaxatari.games.jax_spaceinvaders",
     "spacewar": "jaxatari.games.jax_spacewar",
-    # "surround": "jaxatari.games.jax_surround", currently not in a state that can be used
+    "surround": "jaxatari.games.jax_surround",
     "tennis": "jaxatari.games.jax_tennis",
     "tetris": "jaxatari.games.jax_tetris",
     "timepilot": "jaxatari.games.jax_timepilot",
@@ -79,6 +83,11 @@ GAME_MODULES = {
     "montezumarevenge": "jaxatari.games.jax_montezumarevenge",
     # "pacman": "jaxatari.games.jax_pacman",
     # Add new games here
+}
+
+# ALE / Gymnasium names that differ from the JAXAtari registry key.
+GAME_ALIASES = {
+    "trondead": "tron",
 }
 
 # Mod modules registry: for each game, provide the Controller class path
@@ -101,7 +110,12 @@ MOD_MODULES = {
     "qbert": "jaxatari.games.mods.qbert_mods.QbertEnvMod",
     "mspacman": "jaxatari.games.mods.mspacman_mods.MsPacmanEnvMod",
     "beamrider": "jaxatari.games.mods.beamrider_mods.BeamRiderEnvMod",
+    "venture": "jaxatari.games.mods.venture_mods.VentureEnvMod",
+    "spaceinvaders": "jaxatari.games.mods.spaceinvaders_mods.SpaceInvadersEnvMod",
+    "skiing": "jaxatari.games.mods.skiing_mods.SkiingEnvMod",
     "alien": "jaxatari.games.mods.alien_mods.AlienEnvMod",
+    "asteroids": "jaxatari.games.mods.asteroids_mods.AsteroidsEnvMod",
+    "pacman": "jaxatari.games.mods.pacman_mods.PacmanEnvMod",
 }
 
 
@@ -141,7 +155,12 @@ def make(game_name: str,
     check_ownership()  # Ensure ownership confirmed
 
     if isinstance(game_name, str):
-        game_name = game_name.lower()
+        game_name_clean = game_name.lower().replace("_", "").replace("-", "")
+        game_name_clean = GAME_ALIASES.get(game_name_clean, game_name_clean)
+        for key in GAME_MODULES:
+            if key.lower().replace("_", "").replace("-", "") == game_name_clean:
+                game_name = key
+                break
 
     if mods_config is not None:
         warnings.warn(
