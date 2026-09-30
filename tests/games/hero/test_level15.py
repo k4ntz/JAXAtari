@@ -113,15 +113,18 @@ BANDS = [
 # The live-hero ROM capture (the data hero_levels.py ships), as
 # (room, what, x, y) with x the LEFT edge of the drawn box - for a bat, of
 # its sweep. Every row.
+# The creature rows are read with the hero IN the room (2026-09-30): the
+# above-the-picture park drew three of them a row low, e.g.
+# "room 6 snake at x 112: drawn from row 111 with the hero in the room (the capture said 112)".
 CHARACTERS_MD = [
     (1, "lantern", 83, 35), (1, "bat", 48, 64),
     (2, "lantern", 107, 35), (2, "spider_free", 56, 65), (2, "spider", 64, 109),
     (3, "lantern", 99, 35), (3, "bat", 56, 64),
     (4, "lantern", 35, 35), (4, "spider_free", 32, 65), (4, "bat", 64, 103),
     (5, "lantern", 91, 35), (5, "spider_free", 76, 65),
-    (6, "lantern", 131, 35), (6, "spider", 24, 71), (6, "snake", 112, 112),
+    (6, "lantern", 131, 35), (6, "spider", 24, 70), (6, "snake", 112, 111),
     (7, "lantern", 131, 35), (7, "spider_free", 24, 66),
-    (8, "lantern", 131, 35), (8, "spider", 24, 71),
+    (8, "lantern", 131, 35), (8, "spider", 24, 70),
     (9, "lantern", 131, 35),
     (10, "lantern", 83, 35), (10, "bat", 40, 103), (10, "spider_free", 88, 65),
     (11, "bat", 32, 64), (11, "snake", 88, 111),
@@ -406,12 +409,17 @@ def test_room_9_is_passed_by_waiting_in_the_shaft(env):
     assert BANDS[9]["A"][17:19] == ".."
 
     def attempt(hover_until):
+        # he comes in slowly, the rotor in its hover band: the ROM hero
+        # cannot brake a 2 px/frame fall before the mouth (his thrust needs
+        # ~40 frames of UP), so a fast entry dies whatever he does next
         state = _in_room_9(env, player_x=jnp.int32(77), player_y=jnp.int32(2),
-                           player_vy=jnp.float32(2.0))
+                           player_vy=jnp.float32(0.0),
+                           thrust_timer=jnp.int32(env.consts.thrust_hover))
         lives = int(state.lives)
         for _ in range(200):
             waiting = int(state.room_timer) < hover_until
-            act = (2 if int(state.player_y) > 20 else 0) if waiting else 5
+            # hover by tapping UP to hold the thrust in its hover band
+            act = (2 if int(state.thrust_timer) < 24 else 0) if waiting else 5
             _obs, state, *_ = env.step(state, act)
             if int(state.lives) < lives:
                 return "died"
@@ -420,7 +428,10 @@ def test_room_9_is_passed_by_waiting_in_the_shaft(env):
         return "stuck"
 
     assert attempt(0) == "died"
-    assert attempt(24) == "through"
+    # one whole 64-frame mouth cycle in the shaft, and the drop is timed
+    # (measured on the engine: waits of 4-16, 60-80 and 124-128 frames get
+    # through, the 64-frame period of the mouth; the rest die)
+    assert attempt(64) == "through"
 
 
 # --- dynamite ---------------------------------------------------------------
@@ -553,7 +564,7 @@ def test_the_hanging_spiders_are_still():
     hold."""
     hanging = of_kind(0)
     assert [(c[0], c[1], c[2]) for _i, c in hanging] == [
-        (2, 64, 109), (6, 24, 71), (8, 24, 71), (13, 60, 109), (15, 77, 70)]
+        (2, 64, 109), (6, 24, 70), (8, 24, 70), (13, 60, 109), (15, 77, 70)]
     for slot, (_room, _x, _y, half, _k) in hanging:
         assert half == 0
         assert HL.CREATURE_MOTION[(L, slot)] == (0, 0, 8)
@@ -566,7 +577,7 @@ def test_the_five_snakes_grow_out_of_the_rock():
     pixel every 2 frames."""
     snakes = of_kind(3)
     assert [(c[0], c[1], c[2]) for _i, c in snakes] == [
-        (6, 112, 112), (11, 88, 111), (12, 56, 72), (12, 96, 111), (13, 112, 72)]
+        (6, 112, 111), (11, 88, 111), (12, 56, 72), (12, 96, 111), (13, 112, 72)]
     for slot, (room, x, y, half, _k) in snakes:
         assert half == 0
         assert HL.CREATURE_MOTION[(L, slot)] == (0, 0, 2), "a pixel every 2 frames"

@@ -9,7 +9,7 @@ import numpy as np
 import pytest
 
 from jaxatari.games import hero_levels as HL
-from jaxatari.games.jax_hero import JaxHero, _LV
+from jaxatari.games.jax_hero import HeroConstants, JaxHero, _LV
 
 
 @pytest.fixture(scope="module")
@@ -97,14 +97,16 @@ def test_flare_stamps_are_the_two_tone_flame_rectangles(env, monkeypatch):
     assert _check_flare_stamps(r, env.consts, JH._LV)
 
 
-def test_the_hero_animates_at_the_three_rates_the_rom_uses(env):
-    """Standing on rock is ONE still picture - the rotor does not turn on the
+def test_the_hero_animates_at_the_three_rates_the_rom_uses():
+    """The earlier hero (mod `slow`; the ROM hero's own animation is pinned
+    in test_rom_rules). Standing on rock is ONE still picture - the rotor does not turn on the
     ground, not even while UP spins the thrust up. Off the ground the rotor
     cycles three poses at ONE frame each, and walking runs its stride at FOUR
     frames a pose.
     """
     import jax
     import jax.numpy as jnp
+    env = JaxHero(HeroConstants(rom_hero=False))
     r = env.renderer
     assert r.PLAYER_FRAMES.shape[0] == 5           # 3 rotor + 2 stride
     assert r.PLAYER_ROTOR_POSES == 3
@@ -284,7 +286,11 @@ def test_the_banner_runs_again_on_a_new_level_but_not_on_a_new_life(env):
     m = c.LEVEL_MINER[0]
     rescue = s.replace(room=m[0], player_x=m[1], player_y=m[2],
                        spider_alive=jnp.zeros_like(s.spider_alive))
-    _, after, _, _, _ = env.step(rescue, 0)
+    after = rescue
+    for _ in range(400):                        # the touch, then the tally
+        _, after, _, _, _ = env.step(after, 0)
+        if int(after.level) == 1:
+            break
     assert int(after.level) == 1
     assert int(after.banner_timer) == c.level_banner_frames
 

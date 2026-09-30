@@ -14,7 +14,7 @@ import jax.numpy as jnp
 import numpy as np
 
 from jaxatari.games import hero_levels as HL
-from jaxatari.games.jax_hero import JaxHero
+from jaxatari.games.jax_hero import HeroConstants, JaxHero
 
 # Compact action indices (see JaxHero.ACTION_SET).
 NOOP, FIRE, UP, RIGHT, LEFT, DOWN = 0, 1, 2, 3, 4, 5
@@ -24,6 +24,24 @@ DOWNRIGHT, DOWNLEFT = 12, 13
 
 def _env():
     return JaxHero()
+
+
+def _slow_env():
+    """The earlier hero (mod `slow`), whose flight model some tests pin."""
+    return JaxHero(HeroConstants(rom_hero=False))
+
+
+def _rescue(env, state, max_frames=600):
+    """Touch the miner from `state` and run the end-of-level tally out: the
+    ROM pays the power and the sticks over several seconds before the next
+    level starts (measured). Returns (state, total reward, done)."""
+    lvl, total = int(state.level), 0.0
+    for _ in range(max_frames):
+        _, state, reward, done, _ = env.step(state, NOOP)
+        total += float(reward)
+        if int(state.level) != lvl or bool(state.level_complete):
+            break
+    return state, total, done
 
 
 def test_reset_starting_inventory():
@@ -54,8 +72,10 @@ def test_power_only_drains_after_first_move():
 
 
 def test_fall_is_constant_one_pixel_per_frame():
-    """Measured: free fall moves exactly 1 px/frame with no acceleration."""
-    env = _env()
+    """The earlier hero (mod `slow`): free fall moves exactly 1 px/frame with
+    no acceleration. The ROM hero falls through its rotor-thrust table
+    instead (see test_rom_rules)."""
+    env = _slow_env()
     _, state = env.reset()
     # mid-air in the central shaft (x~74..88 is open in room 0)
     state = state.replace(player_x=jnp.int32(76), player_y=jnp.int32(40),
@@ -87,7 +107,13 @@ def test_walk_speed_one_pixel_per_frame():
     _, s, _, _, _ = env.step(state, RIGHT)
     assert int(s.player_x) == x0 + 1
     assert int(s.facing) == 1
-    _, s, _, _, _ = env.step(s, LEFT)
+    # he turns only on the 4-px grid (x = 1 mod 4, measured on the ROM): from
+    # x 34 LEFT first finishes the step to 37, then takes him back
+    xs = []
+    for _ in range(5):
+        _, s, _, _, _ = env.step(s, LEFT)
+        xs.append(int(s.player_x))
+    assert xs == [x0 + 2, x0 + 3, x0 + 4, x0 + 3, x0 + 2]
     assert int(s.facing) == -1
 
 
@@ -109,8 +135,9 @@ def test_room_flip_down_and_up():
     env = _env()
     c = env.consts
     _, state = env.reset()
+    # has_moved: a fresh life hovers where it is put until the first input
     state = state.replace(player_x=jnp.int32(76), player_y=jnp.int32(132),
-                          player_vy=jnp.float32(1.0))
+                          player_vy=jnp.float32(1.0), has_moved=jnp.bool_(True))
     for _ in range(4):
         _, state, _, _, _ = env.step(state, NOOP)
         if int(state.room) == 1:
@@ -120,7 +147,7 @@ def test_room_flip_down_and_up():
     # and back up through the same gap (holding UP through the rotor
     # spin-up until the rise carries him across the top edge)
     state = state.replace(player_y=jnp.int32(c.flip_enter_top_y))
-    for _ in range(c.thrust_spinup + 20):
+    for _ in range(c.thrust_max + 20):
         _, state, _, _, _ = env.step(state, UP)
         if int(state.room) == 0:
             break
@@ -324,7 +351,8 @@ def test_touching_a_creature_kills_the_player_even_while_firing():
     _, state = env.reset()
     base = state.replace(level=jnp.int32(3), room=jnp.int32(6),
                          player_x=jnp.int32(133), player_y=jnp.int32(40),
-                         spider_alive=c.SPIDER_VALID[3])
+                         spider_alive=c.SPIDER_VALID[3],
+                         has_moved=jnp.bool_(True))   # else he hovers there
     for action in (FIRE, NOOP):
         s = base
         for _ in range(50):
@@ -333,7 +361,10 @@ def test_touching_a_creature_kills_the_player_even_while_firing():
                 break
         assert int(s.lives) == c.starting_lives - 1, (
             "dropping onto a creature costs a life whether or not fire is held")
-        assert bool(s.spider_alive[slot]), "the touch must not kill the creature"
+        # the ROM then deletes the creature of the band he died in (RAM 34 = 50)
+        # - but it is a death, not a kill: no points for it
+        assert not bool(s.spider_alive[slot]), "the death takes its creature"
+        assert int(s.score) == int(base.score), "and pays nothing for it"
 
 
 def test_laser_does_not_break_walls():
@@ -395,22 +426,22 @@ def test_power_depletion_kills_player():
 
 
 def test_rescuing_miner_advances_level_with_power_bonus():
-    """Rescue pays 1000 + remaining power, then loads the next level."""
+    """Rescue pays 1000, then the tally: 20 per power unit and 50 per stick
+    left, then the next level loads."""
     env = _env()
     c = env.consts
     _, state = env.reset()
     m = c.LEVEL_MINER[0]
     state = state.replace(room=m[0], player_x=m[1], player_y=m[2],
                           spider_alive=jnp.zeros_like(state.spider_alive))
-    power0 = int(state.power)
-    _, s, reward, done, _ = env.step(state, NOOP)
+    # a fresh reset() has not moved yet, so no power has drained: 81 units
+    s, total, done = _rescue(env, state)
     assert int(s.level) == 1
     assert int(s.room) == 0
     assert not bool(done)
     assert not bool(s.miner_rescued)           # next level's miner still trapped
-    # the tally pays 20 points per power-bar pixel still lit (measured)
-    bonus = (power0 // c.power_frames_per_pixel) * c.bonus_per_power_pixel
-    assert float(reward) == float(c.miner_points + bonus)
+    bonus = 81 * c.bonus_per_power_pixel + c.starting_dynamite * c.dynamite_points
+    assert total == float(c.miner_points + bonus)
     assert int(s.power) == c.max_power
     assert int(s.dynamite_count) == c.starting_dynamite
     assert bool((s.spider_alive == c.SPIDER_VALID[1]).all())
@@ -426,6 +457,8 @@ def test_completing_last_level_ends_game():
                           player_x=m[1], player_y=m[2],
                           spider_alive=jnp.zeros_like(state.spider_alive))
     _, s, _, done, _ = env.step(state, NOOP)
+    assert bool(s.miner_rescued) and not bool(done), "the tally runs first"
+    s, _, done = _rescue(env, s)
     assert bool(s.level_complete)
     assert bool(s.miner_rescued)
     assert bool(done)
@@ -665,7 +698,7 @@ def test_lantern_touch_darkens_room_until_next_level():
     # rescue the miner -> next level restores light
     m = c.LEVEL_MINER[3]
     s = s.replace(room=m[0], player_x=m[1], player_y=m[2])
-    _, s, _, _, _ = env.step(s, NOOP)
+    s, _, _ = _rescue(env, s)
     assert int(s.level) == 4
     assert not bool(s.room_dark.any())
 
@@ -751,7 +784,7 @@ def test_advance_chain_walks_every_level():
                               player_x=m[1], player_y=m[2],
                               spider_alive=jnp.zeros_like(state.spider_alive),
                               miner_rescued=jnp.bool_(False))
-        _, state, _, done, _ = env.step(state, NOOP)
+        state, _, done = _rescue(env, state)
         if lvl < n - 1:
             assert int(state.level) == lvl + 1, f"level {lvl} did not advance"
             assert not bool(done)

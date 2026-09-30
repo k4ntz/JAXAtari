@@ -117,6 +117,9 @@ BANDS = [
 # The live-hero ROM capture (the data hero_levels.py ships), as
 # (room, what, x, y) with x the LEFT edge of the drawn box - for a bat, of
 # its sweep; for the tentacle, of its pursuit range. Every row.
+# The creature rows are read with the hero IN the room (2026-09-30): the
+# above-the-picture park drew room 8's bat and spider a row low, e.g.
+# "room 8 spider at x 120: drawn from row 70 with the hero in the room (the capture said 71)".
 CHARACTERS_MD = [
     (1, "lantern", 83, 35), (1, "bat", 44, 64), (1, "spider_free", 128, 104),
     (2, "lantern", 43, 35), (2, "spider", 128, 70), (2, "spider_free", 32, 104),
@@ -125,7 +128,7 @@ CHARACTERS_MD = [
     (5, "lantern", 107, 35), (5, "spider_free", 76, 65),
     (6, "lantern", 79, 35), (6, "bat", 48, 64), (6, "spider_free", 24, 104),
     (7, "lantern", 131, 35), (7, "bat", 100, 64),
-    (8, "bat", 92, 104), (8, "spider", 120, 71),
+    (8, "bat", 92, 103), (8, "spider", 120, 70),
     (9, "lantern", 131, 35), (9, "spider", 64, 110),
     (10, "lantern", 103, 35), (10, "bat", 48, 64), (10, "snake", 24, 111),
     (11, "bat", 44, 103), (11, "spider", 120, 70), (11, "tentacle", 29, 126),
@@ -635,7 +638,7 @@ def test_the_untethered_spiders_bob_7_px_on_32_frames():
 def test_the_hanging_spiders_are_still():
     hanging = of_kind(0)
     assert [(c[0], c[1], c[2]) for _i, c in hanging] == [
-        (2, 128, 70), (8, 120, 71), (9, 64, 110), (11, 120, 70), (14, 24, 70),
+        (2, 128, 70), (8, 120, 70), (9, 64, 110), (11, 120, 70), (14, 24, 70),
         (14, 44, 109), (15, 113, 109)]
     for slot, (_room, _x, _y, half, _k) in hanging:
         assert half == 0

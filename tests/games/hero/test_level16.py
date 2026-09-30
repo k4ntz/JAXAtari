@@ -113,18 +113,21 @@ BANDS = [
 # The live-hero ROM capture (the data hero_levels.py ships), as
 # (room, what, x, y) with x the LEFT edge of the drawn box - for a bat, of
 # its sweep. Every row.
+# The creature rows are read with the hero IN the room (2026-09-30): the
+# above-the-picture park drew five of them 1-2 rows low, e.g.
+# "room 11 spider at x 32: drawn from row 70 with the hero in the room (the capture said 72)".
 CHARACTERS_MD = [
     (1, "lantern", 27, 35), (1, "spider_free", 136, 65),
     (2, "bat", 36, 64), (2, "bat", 48, 103),
-    (3, "lantern", 123, 35), (3, "spider", 76, 110), (3, "spider", 84, 71),
+    (3, "lantern", 123, 35), (3, "spider", 76, 109), (3, "spider", 84, 70),
     (4, "lantern", 107, 35), (4, "spider_free", 44, 65), (4, "snake", 132, 111),
     (5, "lantern", 23, 35), (5, "bat", 52, 103), (5, "spider_free", 56, 65),
     (6, "lantern", 103, 35), (6, "bat", 64, 103),
     (7, "lantern", 139, 35), (7, "spider", 96, 110),
     (8, "lantern", 139, 35), (8, "spider_free", 96, 105),
     (9, "lantern", 139, 35), (9, "spider_free", 96, 105),
-    (10, "lantern", 123, 35), (10, "spider_free", 76, 105), (10, "bat", 108, 65),
-    (11, "spider", 32, 72), (11, "spider", 92, 111),
+    (10, "lantern", 123, 35), (10, "spider_free", 76, 105), (10, "bat", 108, 64),
+    (11, "spider", 32, 70), (11, "spider", 92, 109),
     (12, "bat", 28, 103), (12, "bat", 108, 64),
     (13, "spider_free", 32, 65), (13, "spider", 76, 109),
     (14, "bat", 44, 64), (14, "bat", 92, 103),
@@ -444,12 +447,17 @@ def test_a_mouth_room_is_passed_by_waiting_above_it(env, room):
     assert BANDS[room]["A"][14:22] == "." * 8
 
     def attempt(hover_until):
+        # he comes in slowly, the rotor in its hover band: the ROM hero
+        # cannot brake a 2 px/frame fall before the mouth (his thrust needs
+        # ~40 frames of UP), so a fast entry dies whatever he does next
         state = _state(env, room, player_x=jnp.int32(77), player_y=jnp.int32(2),
-                       player_vy=jnp.float32(2.0))
+                       player_vy=jnp.float32(0.0),
+                       thrust_timer=jnp.int32(env.consts.thrust_hover))
         lives = int(state.lives)
         for _ in range(200):
             waiting = int(state.room_timer) < hover_until
-            act = (2 if int(state.player_y) > 20 else 0) if waiting else 5
+            # hover by tapping UP to hold the thrust in its hover band
+            act = (2 if int(state.thrust_timer) < 24 else 0) if waiting else 5
             _obs, state, *_ = env.step(state, act)
             if int(state.lives) < lives:
                 return "died"
@@ -458,7 +466,10 @@ def test_a_mouth_room_is_passed_by_waiting_above_it(env, room):
         return "stuck"
 
     assert attempt(0) == "died"
-    assert attempt(24) == "through"
+    # one whole 64-frame mouth cycle in the shaft, and the drop is timed
+    # (measured on the engine: waits of 4-16, 60-80 and 124-128 frames get
+    # through, the 64-frame period of the mouth; the rest die)
+    assert attempt(64) == "through"
 
 
 # --- dynamite ---------------------------------------------------------------
@@ -590,7 +601,7 @@ def test_the_hanging_spiders_are_still():
     hold."""
     hanging = of_kind(0)
     assert [(c[0], c[1], c[2]) for _i, c in hanging] == [
-        (3, 76, 110), (3, 84, 71), (7, 96, 110), (11, 32, 72), (11, 92, 111),
+        (3, 76, 109), (3, 84, 70), (7, 96, 110), (11, 32, 70), (11, 92, 109),
         (13, 76, 109), (15, 56, 70)]
     for slot, (_room, _x, _y, half, _k) in hanging:
         assert half == 0

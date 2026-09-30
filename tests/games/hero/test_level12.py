@@ -124,7 +124,10 @@ BANDS = [
 
 # The live-hero ROM capture (the data hero_levels.py ships), as
 # (room, what, x, y) with x the LEFT edge of the drawn box - for a bat, of
-# its sweep. Every row.
+# its sweep. Every row. The creature rows are read with the hero IN the room
+# (2026-09-30): the above-the-picture park drew three bats 1-2 rows low,
+# e.g. "room 15 bat at x 49: drawn from row 103 with the hero in the room
+# (the capture said 105)".
 CHARACTERS_MD = [
     (1, "lantern", 83, 35), (1, "spider", 36, 70), (1, "spider_free", 124, 104),
     (2, "lantern", 31, 35), (2, "spider", 76, 70),
@@ -132,7 +135,7 @@ CHARACTERS_MD = [
     (4, "lantern", 115, 35), (4, "bat", 68, 64), (4, "snake", 72, 111),
     (5, "lantern", 83, 35), (5, "spider", 40, 109), (5, "spider_free", 88, 65),
     (6, "lantern", 139, 35), (6, "bat", 88, 104),
-    (7, "lantern", 131, 35), (7, "bat", 116, 65),
+    (7, "lantern", 131, 35), (7, "bat", 116, 64),
     (8, "spider", 40, 70), (8, "bat", 52, 103),
     (9, "lantern", 107, 35), (9, "bat", 16, 64), (9, "bat", 80, 103),
     (10, "lantern", 107, 35), (10, "spider", 16, 70), (10, "spider_free", 92, 104),
@@ -140,7 +143,7 @@ CHARACTERS_MD = [
     (12, "snake", 88, 72),
     (13, "bat", 32, 64), (13, "spider", 100, 109),
     (14, "bat", 44, 64), (14, "spider", 60, 109),
-    (15, "bat", 49, 105), (15, "bat", 65, 66), (15, "miner", 25, 86),
+    (15, "bat", 49, 103), (15, "bat", 65, 64), (15, "miner", 25, 86),
 ]
 
 # The CENSUS table carried for this level before 2026-09-24
@@ -169,7 +172,7 @@ NOT_IN_CENSUS = {
     4: [("lantern", 115, 35), ("bat", 68, 64), ("snake", 72, 111)],
     5: [("lantern", 83, 35), ("spider", 40, 109), ("spider_free", 88, 65)],
     6: [("lantern", 139, 35), ("bat", 88, 104)],
-    7: [("lantern", 131, 35), ("bat", 116, 65)],
+    7: [("lantern", 131, 35), ("bat", 116, 64)],
     8: [("spider", 40, 70), ("bat", 52, 103)],
     9: [("lantern", 107, 35), ("bat", 16, 64), ("bat", 80, 103)],
     10: [("lantern", 107, 35), ("spider", 16, 70), ("spider_free", 92, 104)],
@@ -177,7 +180,7 @@ NOT_IN_CENSUS = {
     12: [("snake", 88, 72)],
     13: [("bat", 32, 64), ("spider", 100, 109)],
     14: [("bat", 44, 64), ("spider", 60, 109)],
-    15: [("bat", 49, 105), ("bat", 65, 66), ("miner", 25, 86)],
+    15: [("bat", 49, 103), ("bat", 65, 64), ("miner", 25, 86)],
 }
 
 KIND_NAME = {0: "spider", 1: "bat", 3: "snake", 4: "spider_free"}
@@ -517,7 +520,9 @@ def test_the_miner_is_in_the_last_room():
 
 def test_the_snakes_are_anchored_in_the_wall_on_their_left():
     """One grows out of room 4's floor hole, one out of the rock between room
-    11's waters, one out of the right face of room 12's rock wall."""
+    11's waters, one out of the right face of room 12's rock wall. They
+    stretch 2 frames per pixel on a 32-frame cycle, as level 10's and 14's do
+    (measured on the ROM: "pose held 2 frames"), so the pose hold is 2."""
     snakes = [(r, x, y) for r, x, y, _h, k in HL.SPIDERS[L - 1] if k == 3]
     assert snakes == [(4, 72, 111), (11, 92, 111), (12, 88, 72)]
     for room, x, y in snakes:
@@ -525,7 +530,7 @@ def test_the_snakes_are_anchored_in_the_wall_on_their_left():
         assert BANDS[room][band][(x - 8) // 4 - 1] in "#%", f"room {room}"
         assert BANDS[room][band][(x - 8) // 4] in ".~", f"room {room}"
         slot = HL.SPIDERS[L - 1].index((room, x, y, 0, 3))
-        assert HL.CREATURE_MOTION[(L, slot)] == (0, 0, 4)
+        assert HL.CREATURE_MOTION[(L, slot)] == (0, 0, 2)
 
 
 def test_the_eleven_bats_patrol_22_px_on_92_frames_and_hold_a_pose_4():

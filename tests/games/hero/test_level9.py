@@ -108,18 +108,20 @@ BANDS = [
 ]
 
 # The level 9 entity table - rewritten on 2026-09-23 from the live-hero ROM
-# capture - as (room, what, x, y), x the left edge of the drawn box. Every row.
+# capture, rows re-read with the hero IN the room on 2026-09-30 (the above
+# park drew five creatures a row low) - as (room, what, x, y), x the left
+# edge of the drawn box. Every row.
 CHARACTERS_MD = [
     (1, "lantern", 83, 35), (1, "spider", 124, 109), (1, "spider_free", 28, 65),
-    (2, "lantern", 131, 35), (2, "spider", 56, 110),
+    (2, "lantern", 131, 35), (2, "spider", 56, 109),
     (3, "lantern", 131, 35), (3, "spider_free", 60, 105),
     (4, "lantern", 131, 35),
-    (5, "lantern", 131, 35), (5, "bat", 56, 104),
-    (6, "lantern", 131, 35), (6, "spider", 92, 71),
+    (5, "lantern", 131, 35), (5, "bat", 56, 103),
+    (6, "lantern", 131, 35), (6, "spider", 92, 70),
     (7, "lantern", 67, 35), (7, "spider", 24, 109),
     (8, "lantern", 27, 35), (8, "spider_free", 64, 65),
     (9, "lantern", 83, 35), (9, "bat", 40, 103), (9, "spider", 84, 70),
-    (10, "lantern", 131, 35), (10, "bat", 76, 104), (10, "spider", 128, 71),
+    (10, "lantern", 131, 35), (10, "bat", 76, 103), (10, "spider", 128, 70),
     (11, "bat", 60, 103),
     (12, "spider", 112, 70), (12, "snake", 88, 111),
     (13, "bat", 80, 103), (13, "spider", 112, 70),
@@ -158,26 +160,24 @@ OLD_CENSUS = [
 #           none because it is the UNTETHERED spider (kind 4): warm ramp, no
 #           grey, seven rows (a bat is 11 rows with grey wings). It bobs 7 px,
 #           so the box starts at 105.
-#   room 5  a bat that PATROLS 22 px and bobs 7; the box starts at 104.
+#   room 5  a bat that PATROLS 22 px and bobs 7; the box starts at 103.
 #   room 9  the same; the box starts at 103.
-#   room 2  a still spider, drawn with its top on row 110 on all 1500 frames
-#           of a live watch. The census's 109 is the pose the ROM draws
-#           after the reading park has killed the hero.
+# (Room 2's still spider was once shipped at 110, read from the above park,
+# which draws it a row low; re-read in the room it is the census's 109.)
 SHIPPED_AS = {
     (3, "bat", 60, 111): ("spider_free", 60, 105),
-    (5, "bat", 56, 110): ("bat", 56, 104),
+    (5, "bat", 56, 110): ("bat", 56, 103),
     (9, "bat", 40, 110): ("bat", 40, 103),
-    (2, "spider", 56, 109): ("spider", 56, 110),
 }
 
 # What the ROM draws that the old census has no row for, as (what, x, y).
 # Rooms 1-10: hidden from it by its lethal park. Rooms 11-15: never reached.
 NOT_IN_CENSUS = {
     1: [("spider_free", 28, 65)],
-    6: [("spider", 92, 71)],
+    6: [("spider", 92, 70)],
     8: [("spider_free", 64, 65)],
     9: [("spider", 84, 70)],
-    10: [("bat", 76, 104), ("spider", 128, 71)],
+    10: [("bat", 76, 103), ("spider", 128, 70)],
     11: [("bat", 60, 103)],
     12: [("snake", 88, 111), ("spider", 112, 70)],
     13: [("bat", 80, 103), ("spider", 112, 70)],

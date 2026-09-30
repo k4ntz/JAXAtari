@@ -107,20 +107,23 @@ BANDS = [
 
 # The live-hero ROM capture (the data hero_levels.py ships), as
 # (room, what, x, y) with x the LEFT edge of the drawn box - for a bat, of
-# its sweep. Every row.
+# its sweep. Every row. The creature rows are read with the hero IN the room
+# (2026-09-30): the above-the-picture park drew seven of them 1-2 rows low,
+# e.g. "room 12 spider at x 60: drawn from row 109 with the hero in the room
+# (the capture said 111)".
 CHARACTERS_MD = [
     (1, "lantern", 83, 35), (1, "spider", 56, 109),
     (2, "lantern", 107, 35), (2, "bat", 40, 64), (2, "spider_free", 132, 104),
-    (3, "lantern", 135, 35), (3, "bat", 20, 65), (3, "spider", 80, 110),
+    (3, "lantern", 135, 35), (3, "bat", 20, 64), (3, "spider", 80, 109),
     (4, "lantern", 83, 35), (4, "spider", 20, 109), (4, "bat", 112, 64),
     (5, "lantern", 47, 35), (5, "spider_free", 20, 104), (5, "bat", 48, 64),
-    (6, "lantern", 135, 35), (6, "bat", 52, 104), (6, "spider", 76, 71),
+    (6, "lantern", 135, 35), (6, "bat", 52, 103), (6, "spider", 76, 70),
     (7, "lantern", 107, 35), (7, "spider_free", 64, 104),
-    (8, "lantern", 139, 35), (8, "spider_free", 76, 105), (8, "spider", 92, 71),
+    (8, "lantern", 139, 35), (8, "spider_free", 76, 105), (8, "spider", 92, 70),
     (9, "lantern", 139, 35), (9, "spider_free", 100, 105),
     (10, "lantern", 107, 35), (10, "spider", 60, 70),
     (11, "bat", 92, 64), (11, "spider_free", 108, 104),
-    (12, "spider", 60, 111), (12, "spider", 124, 72),
+    (12, "spider", 60, 109), (12, "spider", 124, 70),
     (13, "bat", 92, 64), (13, "spider", 100, 109),
     (14, "spider", 32, 109), (14, "spider_free", 120, 65),
     (15, "bat", 44, 64), (15, "miner", 128, 86),
@@ -156,14 +159,16 @@ OLD_CENSUS = [
 #                  creature has none because it is the UNTETHERED spider
 #                  (kind 4): warm ramp, no grey. It bobs 7 px, so its box
 #                  starts at 104-105 and the census's frozen 111 is inside it.
-#   room 6         a bat that PATROLS 22 px and bobs 7; the box starts at 104.
-#   room 3         a still hanging spider the frozen room drew a row HIGH, as
-#                  level 9 room 2's was (frozen 109, live 110).
+#   room 6         a bat that PATROLS 22 px and bobs 7; the box starts at 103
+#                  ("drawn from row 103 with the hero in the room (the
+#                  capture said 104)").
+#   room 3's spider is NOT here: the census's row 109 is the row the ROM
+#   draws with the hero in the room ("room 3 spider at x 80: drawn from row
+#   109 with the hero in the room (the capture said 110)").
 SHIPPED_AS = {
     (2, "bat", 132, 111): ("spider_free", 132, 104),
-    (3, "spider", 80, 109): ("spider", 80, 110),
     (5, "bat", 20, 111): ("spider_free", 20, 104),
-    (6, "bat", 52, 110): ("bat", 52, 104),
+    (6, "bat", 52, 110): ("bat", 52, 103),
     (7, "bat", 64, 111): ("spider_free", 64, 104),
     (8, "bat", 76, 111): ("spider_free", 76, 105),
     (9, "bat", 100, 111): ("spider_free", 100, 105),
@@ -173,15 +178,15 @@ SHIPPED_AS = {
 # Rooms 1-10: hidden from it by its lethal park. Rooms 11-15: never reached.
 NOT_IN_CENSUS = {
     2: [("bat", 40, 64)],
-    3: [("bat", 20, 65)],
+    3: [("bat", 20, 64)],
     4: [("bat", 112, 64)],
     5: [("bat", 48, 64)],
-    6: [("spider", 76, 71)],
-    8: [("lantern", 139, 35), ("spider", 92, 71)],
+    6: [("spider", 76, 70)],
+    8: [("lantern", 139, 35), ("spider", 92, 70)],
     9: [("lantern", 139, 35)],
     10: [("lantern", 107, 35), ("spider", 60, 70)],
     11: [("bat", 92, 64), ("spider_free", 108, 104)],
-    12: [("spider", 60, 111), ("spider", 124, 72)],
+    12: [("spider", 60, 109), ("spider", 124, 70)],
     13: [("bat", 92, 64), ("spider", 100, 109)],
     14: [("spider", 32, 109), ("spider_free", 120, 65)],
     15: [("bat", 44, 64), ("miner", 128, 86)],
@@ -523,8 +528,8 @@ def test_the_hanging_spiders_are_still():
     no patrol, no bob, and two poses on an 8-frame hold."""
     hanging = [(i, c) for i, c in enumerate(HL.SPIDERS[L - 1]) if c[4] == 0]
     assert [(c[0], c[1], c[2]) for _i, c in hanging] == [
-        (1, 56, 109), (3, 80, 110), (4, 20, 109), (6, 76, 71), (8, 92, 71),
-        (10, 60, 70), (12, 60, 111), (12, 124, 72), (13, 100, 109),
+        (1, 56, 109), (3, 80, 109), (4, 20, 109), (6, 76, 70), (8, 92, 70),
+        (10, 60, 70), (12, 60, 109), (12, 124, 70), (13, 100, 109),
         (14, 32, 109)]
     for slot, (_room, _x, _y, half, _k) in hanging:
         assert half == 0

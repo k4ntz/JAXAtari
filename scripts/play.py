@@ -101,46 +101,7 @@ ACTION_NAMES = {
     if not k.startswith("_") and isinstance(v, int)
 }
 
-def _level_number(text: str) -> int:
-    """argparse type for -l/--level: a 1-based level number."""
-    try:
-        value = int(text)
-    except ValueError:
-        raise argparse.ArgumentTypeError(f"level must be an integer, got {text!r}")
-    if value < 1:
-        raise argparse.ArgumentTypeError(f"level numbers start at 1, got {value}")
-    return value
-
-
-def debug_flag_mods(args) -> list:
-    """Mod names selected by the level-debugging shortcuts (-l, -lifes, -granades).
-
-    The flags are only shorthands for mods a game may provide under these
-    conventional names (H.E.R.O. does; see src/jaxatari/games/mods/hero_mods.py):
-      -l N       -> start_level_N
-      -lifes     -> unlimited_lives
-      -granades  -> unlimited_dynamite
-    """
-    mods = []
-    if getattr(args, "level", None) is not None:
-        mods.append(f"start_level_{args.level}")
-    if getattr(args, "unlimited_lives", False):
-        mods.append("unlimited_lives")
-    if getattr(args, "unlimited_dynamite", False):
-        mods.append("unlimited_dynamite")
-    return mods
-
-
-def merge_debug_mods(mods, args):
-    """Append the debug-flag mods to an (already normalized) -m list, skipping duplicates."""
-    base = list(mods) if mods else []
-    extra = [m for m in debug_flag_mods(args) if m not in base]
-    if not extra:
-        return mods
-    return base + extra
-
-
-def build_parser() -> argparse.ArgumentParser:
+def main():
     parser = argparse.ArgumentParser(
         description="Play a JAXAtari game, record your actions or replay them."
     )
@@ -192,23 +153,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--fps",
         type=int,
-        default=None,
-        help="Frame rate for the game (default 30; H.E.R.O. 60 like the Atari, "
-             "30 with its 'slow' mod).",
-    )
-    parser.add_argument(
-        "--speed",
-        type=float,
-        default=None,
-        help="Game-speed multiplier on the frame rate (default 1.0; H.E.R.O. 1.5, "
-             "i.e. 90 fps). While playing, + and - change it by 0.25.",
-    )
-    parser.add_argument(
-        "--pixel-aspect",
-        type=float,
-        default=None,
-        help="Width/height of one game pixel on screen (default 1.0; H.E.R.O. "
-             "1.75, the Atari's wide TV pixel, which gives a 4:3 picture).",
+        default=30,
+        help="Frame rate for the game.",
     )
     parser.add_argument(
         "-v",
@@ -244,60 +190,10 @@ def build_parser() -> argparse.ArgumentParser:
         help="Enable profiling.",
     )
 
-    debug = parser.add_argument_group(
-        "level debugging shortcuts",
-        "Shorthands for mods a game may provide under conventional names "
-        "(H.E.R.O. does). Example: -g hero -l 5 -lifes -granades",
-    )
-    debug.add_argument(
-        "-l", "--level",
-        type=_level_number,
-        default=None,
-        metavar="N",
-        help="Start every episode on level N (1-based) instead of level 1. Applies the start_level_N mod.",
-    )
-    debug.add_argument(
-        "-lifes", "--unlimited-lives",
-        dest="unlimited_lives",
-        action="store_true",
-        help="Unlimited lives: dying still respawns you but never costs a life. Applies the unlimited_lives mod.",
-    )
-    debug.add_argument(
-        "-granades", "--unlimited-dynamite",
-        dest="unlimited_dynamite",
-        action="store_true",
-        help="Unlimited grenades/dynamite: planting never uses a stick. Applies the unlimited_dynamite mod.",
-    )
-    return parser
-
-
-def main():
-    parser = build_parser()
     args = parser.parse_args()
 
     # Normalize mods so we accept space-separated, comma-separated, or mixed
     args.mods = _normalize_mods(args.mods)
-
-    # -l / -lifes / -granades are shorthands for mods; fold them into the list
-    debug_mods = debug_flag_mods(args)
-    if debug_mods:
-        args.mods = merge_debug_mods(args.mods, args)
-        print(f"Debug flags selected mods {debug_mods}; loading with mods: {args.mods}")
-
-    # Frame rate and pixel shape. H.E.R.O. plays at the Atari's own 60 fps
-    # and with its wide TV pixels; its 'slow' mod keeps the earlier 30 fps.
-    is_hero = str(args.game).lower() == "hero"
-    if args.fps is None:
-        args.fps = 60 if is_hero and "slow" not in (args.mods or []) else 30
-    # --speed runs more game frames per second: everything - hero, laser,
-    # creatures, timers - speeds up together and the game rules stay as they are.
-    if args.speed is None:
-        args.speed = 1.5 if is_hero and "slow" not in (args.mods or []) else 1.0
-    base_fps = args.fps
-    args.fps = max(1, int(round(base_fps * args.speed)))
-    if args.pixel_aspect is None:
-        args.pixel_aspect = 1.75 if is_hero else 1.0
-    upscale_x = UPSCALE_FACTOR * args.pixel_aspect
 
     execute_without_rendering = False
 
@@ -383,7 +279,7 @@ def main():
         pygame.display.set_caption(f"JAXAtari Game {args.game}")
         env_render_shape = jitted_render(state).shape[:2]
         window = pygame.display.set_mode(
-            (int(round(env_render_shape[1] * upscale_x)), env_render_shape[0] * UPSCALE_FACTOR)
+            (env_render_shape[1] * UPSCALE_FACTOR, env_render_shape[0] * UPSCALE_FACTOR)
         )
         clock = pygame.time.Clock()
 
@@ -447,7 +343,7 @@ def main():
             obs, state, reward, done, info = jitted_step(state, action)
             if not execute_without_rendering:
                 image = jitted_render(state)
-                update_pygame(window, image, UPSCALE_FACTOR, 160, 210, SCALING_FACTOR_X=upscale_x)
+                update_pygame(window, image, UPSCALE_FACTOR, 160, 210)
                 clock.tick(frame_rate)
 
                 # Check for quit event
@@ -465,11 +361,11 @@ def main():
     # display the first frame (reset frame) -> purely for aesthetics
     if not execute_without_rendering:
         image = jitted_render(state)
-        update_pygame(window, image, UPSCALE_FACTOR, 160, 210, SCALING_FACTOR_X=upscale_x)
+        update_pygame(window, image, UPSCALE_FACTOR, 160, 210)
         clock.tick(frame_rate)
 
     def running_fn():
-        nonlocal running, pause, frame_by_frame, next_frame_asked, frame_rate
+        nonlocal running, pause, frame_by_frame, next_frame_asked
         nonlocal obs, state, reset_counter, total_return, action_key
         while running:
             # check for external actions
@@ -505,18 +401,12 @@ def main():
                                 print(f"Failed to save state: {e}")
                         elif event.key == pygame.K_f:
                             frame_by_frame = not frame_by_frame
-                        elif event.key in (pygame.K_PLUS, pygame.K_EQUALS, pygame.K_KP_PLUS,
-                                           pygame.K_MINUS, pygame.K_KP_MINUS):
-                            faster = event.key in (pygame.K_PLUS, pygame.K_EQUALS, pygame.K_KP_PLUS)
-                            args.speed = min(4.0, max(0.25, args.speed + (0.25 if faster else -0.25)))
-                            frame_rate = max(1, int(round(base_fps * args.speed)))
-                            print(f"Speed x{args.speed:.2f} ({frame_rate} fps)")
                         elif event.key == pygame.K_n:
                             next_frame_asked = True
 
                 if pause or (frame_by_frame and not next_frame_asked):
                     image = jitted_render(state)
-                    update_pygame(window, image, UPSCALE_FACTOR, 160, 210, SCALING_FACTOR_X=upscale_x)
+                    update_pygame(window, image, UPSCALE_FACTOR, 160, 210)
                     clock.tick(frame_rate)
                     continue
             
@@ -561,7 +451,7 @@ def main():
             # Render the environment
             if not execute_without_rendering:
                 image = jitted_render(state)
-                update_pygame(window, image, UPSCALE_FACTOR, 160, 210, SCALING_FACTOR_X=upscale_x)
+                update_pygame(window, image, UPSCALE_FACTOR, 160, 210)
                 clock.tick(frame_rate)
             
             # Handle loop for no-rendering execution

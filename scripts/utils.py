@@ -37,16 +37,13 @@ def _warn_deprecated_obs_to_flat_array(env: JaxEnvironment) -> None:
             stacklevel=2,
         )
 
-def update_pygame(pygame_screen, raster, SCALING_FACTOR=3, WIDTH=400, HEIGHT=300,
-                  SCALING_FACTOR_X=None):
+def update_pygame(pygame_screen, raster, SCALING_FACTOR=3, WIDTH=400, HEIGHT=300):
     """Updates the Pygame display with the rendered raster.
 
     Args:
         pygame_screen: The Pygame screen surface.
         raster: JAX array of shape (Height, Width, 3/4) containing the image data.
         SCALING_FACTOR: Factor to scale the raster for display.
-        SCALING_FACTOR_X: Horizontal factor, if it differs from SCALING_FACTOR
-            (an Atari pixel is wider than it is tall on a TV).
         WIDTH: Expected width of the input raster (used for scaling calculation).
         HEIGHT: Expected height of the input raster (used for scaling calculation).
     """
@@ -65,8 +62,7 @@ def update_pygame(pygame_screen, raster, SCALING_FACTOR=3, WIDTH=400, HEIGHT=300
 
     # Pygame scale expects target (width, height)
     # Note: raster_np is (H, W, C), so shape[1] is width and shape[0] is height
-    scale_x = SCALING_FACTOR if SCALING_FACTOR_X is None else SCALING_FACTOR_X
-    target_width_px = int(round(raster_np.shape[1] * scale_x))
+    target_width_px = int(raster_np.shape[1] * SCALING_FACTOR)
     target_height_px = int(raster_np.shape[0] * SCALING_FACTOR)
 
 

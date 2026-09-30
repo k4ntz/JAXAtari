@@ -6,8 +6,7 @@ The level data lives in hero_levels.py.
 Ground truth / provenance
 -------------------------
 Everything gameplay-visible here was measured directly from the Activision
-H.E.R.O. ROM running under ALE (see scripts/hero_record_level.py and the
-capture notes below): the per-room background pixels, wall collision
+H.E.R.O. ROM running under ALE (see the capture notes below): the per-room background pixels, wall collision
 rectangles, palette, HUD layout, player/creature/miner sprites, physics
 constants, weapon behaviour and room-transition model. The measured data
 lives in hero_levels.py (palette-indexed RLE screens + object tables).
@@ -55,8 +54,9 @@ Measured mechanics
     in the CURRENT room, in the column of death (measured); power refills.
     The creature in the band he died in dies with him, for no points, and
     stays dead for the level (measured).
-  * Miner rescue: +1000 plus an end-of-level tally of 20 points per power-bar
-    pixel still lit (measured: a clean level-1 clear pays ~1300-1600).
+  * Miner rescue: +1000, then an animated end-of-level tally (measured): 20
+    points per power unit left while the bar drains, then 50 per dynamite
+    stick left while the icons go, then the next level. Lives pay nothing.
   * Lives: start 4 (measured), +1 every 20000 points, capped at 6 heroes in
     reserve (a counter of 7, since one of them is the one on screen).
 
@@ -66,8 +66,9 @@ Leg/rotor animation frames, the explosion flash sprite and the score digit
 font for digits not observed in captures are hand-drawn approximations in the
 measured palette. The publisher's ACTIVISION wordmark is deliberately not
 reproduced: rows 189-209 stay black. The power gauge is an internal frame
-counter (78 bar pixels x 68 frames of movement each, measured) so the HUD bar
-and the end-of-level bonus both fall out of the same number.
+counter (81 units x 64 frames each, draining every frame from the first input
+of a life, measured) so the HUD bar and the end-of-level bonus both fall out
+of the same number.
 
 Conventions follow the other games in this package (see jax_freeway.py):
 constants subclass AutoDerivedConstants; state/observation/info are
@@ -159,6 +160,13 @@ _MAX_FLARES = max(1, max(len(f) for f in HL.FLARES))
 _MAX_MAGMA = max(1, max(len(m) for m in HL.MAGMA))
 _MAX_MOUTHS = max(1, max(len(m) for m in HL.MAGMA_MOUTHS))
 _MOUTH_Y, _MOUTH_H = 60, 39          # a mouth is corridor magma: rows 60-98
+
+
+def _power_units(c, power):
+    """The ROM's gauge (RAM 43) for `power` frames left: a unit is 64 frames,
+    and a started one still counts - a full life is 81 units, and the unit
+    count drops on the 64th, 128th, ... frame of drain (measured)."""
+    return (power + c.power_frames_per_pixel - 1) // c.power_frames_per_pixel
 
 
 def _mouth_closed(c, lvl, room_timer):
@@ -739,11 +747,16 @@ class HeroConstants(AutoDerivedConstants):
     starting_dynamite: int = struct.field(pytree_node=False, default=6)
 
     # --- Power / lives / scoring ---
-    # The gauge is 78 bar pixels wide and each pixel is 68 frames of MOVEMENT
-    # (walking or hovering). Standing perfectly still costs nothing at all -
-    # 3,000 idle frames were measured against an unmoved gauge.
-    power_frames_per_pixel: int = struct.field(pytree_node=False, default=68)
-    max_power: int = struct.field(pytree_node=False, default=78 * 68)
+    # Measured on the ROM 2026-09-29 (RAM 43 is the gauge): a life starts with
+    # 81 units of power and loses one every 64 frames from the FIRST input on,
+    # whatever he does - standing still costs the same as walking or flying
+    # ("Power begins to diminish when the Joystick is moved at the beginning
+    # of each level or after a reserve life appears", the Activision manual).
+    # The bar shows at most 78 of them, so it first shrinks on frame 255; it
+    # is empty on frame 5,184 (86 s) and he dies. (The earlier "idle costs
+    # nothing" was read before the first input, when nothing drains.)
+    power_frames_per_pixel: int = struct.field(pytree_node=False, default=64)
+    max_power: int = struct.field(pytree_node=False, default=81 * 64)
     power_drain_per_frame: int = struct.field(pytree_node=False, default=1)
     # brief creature-proof grace after a respawn (the respawn spot can sit
     # inside a creature's patrol zone, as on the real console)
@@ -757,11 +770,18 @@ class HeroConstants(AutoDerivedConstants):
     creature_points: int = struct.field(pytree_node=False, default=50)
     wall_points: int = struct.field(pytree_node=False, default=75)
     miner_points: int = struct.field(pytree_node=False, default=1000)
-    # End-of-level tally: measured as an animated payout "almost all of it in
-    # ticks of 20", proportional to the power left. 20 points per bar pixel
-    # still lit puts a full gauge at 1560, which is the measured range for a
-    # clean level-1 clear (1300-1600).
+    # End-of-level tally, measured on the ROM 2026-09-29 (level 1, three runs
+    # with 79, 79 and 23 units and 6, 0 and 3 sticks left): the touch pays
+    # 1000; from 3 frames later every power unit left pays 20, two units in
+    # every 4 frames (on frames +0 and +1 of each four) while the bar drains;
+    # the first stick left pays 50 on the frame of the last unit and the rest
+    # one every 16 frames, each icon going as it is paid; 16 frames after the
+    # last stick (on the last unit's frame if there is none) the next level
+    # starts. Lives are not paid for (the manual lists power and dynamite).
     bonus_per_power_pixel: int = struct.field(pytree_node=False, default=20)
+    dynamite_points: int = struct.field(pytree_node=False, default=50)
+    tally_first_unit: int = struct.field(pytree_node=False, default=3)
+    tally_stick_frames: int = struct.field(pytree_node=False, default=16)
 
     # --- Creatures and magma (the "spiders" arrays hold every kind):
     # kind 0 spider: 6 thread rows then a 5 row body; the drawn canvas is
@@ -1023,8 +1043,10 @@ class HeroState:
     thrust_timer: chex.Array      # ROM hero: rotor thrust T 0-63 (RAM 105); earlier hero: frames UP held
     room: chex.Array              # current room within the level
     facing: chex.Array            # -1 left, +1 right
-    walk_timer: chex.Array
-    has_moved: chex.Array         # power only drains after the first move
+    walk_timer: chex.Array        # ROM hero: frames since the walk began (see _player_frame)
+    walk_held: chex.Array         # ROM hero: LEFT or RIGHT was held last frame
+    walk_dir: chex.Array          # ROM hero: -1 / 0 / +1, the way he moved last frame
+    has_moved: chex.Array        # power only drains after the first move
     laser_timer: chex.Array       # frames of continuous fire; 0 = not firing
     melted: chex.Array            # (max_rooms, 38) columns the beam has eaten
     burn_cell: chex.Array         # column the beam is currently eating, -1 = none
@@ -1045,6 +1067,9 @@ class HeroState:
     room_dark: chex.Array         # (max_rooms,) lantern destroyed -> dark
     invuln_timer: chex.Array      # creature-proof frames after a respawn
     miner_rescued: chex.Array
+    tally_timer: chex.Array       # end-of-level tally: frames since the miner + 1; 0 = none
+    tally_units: chex.Array       # power units left when he reached the miner
+    tally_sticks: chex.Array      # dynamite sticks left when he reached the miner
     level_complete: chex.Array
     banner_timer: chex.Array      # frames of "LEVEL: n" left over the score
     raft_x: chex.Array            # the level's raft, left edge (HL.RAFTS)
@@ -1127,6 +1152,8 @@ class JaxHero(JaxEnvironment[HeroState, HeroObservation, HeroInfo, HeroConstants
             room=jnp.array(0, dtype=jnp.int32),
             facing=jnp.array(1, dtype=jnp.int32),
             walk_timer=jnp.array(0, dtype=jnp.int32),
+            walk_held=jnp.array(False, dtype=jnp.bool_),
+            walk_dir=jnp.array(0, dtype=jnp.int32),
             has_moved=jnp.array(False, dtype=jnp.bool_),
             laser_timer=jnp.array(0, dtype=jnp.int32),
             melted=jnp.zeros((c.max_rooms, c.num_cells), dtype=jnp.bool_),
@@ -1148,6 +1175,9 @@ class JaxHero(JaxEnvironment[HeroState, HeroObservation, HeroInfo, HeroConstants
             room_dark=jnp.zeros((c.max_rooms,), dtype=jnp.bool_),
             invuln_timer=jnp.array(0, dtype=jnp.int32),
             miner_rescued=jnp.array(False, dtype=jnp.bool_),
+            tally_timer=jnp.array(0, dtype=jnp.int32),
+            tally_units=jnp.array(0, dtype=jnp.int32),
+            tally_sticks=jnp.array(0, dtype=jnp.int32),
             level_complete=jnp.array(False, dtype=jnp.bool_),
             banner_timer=jnp.array(c.level_banner_frames, dtype=jnp.int32),
             raft_x=c.RAFT_START[0],
@@ -1251,6 +1281,11 @@ class JaxHero(JaxEnvironment[HeroState, HeroObservation, HeroInfo, HeroConstants
             [Action.DOWN, Action.DOWNFIRE, Action.DOWNLEFT, Action.DOWNRIGHT], dtype=jnp.int32))
         laser_fire = jnp.isin(atari_action, jnp.array(
             [Action.FIRE, Action.UPFIRE, Action.LEFTFIRE, Action.RIGHTFIRE], dtype=jnp.int32))
+        # during the end-of-level tally the ROM takes no input: he stands by
+        # the miner while the power and the sticks are paid out
+        tallying = state.tally_timer > 0
+        up, left, right, down, laser_fire = (
+            k & ~tallying for k in (up, left, right, down, laser_fire))
 
         # --- lay dynamite (DOWN while standing on solid ground, measured;
         # DOWN in mid-air only makes him sink faster, see below) ---
@@ -1265,11 +1300,54 @@ class JaxHero(JaxEnvironment[HeroState, HeroObservation, HeroInfo, HeroConstants
         dynamite_count = jnp.where(can_place, state.dynamite_count - 1, state.dynamite_count).astype(jnp.int32)
 
         # --- horizontal movement (measured 1 px/frame) ---
-        dx = (right.astype(jnp.int32) - left.astype(jnp.int32)) * c.move_speed
-        cand_x = jnp.clip(state.player_x + dx, 8, c.screen_width - 8 - c.player_width).astype(jnp.int32)
+        held_dir = right.astype(jnp.int32) - left.astype(jnp.int32)
+        x_lo, x_hi = 8, c.screen_width - 8 - c.player_width
+
+        def _free(x):
+            return (x >= x_lo) & (x <= x_hi) & ~self._hits_wall(state, x, state.player_y)
+
+        if c.rom_hero:
+            # The ROM only stops or turns him where x = 1 (mod 4): between two
+            # of those he walks on, 1 px a frame, the way he was going - so a
+            # release coasts 0-3 px and a reversal first finishes the step
+            # (measured 2026-09-29, level 1 room 0, on the ground and hovering).
+            # Blocked mid-step he stays put while the key still pushes that
+            # way, and otherwise steps back to the grid (the ROM: 54 -> 53).
+            on_grid = ((state.player_x - 1) % 4) == 0
+            mid_step = (~on_grid) & (state.walk_dir != 0)
+            ahead_free = _free(state.player_x + state.walk_dir)
+            # (pressing the other way there, the step back and the first step
+            # of the new walk come in the same frame: 54 -> 52)
+            back = jnp.where(held_dir == -state.walk_dir, 2, 1) * -state.walk_dir
+            back = jnp.where(_free(state.player_x + back), back, -state.walk_dir)
+            dx = jnp.where(~mid_step, held_dir,
+                           jnp.where(ahead_free, state.walk_dir,
+                                     jnp.where(held_dir == state.walk_dir, 0,
+                                               back))) * c.move_speed
+        else:
+            dx = held_dir * c.move_speed
+        cand_x = jnp.clip(state.player_x + dx, x_lo, x_hi).astype(jnp.int32)
         x_blocked = self._hits_wall(state, cand_x, state.player_y)
         new_x = jnp.where(x_blocked, state.player_x, cand_x).astype(jnp.int32)
-        new_facing = jnp.where(right, 1, jnp.where(left, -1, state.facing)).astype(jnp.int32)
+        if c.rom_hero:
+            # he faces the way he goes; a key pressed mid-step turns him only
+            # when the step is done
+            turn_to = jnp.where(mid_step, state.facing, held_dir)
+            stepped_back = mid_step & ~ahead_free
+            new_facing = jnp.where(stepped_back, state.facing,
+                          jnp.where(new_x != state.player_x,
+                                   jnp.sign(new_x - state.player_x),
+                                   jnp.where(turn_to != 0, turn_to,
+                                             state.facing))).astype(jnp.int32)
+            # pushing into a wall counts as going that way: let go there, off
+            # the grid, and he steps back onto it (the ROM: 54 -> 53, 16 -> 17)
+            new_walk_dir = jnp.where(new_x != state.player_x,
+                                     jnp.sign(new_x - state.player_x),
+                                     jnp.where(dx != 0, jnp.sign(dx),
+                                               held_dir)).astype(jnp.int32)
+        else:
+            new_facing = jnp.where(right, 1, jnp.where(left, -1, state.facing)).astype(jnp.int32)
+            new_walk_dir = jnp.int32(0)
 
         if c.rom_hero:
             # --- vertical: the ROM's rotor thrust (see thrust_max). A fresh
@@ -1403,7 +1481,19 @@ class JaxHero(JaxEnvironment[HeroState, HeroObservation, HeroInfo, HeroConstants
         has_moved = state.has_moved | moved_input
         # carried on the raft he stands still on it; he is not walking
         moved_h = (new_x != state.player_x) & (~riding)
-        walk_timer = jnp.where(moved_h, state.walk_timer + 1, 0).astype(jnp.int32)
+        if c.rom_hero:
+            # the legs follow the KEY, not the feet: they run while LEFT or
+            # RIGHT is held, against a wall too, and for the one frame after
+            # it is let go (see _player_frame); the count starts at 1 on the
+            # first held frame
+            walk_held = (left | right) & (~riding)
+            walk_timer = jnp.where(state.walk_held, state.walk_timer + 1,
+                                   jnp.where(walk_held, 1, 0)).astype(jnp.int32)
+            walk_dir = jnp.where(riding, 0, new_walk_dir).astype(jnp.int32)
+        else:
+            walk_held = jnp.bool_(False)
+            walk_dir = jnp.int32(0)
+            walk_timer = jnp.where(moved_h, state.walk_timer + 1, 0).astype(jnp.int32)
 
         # --- laser: a bolt that flies, relaunched while fire is held ---
         laser_timer = jnp.where(laser_fire, state.laser_timer + 1, 0).astype(jnp.int32)
@@ -1709,29 +1799,55 @@ class JaxHero(JaxEnvironment[HeroState, HeroObservation, HeroInfo, HeroConstants
                       jnp.any(c.MOUTHS_VALID[lvl] & (mo[:, 0] == new_room) &
                               (mo_w > 0) & mo_hit))
 
-        # --- power drain: measured, the gauge moves ONLY while the hero
-        # walks or hovers. Standing perfectly still costs nothing (3,000
-        # idle frames were measured against an unmoved gauge). ---
-        burning_power = has_moved & (left | right | up)
-        drain = jnp.where(burning_power, c.power_drain_per_frame, 0)
+        # --- power drain (measured, see max_power): one frame of power every
+        # frame from the first input of a life on, standing still included ---
+        drain = jnp.where(has_moved & ~tallying, c.power_drain_per_frame, 0)
         new_power = jnp.maximum(0, state.power - drain).astype(jnp.int32)
         died_power = (new_power <= 0) & (state.power > 0)
 
         # --- miner rescue (last room of the level) ---
         m = c.LEVEL_MINER[lvl]
-        touch_miner = ((~state.miner_rescued) & (new_room == m[0]) &
+        touch_miner = ((~state.miner_rescued) & (~tallying) & (new_room == m[0]) &
                        self._aabb(new_x, new_y, c.player_width, c.player_height,
                                   m[1], m[2], c.miner_width, c.miner_height))
-        # End-of-level tally: 20 points per power-bar pixel still lit
-        # (measured as ticks of 20 proportional to the power left).
-        power_pixels = (new_power // c.power_frames_per_pixel).astype(jnp.int32)
-        power_bonus = jnp.where(touch_miner,
-                                power_pixels * c.bonus_per_power_pixel,
-                                0).astype(jnp.int32)
+        # The end-of-level tally (measured, see bonus_per_power_pixel), on a
+        # clock of frames since the touch: `paid` units by frame e, then the
+        # sticks from the last unit's frame on, then the next level.
+        units0 = jnp.where(touch_miner, _power_units(c, new_power),
+                           state.tally_units).astype(jnp.int32)
+        sticks0 = jnp.where(touch_miner, dynamite_count,
+                            state.tally_sticks).astype(jnp.int32)
+        e = state.tally_timer                      # this frame, since the touch
+
+        def _paid(e):
+            k = e - c.tally_first_unit
+            return jnp.where(k < 0, 0, jnp.minimum(
+                state.tally_units, 2 * (k // 4) + jnp.minimum(k % 4, 1) + 1))
+
+        last_unit = (c.tally_first_unit + 4 * ((state.tally_units - 1) // 2)
+                     + (state.tally_units - 1) % 2)
+        last_unit = jnp.where(state.tally_units > 0, last_unit, c.tally_first_unit)
+
+        def _sticks(e):
+            return jnp.where(e < last_unit, 0, jnp.minimum(
+                state.tally_sticks, (e - last_unit) // c.tally_stick_frames + 1))
+
+        tally_end = last_unit + c.tally_stick_frames * state.tally_sticks
+        units_paid = jnp.where(tallying, _paid(e) - _paid(e - 1), 0)
+        sticks_paid = jnp.where(tallying, _sticks(e) - _sticks(e - 1), 0)
+        power_bonus = (units_paid * c.bonus_per_power_pixel +
+                       sticks_paid * c.dynamite_points).astype(jnp.int32)
+        # the bar drains and the icons go as they are paid
+        new_power = jnp.where(tallying,
+                              (state.tally_units - _paid(e)) * c.power_frames_per_pixel,
+                              new_power).astype(jnp.int32)
+        dynamite_count = jnp.where(tallying, state.tally_sticks - _sticks(e),
+                                   dynamite_count).astype(jnp.int32)
+        tally_done = tallying & (e >= tally_end)
 
         is_last = lvl >= (c.num_levels - 1)
-        finish = touch_miner & is_last
-        advance = touch_miner & (~is_last)
+        finish = tally_done & is_last
+        advance = tally_done & (~is_last)
 
         # --- scoring (+ extra life every 20000 points, manual) ---
         # measured: wall 75, magma column 75 (the same as rock), creature 50,
@@ -1745,7 +1861,7 @@ class JaxHero(JaxEnvironment[HeroState, HeroObservation, HeroInfo, HeroConstants
 
         # --- death / lives / respawn (top of the CURRENT room, measured) ---
         died = (died_blast | died_spider | died_power | died_deadly |
-                died_flare | died_magma | died_mouth) & (~touch_miner)
+                died_flare | died_magma | died_mouth) & (~touch_miner) & (~tallying)
         new_lives = jnp.clip(state.lives - died.astype(jnp.int32) + extra_lives,
                              0, c.max_lives).astype(jnp.int32)
         respawned = died & (new_lives > 0)
@@ -1795,6 +1911,12 @@ class JaxHero(JaxEnvironment[HeroState, HeroObservation, HeroInfo, HeroConstants
         old_y = jnp.where(rs_bad_1, jnp.where(rs_bad_2, 8, c.spawn_y), c.respawn_y)
         rs_x = jnp.where(any_ok, near_x, old_x)
         rs_y = jnp.where(any_ok, rs_row, old_y)
+        # through the tally he stays exactly where he met the miner
+        frozen = tallying & ~advance
+        new_x = jnp.where(frozen, state.player_x, new_x)
+        new_y = jnp.where(frozen, state.player_y, new_y)
+        new_room = jnp.where(frozen, state.room, new_room)
+        new_vy = jnp.where(frozen, 0.0, new_vy)
         final_x = jnp.where(advance, c.spawn_x,
                             jnp.where(respawned, rs_x, new_x)).astype(jnp.int32)
         final_y = jnp.where(advance, c.spawn_y,
@@ -1806,6 +1928,8 @@ class JaxHero(JaxEnvironment[HeroState, HeroObservation, HeroInfo, HeroConstants
         final_thrust = jnp.where(reset_pose, 0, thrust_timer).astype(jnp.int32)
         final_facing = jnp.where(reset_pose, 1, new_facing).astype(jnp.int32)
         final_walk_timer = jnp.where(reset_pose, 0, walk_timer).astype(jnp.int32)
+        final_walk_held = walk_held & (~reset_pose)
+        final_walk_dir = jnp.where(reset_pose, 0, walk_dir).astype(jnp.int32)
         final_has_moved = has_moved & (~reset_pose)
         final_laser = jnp.where(reset_pose, 0, laser_timer).astype(jnp.int32)
         # melted rock stays melted for the rest of the level, like a blasted
@@ -1842,6 +1966,12 @@ class JaxHero(JaxEnvironment[HeroState, HeroObservation, HeroInfo, HeroConstants
             advance, c.level_banner_frames,
             jnp.maximum(0, state.banner_timer - 1)).astype(jnp.int32)
         final_miner_rescued = jnp.where(advance, False, state.miner_rescued | touch_miner)
+        # the tally clock: 1 on the touch frame, counting until the payout ends
+        final_tally_timer = jnp.where(advance | finish, 0,
+                                      jnp.where(tallying, state.tally_timer + 1,
+                                                touch_miner.astype(jnp.int32))).astype(jnp.int32)
+        final_tally_units = jnp.where(advance | finish, 0, units0).astype(jnp.int32)
+        final_tally_sticks = jnp.where(advance | finish, 0, sticks0).astype(jnp.int32)
         # a new level starts with its own raft where it waits; a death leaves
         # the raft where it is (measured)
         next_raft = c.RAFT_START[next_lvl]
@@ -1867,6 +1997,8 @@ class JaxHero(JaxEnvironment[HeroState, HeroObservation, HeroInfo, HeroConstants
             room=final_room,
             facing=final_facing,
             walk_timer=final_walk_timer,
+            walk_held=final_walk_held,
+            walk_dir=final_walk_dir,
             has_moved=final_has_moved,
             laser_timer=final_laser,
             melted=final_melted,
@@ -1888,6 +2020,9 @@ class JaxHero(JaxEnvironment[HeroState, HeroObservation, HeroInfo, HeroConstants
             room_dark=final_room_dark,
             invuln_timer=final_invuln,
             miner_rescued=final_miner_rescued,
+            tally_timer=final_tally_timer,
+            tally_units=final_tally_units,
+            tally_sticks=final_tally_sticks,
             level_complete=level_complete,
             banner_timer=final_banner,
             raft_x=final_raft_x,
@@ -2904,6 +3039,44 @@ class HeroRenderer(JAXGameRenderer):
     def _player_on_ground(self, state):
         return self._hits_wall(state, state.player_x, state.player_y + 2)
 
+    # The ROM's leg clock: its frame counter (RAM 1) is a multiple of 4 on the
+    # frames where a new walk pose starts. This offset lines step_counter up
+    # with it (measured: both 341 frames after reset, RAM 1 % 4 == 3).
+    WALK_CLOCK_PHASE = 1
+
+    def _player_frame(self, state):
+        """Index into PLAYER_FRAMES for the hero on this frame."""
+        c = self.consts
+        if c.rom_hero:
+            # Off the ground: the airborne body under the 12-frame rotor
+            # pattern. On it he stands as ONE still bitmap - the rotor does not
+            # turn on the ground, even while it spins up - or walks through
+            # five poses. Measured on the ROM 2026-09-29: the first frame of a
+            # walk (walk_timer 1) still shows him standing; the walk starts at
+            # pose 0 and moves on a pose each time the frame clock reaches a
+            # multiple of 4 - counted from the frame after the first - so the
+            # first pose lasts 1-4 frames and every later one 4.
+            rotor = self.PLAYER_ROTOR_CYCLE[state.step_counter % 12]
+            clock = state.step_counter + self.WALK_CLOCK_PHASE
+            pose = ((clock // 4) - ((clock - state.walk_timer + 2) // 4)) \
+                % self.PLAYER_WALK_POSES
+            return jnp.where(
+                ~self._player_on_ground(state), self.PLAYER_FLY_FRAME0 + rotor,
+                jnp.where(state.walk_timer >= 2, self.PLAYER_WALK_FRAME0 + pose,
+                          self.PLAYER_STAND_FRAME))
+        # the earlier hero: hovering and flying cycle the three rotor poses
+        # one frame each; walking holds each of its two strides for four
+        # frames (the states do not share a rate). Standing on the ground is
+        # one still picture.
+        airborne = (jnp.abs(state.player_vy) > 0.5) | (state.thrust_timer > 0)
+        rotor_frame = state.step_counter % self.PLAYER_ROTOR_POSES
+        walk_frame = self.PLAYER_WALK_FRAME0 + (state.walk_timer // 4) % 2
+        frame = jnp.where(airborne | (state.walk_timer <= 0),
+                          rotor_frame, walk_frame)
+        # ...except standing on the ground, which never spins the rotor
+        return jnp.where(self._player_on_ground(state) & (state.walk_timer <= 0),
+                         self.PLAYER_STAND_FRAME, frame)
+
     def __init__(self, consts: HeroConstants = None, config: render_utils.RendererConfig = None):
         self.consts = consts or HeroConstants()
         super().__init__(self.consts)
@@ -3351,9 +3524,10 @@ class HeroRenderer(JAXGameRenderer):
                            (state.wall_stage[di] >= 2),
                            dwr[1], dwr[2], self.DWALL_STAMPS[lvl, di], raster)
 
-        # miner (last room)
+        # miner (last room); he stays beside the hero through the end-of-level
+        # tally (measured)
         m = c.LEVEL_MINER[lvl]
-        raster = maybe((~state.miner_rescued) & (room == m[0]),
+        raster = maybe(((~state.miner_rescued) | (state.tally_timer > 0)) & (room == m[0]),
                        m[1], m[2], self.SHAPE_MASKS["miner"], raster)
 
         # creatures: bob/patrol per creature; sprite selected by kind and by
@@ -3430,31 +3604,7 @@ class HeroRenderer(JAXGameRenderer):
                        stick_x - 3, stick_y - 1,
                        self.BLAST_FRAMES[blast_pose], raster)
 
-        if c.rom_hero:
-            # player (measured on the ROM): off the ground he is the airborne
-            # body under the 12-frame rotor pattern; on it he walks through
-            # five poses held 4 frames each, or stands as ONE still bitmap -
-            # the rotor does not turn on the ground, even while it spins up.
-            rotor = self.PLAYER_ROTOR_CYCLE[state.step_counter % 12]
-            walk_pose = (((state.walk_timer + 2) // self.PLAYER_WALK_HOLD)
-                         % self.PLAYER_WALK_POSES)
-            frame = jnp.where(
-                ~self._player_on_ground(state), self.PLAYER_FLY_FRAME0 + rotor,
-                jnp.where(state.walk_timer > 0, self.PLAYER_WALK_FRAME0 + walk_pose,
-                          self.PLAYER_STAND_FRAME))
-        else:
-            # player: hovering and flying cycle the three rotor poses one frame
-            # each; walking holds each of its two strides for four frames
-            # (the states do not share a rate). Standing on the
-            # ground is one still picture, below.
-            airborne = (jnp.abs(state.player_vy) > 0.5) | (state.thrust_timer > 0)
-            rotor_frame = state.step_counter % self.PLAYER_ROTOR_POSES
-            walk_frame = self.PLAYER_WALK_FRAME0 + (state.walk_timer // 4) % 2
-            frame = jnp.where(airborne | (state.walk_timer <= 0),
-                              rotor_frame, walk_frame)
-            # ...except standing on the ground, which never spins the rotor
-            frame = jnp.where(self._player_on_ground(state) & (state.walk_timer <= 0),
-                              self.PLAYER_STAND_FRAME, frame)
+        frame = self._player_frame(state)
         # the sprite (9 px earlier hero, 8 px ROM hero) is drawn centred over
         # the 6-px collision box: the ROM's canvas starts at player_x - 1
         sprite_dx = (self.PLAYER_FRAMES.shape[2] - c.player_width) // 2
@@ -3485,8 +3635,11 @@ class HeroRenderer(JAXGameRenderer):
         # 121. So the gauge reads "not started yet" for exactly the 111
         # frames of the banner - which is also what the recorded playthroughs
         # show on their first frames.
+        # the bar shows at most its 78 pixels of the 81 units (measured: it
+        # first shrinks when the gauge falls to 77)
         power_units = jnp.where(state.banner_timer > 0, 0,
-                                state.power // c.power_frames_per_pixel)
+                                jnp.minimum(c.power_bar_width,
+                                            _power_units(c, state.power)))
 
         def draw_power(i, ras):
             return jax.lax.cond(
@@ -3501,19 +3654,26 @@ class HeroRenderer(JAXGameRenderer):
             )
         raster = jax.lax.fori_loop(0, c.power_bar_width, draw_power, raster)
 
-        # reserve lives as mini-heroes (lives - 1, measured 3 icons at start)
-        raster = self.jr.render_indicator(raster, c.lives_x, c.lives_y,
-                                          jnp.maximum(0, state.lives - 1),
+        # Both icon rows are RIGHT-aligned (measured on the ROM 2026-09-29 with
+        # 1-6 reserve lives and 1-6 sticks): the last icon always ends on
+        # column 101 and a lost one goes from the LEFT. lives_x is the first
+        # of the three reserve lives a game starts with, dyn_icons_x the first
+        # of six sticks.
+        n_lives = jnp.maximum(0, state.lives - 1)
+        raster = self.jr.render_indicator(raster,
+                                          c.lives_x + (3 - n_lives) * c.lives_spacing,
+                                          c.lives_y, n_lives,
                                           self.SHAPE_MASKS["life_icon"],
                                           spacing=c.lives_spacing,
                                           max_value=c.max_lives - 1)
 
-        # dynamite sticks remaining
-        raster = self.jr.render_indicator(raster, c.dyn_icons_x, c.dyn_icons_y,
-                                          # the ROM takes the icon away when
-                                          # the stick EXPLODES, not when it is
-                                          # planted (measured; drawing only)
-                                          state.dynamite_count + state.dyn_active.astype(jnp.int32),
+        # dynamite sticks remaining: the ROM takes the icon away when the
+        # stick EXPLODES, not when it is planted (measured; drawing only)
+        n_sticks = state.dynamite_count + state.dyn_active.astype(jnp.int32)
+        raster = self.jr.render_indicator(raster,
+                                          c.dyn_icons_x + (c.starting_dynamite - n_sticks)
+                                          * c.dyn_icons_spacing,
+                                          c.dyn_icons_y, n_sticks,
                                           self.SHAPE_MASKS["dyn_icon"],
                                           spacing=c.dyn_icons_spacing,
                                           max_value=c.starting_dynamite)

@@ -121,12 +121,15 @@ BANDS = [
 # The live-hero ROM capture (the data hero_levels.py ships), as
 # (room, what, x, y) with x the LEFT edge of the drawn box - for a bat, of
 # its sweep. Every row.
+# The creature rows are read with the hero IN the room (2026-09-30): the
+# above-the-picture park drew room 5's spider a row low:
+# "room 5 spider at x 136: drawn from row 109 with the hero in the room (the capture said 110)".
 CHARACTERS_MD = [
     (1, "lantern", 83, 35), (1, "spider", 20, 70), (1, "spider", 108, 109),
     (2, "lantern", 47, 35), (2, "bat", 48, 64),
     (3, "lantern", 27, 35), (3, "bat", 32, 64),
     (4, "lantern", 43, 35), (4, "bat", 84, 64),
-    (5, "lantern", 139, 35), (5, "spider_free", 128, 66), (5, "spider", 136, 110),
+    (5, "lantern", 139, 35), (5, "spider_free", 128, 66), (5, "spider", 136, 109),
     (6, "lantern", 139, 35), (6, "spider_free", 136, 66),
     (7, "bat", 40, 64), (7, "spider_free", 80, 104),
     (8, "lantern", 83, 35), (8, "spider", 56, 70), (8, "spider_free", 108, 104),
@@ -157,7 +160,7 @@ NOT_IN_CENSUS = {
     2: [("bat", 48, 64)],
     3: [("bat", 32, 64)],
     4: [("bat", 84, 64)],
-    5: [("lantern", 139, 35), ("spider_free", 128, 66), ("spider", 136, 110)],
+    5: [("lantern", 139, 35), ("spider_free", 128, 66), ("spider", 136, 109)],
     6: [("lantern", 139, 35), ("spider_free", 136, 66)],
     7: [("bat", 40, 64), ("spider_free", 80, 104)],
     8: [("lantern", 83, 35), ("spider", 56, 70), ("spider_free", 108, 104)],
@@ -532,7 +535,7 @@ def test_the_hanging_spiders_are_still():
     no patrol, no bob, and two poses on an 8-frame hold."""
     hanging = [(i, c) for i, c in enumerate(HL.SPIDERS[L - 1]) if c[4] == 0]
     assert [(c[0], c[1], c[2]) for _i, c in hanging] == [
-        (1, 20, 70), (1, 108, 109), (5, 136, 110), (8, 56, 70),
+        (1, 20, 70), (1, 108, 109), (5, 136, 109), (8, 56, 70),
         (11, 60, 70), (12, 76, 109)]
     for slot, (_room, _x, _y, half, _k) in hanging:
         assert half == 0

@@ -231,9 +231,14 @@ def test_the_rom_route_clears_level_1(env):
     go(LEFT, 20, until=lambda t: int(t.player_x) <= 72)
     go(FIRE, 60, until=lambda t: not bool(t.spider_alive[0]))
     assert not bool(s.spider_alive[0]), "the bolt must clear the way"
-    go(LEFT, 80, until=lambda t: int(t.player_x) <= 26)
+    go(LEFT, 80, until=lambda t: bool(t.miner_rescued))
+    assert bool(s.miner_rescued) and int(s.tally_timer) > 0, "he reached the miner"
+    units = int(s.tally_units)
+    go(NOOP, 400, until=lambda t: int(t.level) == 1)   # the tally, then level 2
     assert int(s.level) == 1, "rescued and moved on to level 2"
     assert int(s.lives) == c.starting_lives, "cleared without dying"
-    # 75 wall + 1000 miner + the power tally; HERO_SPEC measured a clean
-    # level-1 clear at 2,400-2,700 including any creature killed on the way
-    assert 2400 <= total <= 2700, total
+    # 75 wall + 50 spider + 1000 miner + 20 per power unit + 50 for each of
+    # the five sticks left; HERO_SPEC measured a clean level-1 tally of
+    # 1,300-1,600 in 20s, which is 65-80 units
+    assert total == 75 + 50 + 1000 + 20 * units + 50 * 5
+    assert 65 <= units <= 80, units

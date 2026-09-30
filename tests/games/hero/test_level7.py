@@ -27,6 +27,12 @@ before it finished. Three things came out of it, and each has a test below:
     has it at (72, 109) - from the sprite pass, and it came back as part of
     the room's DEADLY rect instead of as a creature.
 
+  * SIXTEEN CREATURES, NOT TEN. The first capture read the magma rooms with
+    the hero parked at x = 0, which is magma: he died there and the ROM drew
+    the room FROZEN, so six creatures of rooms 2, 4, 6, 8 and 10 were never
+    seen and room 6's spider was pinned, still, to one bitmap. Re-read with
+    the hero parked above the picture (2026-09-30), nothing is pinned.
+
 Magma is in the six EVEN rooms, and in each of them every solid corridor cell
 is magma, because the corridor colour register is either the level hue or
 magma red and nothing in between.
@@ -38,26 +44,30 @@ The route, room by room:
             x 72-87
     room 1  a lantern and a still spider at x 52; the pillar at x 92-99 and
             holes at x 24-31 and x 128-135
-    room 2  magma, a lantern, the pillar at x 60-67, the hole at x 76-83
+    room 2  magma, a lantern, a bobbing untethered spider at x 88, the
+            pillar at x 60-67, the hole at x 76-83
     room 3  a lantern and a SNAKE at x 48 growing out of the rock; the pillar
             at x 64-71 and holes at x 52-59 and x 104-111
     room 4  magma down both sides and a twelve-cell magma slab in the middle -
-            too wide to blast, so it is flown around; holes at x 24-39 and
+            too wide to blast, so it is flown around; a snake in the hole
+            at x 24, a bat patrolling 22 px about x 43; holes at x 24-39 and
             x 120-135
-    room 5  a lantern at x 131, a still spider at x 60 and the level's one
-            PATROLLING bat sweeping 22 px across the floor band; the pillar at
+    room 5  a lantern at x 131, a still spider at x 60 and a PATROLLING bat
+            sweeping 22 px across the floor band; the pillar at
             x 100-107 and holes at x 16-39 and x 128-143
     room 6  magma at both edges and a sixteen-cell magma slab in the middle;
-            a lantern, a still creature at x 24 and holes at x 16-27 and
-            x 124-135
+            a lantern, a bobbing untethered spider at x 24, a still spider
+            at x 128 and holes at x 16-27 and x 124-135
     room 7  a lantern, a snake at x 28, a still spider at x 80; the pillar at
             x 100-107 and the hole at x 72-87
-    room 8  magma, a lantern, the pillar at x 60-67, holes at x 32-47 and
+    room 8  magma, a lantern, a still spider at x 104, the pillar at
+            x 60-67, holes at x 32-47 and
             x 116-131
     room 9  a lantern, a still spider at x 76, the pillar at x 100-107 and
             holes at x 64-71 and x 88-95
     room 10 THE WATER ROOM: one magma cell at the left edge, a lantern, a
-            still spider at x 72, and a floor that is liquid from x 32 to
+            still spider at x 72, a bobbing untethered one at x 128, and a
+            floor that is liquid from x 32 to
             x 127. No way down at all - the way on is the open RIGHT edge of
             the corridor, and it has to be flown to.
     room 11 the miner's room: sealed floor and ceiling, one bobbing creature
@@ -123,9 +133,12 @@ BANDS = [
 # The table stops at room 10 because the census was taken when the walker
 # still stopped there. Room 11 was reached for the first time in this session
 # and has never been censused, so its two entities are checked against the
-# capture instead - see test_room_11_is_the_one_room_no_census_ever_saw.
+# capture instead - see test_room_11_is_the_one_room_no_census_ever_saw. The
+# census also parked the hero at the lethal x = 0 in the magma rooms, so it
+# misses six creatures there and saw room 6's bobbing spider frozen at the
+# BOTTOM of its bob (111 = 104 + 7).
 #
-# The BAT of room 5 is the one place this table and HL.SPIDERS do not print
+# A BAT is the one place this table and HL.SPIDERS do not print
 # the same number, and they are not measuring the same thing: the census
 # gives the tight box of the ink the scan saw most of the time, HL.SPIDERS
 # gives the CENTRE of the patrol, derived from the envelope the sprite is ever
@@ -287,7 +300,8 @@ def test_the_water_of_room_10_is_lethal_and_still_not_a_way_down(env):
     _, state = env.reset()
     state = state.replace(level=jnp.int32(L - 1), room=jnp.int32(10),
                           player_x=jnp.int32(70), player_y=jnp.int32(62),
-                          spider_alive=jnp.zeros_like(state.spider_alive))
+                          spider_alive=jnp.zeros_like(state.spider_alive),
+                          has_moved=jnp.bool_(True))   # else he hovers there
     lives = int(state.lives)
     for _ in range(120):
         _obs, state, _r, _d, _i = env.step(state, jnp.int32(NOOP))
@@ -483,20 +497,24 @@ def test_every_entity_in_characters_md_is_present():
     Lanterns, spiders, snakes and the miner are compared exactly. A BAT is
     compared against its patrol envelope instead of the centre HL.SPIDERS
     prints - see the note on CHARACTERS_MD above - and the tolerance is the
-    2 px the tight box trims off the spread wing, never more.
+    2 px the tight box trims off the spread wing, never more. A row is also
+    found anywhere on its creature's bob: the census saw room 6's spider in a
+    room frozen by the lethal x = 0 park, stopped at the bottom of its bob.
     """
     got = [(r, "lantern", x, y) for r, x, y in HL.LANTERNS[L - 1]]
     got.append((HL.MINER_POS[L - 1][0], "miner",
                 HL.MINER_POS[L - 1][1], HL.MINER_POS[L - 1][2]))
     kinds = {0: "spider", 1: "bat", 3: "snake", 4: "spider_free"}
-    for room, x, y, patrol, kind in HL.SPIDERS[L - 1]:
+    bob = {}
+    for slot, (room, x, y, patrol, kind) in enumerate(HL.SPIDERS[L - 1]):
         got.append((room, kinds[kind], x - patrol, y))
+        bob[got[-1]] = HL.CREATURE_MOTION[(L, slot)][0]
 
     for room, what, x, y in CHARACTERS_MD:
         want = KIND_OVERRIDDEN.get((room, x, y), (what, what))[1]
         near = [g for g in got
-                if g[0] == room and g[1] == want
-                and abs(g[2] - x) <= 2 and abs(g[3] - y) <= 1]
+                if g[0] == room and g[1] == want and abs(g[2] - x) <= 2
+                and g[3] - 1 <= y <= g[3] + bob.get(g, 0) + 1]
         assert near, f"census row ({room}, {what}, {x}, {y}) is missing"
         if what != "bat":
             assert (room, want, x, y) in got, \
@@ -504,18 +522,24 @@ def test_every_entity_in_characters_md_is_present():
 
 
 def test_room_11_is_the_one_room_no_census_ever_saw():
-    """The census stops at room 10 because the walker did. Everything this
-    level ships beyond its nineteen rows is room 11's, and room 11 was
-    captured off the ROM in this session: a bobbing creature at (76, 65) and
-    the miner at (128, 86)."""
+    """The census stops at room 10 because the walker did. Room 11 was
+    captured off the ROM: a bobbing creature at (76, 65) and the miner at
+    (128, 86). The only other creatures the census lacks are the six of the
+    magma rooms 2, 4, 6, 8 and 10 that its lethal x = 0 park froze away."""
     assert max(row[0] for row in CHARACTERS_MD) == 10
     # compared on the left edge of the patrol, which is what the census
-    # prints; HL.SPIDERS carries the centre (the bat of room 5 is the only
-    # creature on the level where the two differ)
-    extra = [(r, x - p, y) for r, x, y, p, _k in HL.SPIDERS[L - 1]
+    # prints; HL.SPIDERS carries the centre (the bats of rooms 4 and 5 are
+    # the only creatures on the level where the two differ). A row anywhere
+    # on the creature's bob counts, as in the census test above.
+    extra = [(r, x - p, y) for slot, (r, x, y, p, _k)
+             in enumerate(HL.SPIDERS[L - 1])
              if not any(row[0] == r and abs(row[2] - (x - p)) <= 2
-                        and abs(row[3] - y) <= 1 for row in CHARACTERS_MD)]
-    assert extra == [(11, 76, 65)]
+                        and y - 1 <= row[3]
+                        <= y + HL.CREATURE_MOTION[(L, slot)][0] + 1
+                        for row in CHARACTERS_MD)]
+    assert extra == [(2, 88, 65), (4, 24, 111), (4, 32, 64), (6, 128, 70),
+                     (8, 104, 70), (10, 128, 65), (11, 76, 65)]
+    assert len(HL.SPIDERS[L - 1]) == 16
     assert HL.MINER_POS[L - 1][0] == 11
     assert [g for g in HL.LANTERNS[L - 1] if g[0] == 11] == [], \
         "room 11 has no lantern"
@@ -564,16 +588,23 @@ def test_room_6s_creature_is_the_untethered_spider():
         Spider. It is its own form, kind 4.
 
     Measured over levels 1-7 by recording every bitmap of every sprite with
-    the colour of every pixel, and confirmed by watching this one for 900 consecutive frames: one bitmap, no
-    movement.
+    the colour of every pixel. The census and the first capture both saw it
+    STILL at (24, 111), but that was the room frozen by the lethal x = 0
+    park; live, it bobs 7 px from row 104 like every untethered spider, and
+    111 is simply the bottom of that bob.
     """
-    assert (6, 24, 111, 0, 4) in HL.SPIDERS[L - 1], "kind 4 = untethered"
+    slot = HL.SPIDERS[L - 1].index((6, 24, 104, 0, 4))   # kind 4 = untethered
+    assert HL.CREATURE_MOTION[(L, slot)] == (7, 32, 8)
+    assert 104 + HL.CREATURE_MOTION[(L, slot)][0] == 111, \
+        "the census's row is the bottom of the bob"
     assert KIND_OVERRIDDEN[(6, 24, 111)] == ("bat", "spider_free")
     bats = [c for c in HL.SPIDERS[L - 1] if c[4] == 1]
-    assert bats == [(5, 123, 103, 11, 1)], "level 7 ships exactly one bat"
+    assert bats == [(4, 43, 64, 11, 1), (5, 123, 103, 11, 1)], \
+        "level 7 ships two bats, rooms 4 and 5"
     free = [c for c in HL.SPIDERS[L - 1] if c[4] == 4]
-    assert free == [(6, 24, 111, 0, 4), (11, 76, 65, 0, 4)], \
-        "and two untethered spiders, the still one and room 11's"
+    assert free == [(2, 88, 65, 0, 4), (6, 24, 104, 0, 4),
+                    (10, 128, 65, 0, 4), (11, 76, 65, 0, 4)], \
+        "and four untethered spiders"
 
 
 def test_the_bat_is_painted_in_the_roms_six_shades_not_one_flat_grey(env):
@@ -604,13 +635,15 @@ def test_the_bat_is_painted_in_the_roms_six_shades_not_one_flat_grey(env):
 
 
 # --- the clocks that are not shared -----------------------------------------
-def test_the_one_bat_patrols_22_px_on_184_frames_and_holds_a_pose_4():
-    """A bat patrols 22 px with a 184-frame horizontal period and a 64-frame
-    vertical one, and holds each wing pose for 4 frames. The
-    two clocks are different lengths, so the path is a slow Lissajous figure
-    and not a straight line."""
+def test_the_two_bats_patrol_22_px_on_184_frames_and_hold_a_pose_4():
+    """Rooms 4 and 5 each hold one (the first capture missed room 4's in its
+    frozen magma room). A bat patrols 22 px with a 184-frame horizontal
+    period and a 64-frame vertical one, and holds each wing pose for 4
+    frames. The two clocks are different lengths, so the path is a slow
+    Lissajous figure and not a straight line."""
     bats = [slot for slot, c in enumerate(HL.SPIDERS[L - 1]) if c[4] == 1]
-    assert bats == [3]
+    assert bats == [4, 6]
+    assert [HL.SPIDERS[L - 1][s][0] for s in bats] == [4, 5]
     for slot in bats:
         travel, half, hold = HL.CREATURE_MOTION[(L, slot)]
         assert (travel, 2 * half) == (7, 64), "the bat bobs 7 px on 64 frames"
@@ -621,54 +654,57 @@ def test_the_one_bat_patrols_22_px_on_184_frames_and_holds_a_pose_4():
             "the bob and the patrol must not share a clock"
 
 
-def test_the_two_snakes_are_anchored_and_run_the_engines_own_clock():
+def test_the_three_snakes_are_anchored_and_run_the_engines_own_clock():
     """A snake grows a pixel out of the rock every 4 frames and never
-    travels, so it carries no patrol and no bob."""
+    travels, so it carries no patrol and no bob. Room 4's, which the frozen
+    first capture missed, sits low in the floor hole at x 24-39, so it grows
+    out of the floor band's rock rather than the corridor's."""
     snakes = [slot for slot, c in enumerate(HL.SPIDERS[L - 1]) if c[4] == 3]
     assert [HL.SPIDERS[L - 1][s][:3] for s in snakes] == [(3, 48, 72),
+                                                          (4, 24, 111),
                                                           (7, 28, 72)]
     for slot in snakes:
         assert HL.CREATURE_MOTION[(L, slot)] == (0, 0, 4)
         assert (L, slot) not in HL.CREATURE_PATROL
-        room, x, _y, _p, _k = HL.SPIDERS[L - 1][slot]
-        assert BANDS[room]["B"][(x - 8) // 4 - 1] != ".", \
+        room, x, y, _p, _k = HL.SPIDERS[L - 1][slot]
+        band = BANDS[room]["B" if y < 99 else "C"]
+        assert band[(x - 8) // 4 - 1] != ".", \
             "a snake's head comes out of the rock on its LEFT"
+        assert band[(x - 8) // 4] == ".", "into open air"
 
 
 def test_a_creature_that_does_not_travel_may_still_animate():
-    """Six of the ten never move a pixel. Only TWO of those six are drawn as
-    a single bitmap.
+    """Seven of the sixteen never move a pixel - the hanging spiders - and
+    NONE of them is drawn as a single bitmap: all seven swap their legs on
+    the spot.
 
-    This is the distinction the census cannot make. "Still" used to be taken
-    from its `distinct_sprites`, which reports 1 for creatures that plainly
-    alternate two bitmaps every seven or eight frames, so four spiders that
-    swap their legs on the spot were pinned to one pose. Counted over the
-    capture's own 480 frames, room 6's untethered spider and room 10's hanging
-    one draw ONE bitmap for the whole window; rooms 1, 5, 7 and 9 draw two.
+    "Still" was first taken from the census's `distinct_sprites`, and later
+    from a capture of rooms the reading park's death had frozen, and both
+    pinned creatures the live ROM plainly animates (room 6's untethered
+    spider, room 10's hanging one). Watched with the hero parked above the
+    picture (2026-09-30), every one draws two bitmaps.
     """
     still = [slot for slot, c in enumerate(HL.SPIDERS[L - 1])
              if c[4] != 3 and HL.CREATURE_MOTION[(L, slot)][0] == 0]
-    assert still == [0, 2, 4, 6, 7, 8]
+    assert still == [0, 5, 8, 10, 11, 12, 13]
     for slot in still:
-        travel, half, _hold = HL.CREATURE_MOTION[(L, slot)]
+        travel, half, hold = HL.CREATURE_MOTION[(L, slot)]
         assert (travel, half) == (0, 0), "a still creature does not travel"
         assert (L, slot) not in HL.CREATURE_PATROL, "and does not sweep"
-    frozen = [s for s in still if HL.CREATURE_SPRITES.get((L, s)) == 1]
-    assert frozen == [4, 8], "rooms 6 and 10 draw one bitmap all window"
-    assert [HL.SPIDERS[L - 1][s][0] for s in frozen] == [6, 10]
-    for slot in set(still) - set(frozen):
+        assert HL.SPIDERS[L - 1][slot][4] == 0, "they are the hanging spiders"
+        assert hold == 8, "swapping legs every 8 frames"
         assert (L, slot) not in HL.CREATURE_SPRITES, \
-            "the other four keep both of their poses"
+            "and every one keeps both of its poses"
 
 
 def test_the_moving_creatures_keep_their_kinds_full_cycle():
-    """A creature that does move must NOT be pinned to one sprite: the bat
-    keeps all four wings and room 11's bobbing creature both poses."""
+    """A creature that does move must NOT be pinned to one sprite: the two
+    bats keep all four wings and the four untethered spiders both poses."""
     for slot, c in enumerate(HL.SPIDERS[L - 1]):
         if HL.CREATURE_MOTION[(L, slot)][0] > 0:
             assert (L, slot) not in HL.CREATURE_SPRITES
     assert [slot for slot, c in enumerate(HL.SPIDERS[L - 1])
-            if HL.CREATURE_MOTION[(L, slot)][0] > 0] == [3, 9]
+            if HL.CREATURE_MOTION[(L, slot)][0] > 0] == [1, 4, 6, 7, 14, 15]
 
 
 def test_room_11s_bobbing_creature_carries_the_captures_own_numbers():
@@ -681,33 +717,35 @@ def test_room_11s_bobbing_creature_carries_the_captures_own_numbers():
     for 400 consecutive frames and its whole (pose, position) sequence repeats
     exactly every 64.
     """
-    travel, half, hold = HL.CREATURE_MOTION[(L, 9)]
+    travel, half, hold = HL.CREATURE_MOTION[(L, 15)]
     assert (travel, 2 * half, hold) == (7, 64, 8)
-    assert (L, 9) not in HL.CREATURE_SPRITES
-    assert HL.SPIDERS[L - 1][9] == (11, 76, 65, 0, 4)
+    assert (L, 15) not in HL.CREATURE_SPRITES
+    assert HL.SPIDERS[L - 1][15] == (11, 76, 65, 0, 4)
     for lvl, slot in ((2, 1), (2, 3), (3, 4), (4, 1), (4, 6),
-                      (6, 1), (6, 6), (6, 8)):
-        assert HL.CREATURE_MOTION[(lvl, slot)] == (7, 32, 8),             f"level {lvl} slot {slot} is the same creature on the same clock"
+                      (6, 1), (6, 2), (6, 8), (6, 10), (6, 11),
+                      (7, 1), (7, 7), (7, 14)):
+        assert HL.SPIDERS[lvl - 1][slot][4] == 4, f"level {lvl} slot {slot}"
+        assert HL.CREATURE_MOTION[(lvl, slot)] == (7, 32, 8), \
+            f"level {lvl} slot {slot} is the same creature on the same clock"
 
 
-def test_the_renderer_holds_a_still_creature_on_one_sprite(env):
-    """The table is only half of it - the engine has to read it. Slot 4 is
-    the frozen untethered spider of room 6; its drawn pose must be the same on
-    every frame, while the bat in slot 3 must cycle."""
+def test_the_renderer_pins_no_creature_to_one_sprite(env):
+    """The table is only half of it - the engine has to read it. Nothing of
+    this level is pinned any more (room 6's untethered spider was, off the
+    frozen park), so every slot keeps its kind's full pose cycle
+    (SPIDER_POSES 0), the still spiders included."""
     c = env.consts
     lvl = L - 1
-    assert int(c.SPIDER_POSES[lvl, 4]) == 1, "the frozen one is pinned"
-    assert int(c.SPIDER_POSES[lvl, 3]) == 0, "the bat keeps its kind's cycle"
-    assert int(c.SPIDER_POSES[lvl, 0]) == 0,         "and a still creature that DOES swap its legs keeps both poses"
-    hold = int(c.SPIDER_HOLD[lvl, 4])
-    frames = {(step // hold) % max(1, int(c.SPIDER_POSES[lvl, 4]))
-              for step in range(600)}
-    assert frames == {0}, "a frozen creature never changes sprite"
+    n = len(HL.SPIDERS[L - 1])
+    assert [int(p) for p in c.SPIDER_POSES[lvl, :n]] == [0] * n
+    assert int(c.SPIDER_HOLD[lvl, 7]) == 8, "room 6's spider swaps every 8"
+    assert int(c.SPIDER_HOLD[lvl, 6]) == 4, "and the bat its wings every 4"
 
 
 def test_a_still_creature_never_moves_and_a_bobbing_one_does(env):
     """Position, not just artwork: over a full 184-frame sweep the still
-    spider of room 1 must not shift by a pixel, and the bat must."""
+    spider of room 1 must not shift by a pixel, and room 5's bat (slot 6)
+    must."""
     from jaxatari.games.jax_hero import _creature_pos
     c = env.consts
     lvl = L - 1
@@ -715,8 +753,8 @@ def test_a_still_creature_never_moves_and_a_bobbing_one_does(env):
     for step in range(400):
         x, y = _creature_pos(c, lvl, step)
         seen_still.add((int(x[0]), int(y[0])))
-        seen_bat.add((int(x[3]), int(y[3])))
-        seen_bob.add((int(x[9]), int(y[9])))
+        seen_bat.add((int(x[6]), int(y[6])))
+        seen_bob.add((int(x[15]), int(y[15])))
     assert seen_still == {(52, 70)}, "the still spider of room 1 never moves"
     assert len({p[0] for p in seen_bat}) > 1, "the bat patrols sideways"
     assert len({p[1] for p in seen_bat}) > 1, "and bobs"

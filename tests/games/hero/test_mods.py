@@ -5,7 +5,7 @@ on the console), ``unlimited_lives`` makes death free and ``unlimited_dynamite``
 makes planting free. Together they let a developer check a single level
 without replaying everything before it:
 
-    python scripts/play.py -g hero -l 5 -lifes -granades
+    python scripts/play.py -g hero -m start_level_5 unlimited_lives unlimited_dynamite
 
 Constructing a JaxHero (its renderer pre-bakes every room) takes minutes, so
 the tests share ONE base environment and wrap it per mod combination. The mods
@@ -102,7 +102,11 @@ def test_play_continues_normally_after_the_jump():
     m = c.LEVEL_MINER[4]
     state = state.replace(room=m[0], player_x=m[1], player_y=m[2],
                           spider_alive=jnp.zeros_like(state.spider_alive))
-    _, s, _, done, _ = env.step(state, NOOP)
+    s = state
+    for _ in range(400):                      # the touch, then the tally
+        _, s, _, done, _ = env.step(s, NOOP)
+        if int(s.level) == 5:
+            break
     assert int(s.level) == 5
     assert not bool(done)
 

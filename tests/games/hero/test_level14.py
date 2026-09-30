@@ -120,16 +120,19 @@ BANDS = [
 # The live-hero ROM capture (the data hero_levels.py ships), as
 # (room, what, x, y) with x the LEFT edge of the drawn box - for a bat, of
 # its sweep. Every row.
+# The creature rows are read with the hero IN the room (2026-09-30): the
+# above-the-picture park drew three of them a row low, e.g.
+# "room 2 snake at x 72: drawn from row 111 with the hero in the room (the capture said 112)".
 CHARACTERS_MD = [
     (1, "lantern", 83, 35), (1, "bat", 48, 64),
-    (2, "snake", 72, 112), (2, "bat", 92, 65),
+    (2, "snake", 72, 111), (2, "bat", 92, 64),
     (3, "lantern", 83, 35), (3, "spider_free", 72, 65),
     (4, "snake", 72, 111), (4, "spider_free", 108, 65),
     (5, "lantern", 83, 35), (5, "bat", 48, 103),
     (6, "lantern", 107, 35), (6, "spider", 120, 70),
     (7, "lantern", 135, 35), (7, "spider_free", 136, 66),
     (8, "spider_free", 36, 104), (8, "bat", 48, 64),
-    (9, "spider", 44, 71),
+    (9, "spider", 44, 70),
     (10, "lantern", 79, 35), (10, "bat", 20, 103), (10, "spider_free", 68, 65),
     (11, "bat", 44, 64), (11, "bat", 92, 103),
     (12, "spider_free", 52, 65), (12, "spider", 68, 109),
@@ -429,12 +432,17 @@ def test_room_5_is_passed_by_waiting_in_the_shaft(env):
     import jax.numpy as jnp
 
     def attempt(hover_until):
+        # he comes in slowly, the rotor in its hover band: the ROM hero
+        # cannot brake a 2 px/frame fall before the mouth (his thrust needs
+        # ~40 frames of UP), so a fast entry dies whatever he does next
         state = _in_room_5(env, player_x=jnp.int32(77), player_y=jnp.int32(2),
-                           player_vy=jnp.float32(2.0))
+                           player_vy=jnp.float32(0.0),
+                           thrust_timer=jnp.int32(env.consts.thrust_hover))
         lives = int(state.lives)
         for _ in range(200):
             waiting = int(state.room_timer) < hover_until
-            act = (2 if int(state.player_y) > 20 else 0) if waiting else 5
+            # hover by tapping UP to hold the thrust in its hover band
+            act = (2 if int(state.thrust_timer) < 24 else 0) if waiting else 5
             _obs, state, *_ = env.step(state, act)
             if int(state.lives) < lives:
                 return "died"
@@ -443,7 +451,10 @@ def test_room_5_is_passed_by_waiting_in_the_shaft(env):
         return "stuck"
 
     assert attempt(0) == "died"
-    assert attempt(24) == "through"
+    # one whole 64-frame mouth cycle in the shaft, and the drop is timed
+    # (measured on the engine: waits of 4-16, 60-80 and 124-128 frames get
+    # through, the 64-frame period of the mouth; the rest die)
+    assert attempt(64) == "through"
 
 
 # --- dynamite ---------------------------------------------------------------
@@ -585,7 +596,7 @@ def test_the_hanging_spiders_are_still():
     hold."""
     hanging = [(i, c) for i, c in enumerate(HL.SPIDERS[L - 1]) if c[4] == 0]
     assert [(c[0], c[1], c[2]) for _i, c in hanging] == [
-        (6, 120, 70), (9, 44, 71), (12, 68, 109), (13, 36, 70),
+        (6, 120, 70), (9, 44, 70), (12, 68, 109), (13, 36, 70),
         (14, 108, 70), (15, 92, 109)]
     for slot, (_room, _x, _y, half, _k) in hanging:
         assert half == 0
@@ -599,7 +610,7 @@ def test_the_three_snakes_grow_out_of_the_rock():
     two pools - and has no patrol and no bob of its own."""
     snakes = [(i, c) for i, c in enumerate(HL.SPIDERS[L - 1]) if c[4] == 3]
     assert [(c[0], c[1], c[2]) for _i, c in snakes] == [
-        (2, 72, 112), (4, 72, 111), (13, 88, 111)]
+        (2, 72, 111), (4, 72, 111), (13, 88, 111)]
     for slot, (room, x, _y, half, _k) in snakes:
         assert half == 0
         assert HL.CREATURE_MOTION[(L, slot)] == (0, 0, 2), "a pixel every 2 frames"
@@ -633,7 +644,7 @@ def test_the_engine_draws_and_collides_the_fast_snake(env):
     """The renderer and the collision box read the same per-snake rate."""
     import jax.numpy as jnp
     c = env.consts
-    slot = HL.SPIDERS[L - 1].index((2, 72, 112, 0, 3))
+    slot = HL.SPIDERS[L - 1].index((2, 72, 111, 0, 3))
     assert int(c.SPIDER_HOLD[L - 1, slot]) == 2
     other = [i for i in range(c.num_spiders)
              if bool(c.SPIDER_VALID[3, i]) and int(c.SPIDER_KIND[3, i]) == 3]

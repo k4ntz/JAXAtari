@@ -707,7 +707,10 @@ def test_the_laser_takes_a_hanging_spider_through_its_thread(env):
         s = _state(env, 10, player_x=jnp.int32(150), player_y=jnp.int32(y),
                    facing=jnp.int32(-1))
         for _ in range(12):
-            s = s.replace(player_y=jnp.int32(y), player_vy=jnp.float32(0))
+            # pin the rotor in its hover band too, or the ROM hero's thrust
+            # drops him a row or two inside the step and the bolt with him
+            s = s.replace(player_y=jnp.int32(y), player_vy=jnp.float32(0),
+                          thrust_timer=jnp.int32(c.thrust_kick))
             _obs, s, *_ = env.step(s, 1)                 # FIRE
         assert bool(s.spider_alive[slot]) != dies, f"bolt on row {bolt_row}"
 
@@ -721,10 +724,13 @@ def test_a_death_on_the_raft_leaves_it_and_brings_him_back_onto_it(env):
     s = _state(env, 11, raft_x=jnp.int32(28), raft_dir=jnp.int32(1),
                player_x=jnp.int32(29), player_y=jnp.int32(c.raft_y - c.player_height))
     lives = int(s.lives)
-    died_at = None
-    for f in range(100):
+    died_at = landed_at = None
+    for f in range(200):
         prev = s
-        _obs, s, *_ = env.step(s, 0)
+        # a new life hovers where it comes back until the first input (the
+        # ROM); one tap of DOWN - a NOOP in the air - starts his rotor
+        first = died_at is not None and not bool(s.has_moved)
+        _obs, s, *_ = env.step(s, 5 if first else 0)
         if died_at is None and int(s.lives) < lives:
             died_at = f
             assert int(s.player_y) == c.respawn_low_y, "under the magma wall"
@@ -732,6 +738,12 @@ def test_a_death_on_the_raft_leaves_it_and_brings_him_back_onto_it(env):
             raft_at_death = int(s.raft_x)
         elif died_at is not None and int(s.player_y) < c.raft_y - c.player_height:
             assert int(s.raft_x) == raft_at_death, "the raft waits where it stopped"
+        elif died_at is not None:
+            # back on it: watch a few frames of the ride, not its whole run
+            # to the far end, where it turns round
+            landed_at = f if landed_at is None else landed_at
+            if f >= landed_at + 10:
+                break
     assert died_at is not None
     assert int(s.player_y) == c.raft_y - c.player_height, "back on the raft"
     assert int(s.raft_x) > raft_at_death, "and it carries him on"
@@ -764,7 +776,11 @@ def test_he_can_fly_off_the_raft_and_hover_under_the_magma(env):
     c = env.consts
     s = _state(env, 11, raft_x=jnp.int32(80), raft_dir=jnp.int32(1),
                player_x=jnp.int32(81), player_y=jnp.int32(c.raft_y - c.player_height),
-               spider_alive=jnp.zeros_like(c.SPIDER_VALID[L - 1]))
+               spider_alive=jnp.zeros_like(c.SPIDER_VALID[L - 1]),
+               # UP already held long enough to spin the rotor up: from rest
+               # the ROM hero needs ~48 frames to lift off, and the raft would
+               # carry him out from under the magma meanwhile
+               thrust_timer=jnp.int32(c.thrust_up_slow - 1))
     lives = int(s.lives)
     ys = []
     for _ in range(90):

@@ -16,11 +16,13 @@ in the cast:
     the other; the census watches 420 frames and autocorrelates, and it puts
     the spider at 70/72 against the bat's 184/64. Rooms 1, 5 and 7 have one
     each.
-  * SIX OF THE ELEVEN CREATURES ARE STILL. Whether a creature moves is a
-    property of the room, not of the creature: the census sees these six
-    draw a single sprite for the whole scan, so they are drawn
-    as a single sprite. Before CREATURE_SPRITES the pose clock ran for them
-    too and a spider the ROM never redraws swapped its legs every 8 frames.
+  * FIFTEEN CREATURES, NOT ELEVEN, AND NONE IS FROZEN. The first capture
+    read the five magma rooms with the hero parked at x = 0, which is magma:
+    he died there, the ROM drew the room frozen after the death, and four
+    creatures (rooms 2, 4, 6 and 8) were never seen while two spiders were
+    pinned to one bitmap. Re-read with the hero parked above the picture
+    (2026-09-30), every creature animates; the six hanging spiders swap
+    their legs on the spot.
   * THE POSE HOLD IS STILL THE CAPTURE'S, deliberately. The census reports 1
     frame per sprite for every bobbing spider, and that is the artefact that
     made level 4's snakes "14 poses of 1 frame each" - the component pass
@@ -351,7 +353,14 @@ def test_every_entity_in_characters_md_is_present():
     for room, x, y, patrol, kind in HL.SPIDERS[L - 1]:
         got.append((room, kinds[kind], x - patrol, y))
 
-    assert len(got) == len(CHARACTERS_MD) == 20
+    # the census parked the same lethal way, so it misses the four creatures
+    # of the magma rooms the ROM stops drawing once the hero is dead
+    missed = [(2, "spider", 72, 66), (4, "bat", 84, 64),
+              (6, "spider", 128, 65), (8, "bat", 28, 64)]
+    for row in missed:
+        assert row in got, f"{row} is on the ROM, if not in the census"
+    assert len(CHARACTERS_MD) == 20
+    assert len(got) == len(CHARACTERS_MD) + len(missed) == 24
     for room, what, x, y in CHARACTERS_MD:
         near = [g for g in got
                 if g[0] == room and g[1] == what
@@ -384,8 +393,8 @@ def test_the_miner_is_at_the_bottom_left_of_room_9():
 
 
 # --- the clocks that are not shared -----------------------------------------
-def test_the_three_bobbing_spiders_are_the_untethered_kind_on_64_frames():
-    """Rooms 1, 5 and 7 each hold one, and all three are kind 4 - the spider
+def test_the_five_bobbing_spiders_are_the_untethered_kind_on_64_frames():
+    """Rooms 1, 2, 5, 6 and 7 each hold one, and all five are kind 4 - the spider
     with no thread, seven rows of warm body flipping between two poses.
 
     THE CYCLE IS 64 FRAMES, not the 72 this used to assert on the census's
@@ -399,13 +408,13 @@ def test_the_three_bobbing_spiders_are_the_untethered_kind_on_64_frames():
     bobbing = [(slot, HL.CREATURE_MOTION[(L, slot)])
                for slot, c in enumerate(HL.SPIDERS[L - 1])
                if c[4] == 4 and HL.CREATURE_MOTION[(L, slot)][0] > 0]
-    assert [s for s, _m in bobbing] == [1, 6, 8]
+    assert [s for s, _m in bobbing] == [1, 2, 8, 10, 11]
     for _slot, (travel, half, hold) in bobbing:
         assert travel == 7, "it moves 7 px; its art carries the other two"
         assert 2 * half == 64, "over 64 frames, not the census's 72"
         assert hold == 8, "and holds each of its two poses for 8 frames"
-    # and they are the spiders of rooms 1, 5 and 7
-    assert [HL.SPIDERS[L - 1][s][0] for s, _m in bobbing] == [1, 5, 7]
+    # and they are the spiders of rooms 1, 2, 5, 6 and 7
+    assert [HL.SPIDERS[L - 1][s][0] for s, _m in bobbing] == [1, 2, 5, 6, 7]
 
 
 def test_the_bats_patrol_22_px_on_184_frames_and_hold_a_wing_pose_4():
@@ -414,7 +423,7 @@ def test_the_bats_patrol_22_px_on_184_frames_and_hold_a_wing_pose_4():
     two clocks are different lengths, so the path is a slow Lissajous figure
     and not a straight line."""
     bats = [slot for slot, c in enumerate(HL.SPIDERS[L - 1]) if c[4] == 1]
-    assert bats == [0, 3]
+    assert bats == [0, 4, 6, 13], "rooms 1, 3, 4 and 8"
     for slot in bats:
         travel, half, hold = HL.CREATURE_MOTION[(L, slot)]
         assert (travel, 2 * half) == (7, 64), "the bat bobs 7 px on 64 frames"
@@ -426,63 +435,55 @@ def test_the_bats_patrol_22_px_on_184_frames_and_hold_a_wing_pose_4():
 
 
 def test_a_creature_that_does_not_travel_may_still_animate():
-    """Six of the eleven never move a pixel. Only TWO of those six are drawn
-    as a single bitmap.
+    """Six of the fifteen never move a pixel - the hanging spiders - and NONE
+    of them is drawn as a single bitmap: all six swap their legs on the spot.
 
-    This is the distinction the census cannot make and this test used to get
-    wrong. "Still" was taken from the census's `distinct_sprites`, which
-    reports 1 for creatures that plainly alternate two bitmaps every seven or
-    eight frames, so four spiders that swap their legs on the spot were pinned
-    to one pose. Counted over the capture's own 480 frames, rooms 2 and 6 draw
-    ONE bitmap for the whole window and rooms 3, 5, 7 and 9 draw two.
+    "Still" was first taken from the census's `distinct_sprites`, and later
+    from a capture of a room the reading park's death had frozen, and both
+    pinned spiders the live ROM plainly animates. Watched with the hero
+    parked above the picture (2026-09-30), every one draws two bitmaps.
     """
     still = [slot for slot, c in enumerate(HL.SPIDERS[L - 1])
              if HL.CREATURE_MOTION[(L, slot)][0] == 0]
-    assert still == [2, 4, 5, 7, 9, 10]
+    assert still == [3, 5, 7, 9, 12, 14]
     for slot in still:
         travel, half, _hold = HL.CREATURE_MOTION[(L, slot)]
         assert (travel, half) == (0, 0), "a still creature does not travel"
         assert (L, slot) not in HL.CREATURE_PATROL, "and does not sweep"
-    frozen = [s for s in still if HL.CREATURE_SPRITES.get((L, s)) == 1]
-    assert frozen == [2, 7], "rooms 2 and 6 draw one bitmap all window"
-    assert [HL.SPIDERS[L - 1][s][0] for s in frozen] == [2, 6]
-    for slot in set(still) - set(frozen):
+        assert HL.SPIDERS[L - 1][slot][4] == 0, "they are the hanging spiders"
         assert (L, slot) not in HL.CREATURE_SPRITES, \
-            "the other four keep both of their poses"
+            "and every one keeps both of its poses"
 
 
 def test_the_moving_creatures_keep_their_kinds_full_cycle():
-    """A creature that does move must NOT be pinned to one sprite: the three
-    spiders keep both poses and the two bats keep all four wings."""
+    """A creature that does move must NOT be pinned to one sprite: the five
+    spiders keep both poses and the four bats keep all four wings."""
     for slot, c in enumerate(HL.SPIDERS[L - 1]):
         if HL.CREATURE_MOTION[(L, slot)][0] > 0:
             assert (L, slot) not in HL.CREATURE_SPRITES
 
 
-def test_the_renderer_holds_a_still_creature_on_one_sprite(env):
-    """The table is only half of it - the engine has to read it. Slot 2 is a
-    still spider; its drawn pose must be the same on every frame, while the
-    bat in slot 0 must cycle."""
+def test_the_renderer_pins_no_creature_to_one_sprite(env):
+    """The table is only half of it - the engine has to read it. Nothing of
+    this level is pinned, so every slot keeps its kind's full pose cycle
+    (SPIDER_POSES 0), the still spiders included."""
     c = env.consts
     lvl = L - 1
-    assert int(c.SPIDER_POSES[lvl, 2]) == 1, "the still spider is pinned"
-    assert int(c.SPIDER_POSES[lvl, 0]) == 0, "the bat keeps its kind's cycle"
-    hold = int(c.SPIDER_HOLD[lvl, 2])
-    frames = {(step // hold) % max(1, int(c.SPIDER_POSES[lvl, 2]))
-              for step in range(600)}
-    assert frames == {0}, "a still creature never changes sprite"
+    n = len(HL.SPIDERS[L - 1])
+    assert [int(p) for p in c.SPIDER_POSES[lvl, :n]] == [0] * n
+    assert int(c.SPIDER_HOLD[lvl, 3]) == 8, "slot 3 swaps its legs every 8"
 
 
 def test_a_still_creature_never_moves_and_a_bobbing_one_does(env):
     """Position, not just artwork: over a full 184-frame sweep the still
-    spider of room 2 must not shift by a pixel, and the bat must."""
+    spider of room 2 (slot 3) must not shift by a pixel, and the bat must."""
     from jaxatari.games.jax_hero import _creature_pos
     c = env.consts
     lvl = L - 1
     seen_still, seen_bat, seen_spider = set(), set(), set()
     for step in range(400):
         x, y = _creature_pos(c, lvl, step)
-        seen_still.add((int(x[2]), int(y[2])))
+        seen_still.add((int(x[3]), int(y[3])))
         seen_bat.add((int(x[0]), int(y[0])))
         seen_spider.add((int(x[1]), int(y[1])))
     assert seen_still == {(80, 109)}, "the still spider of room 2 never moves"

@@ -104,10 +104,11 @@ BANDS = [
 
 # The live-hero ROM capture (the data hero_levels.py ships), as
 # (room, what, x, y) with x the LEFT edge of the drawn box - for a bat, of
-# its sweep. Every row.
+# its sweep. Every row. Rows re-read with the hero IN the room on 2026-09-30:
+# the above park had drawn room 2's bat a row low, at 65.
 CHARACTERS_MD = [
     (1, "lantern", 83, 35), (1, "spider_free", 24, 104), (1, "bat", 44, 64),
-    (2, "lantern", 131, 35), (2, "bat", 104, 65),
+    (2, "lantern", 131, 35), (2, "bat", 104, 64),
     (3, "lantern", 79, 35), (3, "spider_free", 28, 104), (3, "bat", 44, 64),
     (4, "lantern", 79, 35), (4, "snake", 120, 72),
     (5, "lantern", 31, 35), (5, "spider", 40, 109), (5, "snake", 116, 72),
@@ -164,7 +165,7 @@ SHIPPED_AS = {
 # Rooms 1-10: hidden from it by its lethal park. Rooms 11-15: never reached.
 NOT_IN_CENSUS = {
     1: [("bat", 44, 64)],
-    2: [("bat", 104, 65)],
+    2: [("bat", 104, 64)],
     3: [("bat", 44, 64)],
     4: [("snake", 120, 72)],
     5: [("snake", 116, 72)],
@@ -471,7 +472,10 @@ def test_the_miner_is_in_the_last_room():
 
 def test_the_snakes_are_anchored_in_the_wall_on_their_left():
     """Two grow out of a magma wall's right face in the corridor, one out of
-    the rock between room 12's two waters."""
+    the rock between room 12's two waters. On this level they stretch a
+    pixel every 2 frames (a 32-frame cycle), twice as fast as level 4's and
+    level 9's 4 - measured on the ROM; the 4 shipped before was the old
+    default."""
     snakes = [(r, x, y) for r, x, y, _h, k in HL.SPIDERS[L - 1] if k == 3]
     assert snakes == [(4, 120, 72), (5, 116, 72), (12, 88, 111)]
     for room, x, y in snakes:
@@ -479,7 +483,8 @@ def test_the_snakes_are_anchored_in_the_wall_on_their_left():
         assert BANDS[room][band][(x - 8) // 4 - 1] in "#%", f"room {room}"
         assert BANDS[room][band][(x - 8) // 4] in ".~", f"room {room}"
         slot = HL.SPIDERS[L - 1].index((room, x, y, 0, 3))
-        assert HL.CREATURE_MOTION[(L, slot)] == (0, 0, 4)
+        assert HL.CREATURE_MOTION[(L, slot)] == (0, 0, 2)
+        assert (L, slot) not in HL.CREATURE_PATROL
 
 
 def test_the_thirteen_bats_patrol_22_px_on_92_frames_and_hold_a_pose_4():

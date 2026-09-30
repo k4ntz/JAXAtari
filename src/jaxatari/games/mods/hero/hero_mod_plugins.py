@@ -2,7 +2,7 @@
 
 They exist so one level can be checked without replaying everything before it:
 
-    python scripts/play.py -g hero -l 5 -lifes -granades
+    python scripts/play.py -g hero -m start_level_5 unlimited_lives unlimited_dynamite
 
 * ``start_level_N``      -- every reset() lands on level N (1-based, as the
                             console counts). Play then continues normally:
@@ -19,8 +19,7 @@ One mod changes the game itself:
 
 * ``slow`` -- the earlier hero instead of the ROM's: the 9 px art with two
   walk strides and a rotor turning one pose per frame in the air, on the
-  constant-fall / 16-frame spin-up flight model. ``scripts/play.py -g hero
-  -m slow`` also keeps the earlier 30 fps pace unless ``--fps`` is given.
+  constant-fall / 16-frame spin-up flight model.
 """
 from functools import partial
 

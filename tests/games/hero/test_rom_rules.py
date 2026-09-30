@@ -61,21 +61,30 @@ def _plant_and_blow(env, x, flee):
     assert bool(s.dyn_active), "a stick must go down on solid ground"
     for _ in range(flee):
         _, s, _, _, _ = env.step(s, LEFT)
+    # stop him exactly `flee` px away: left to himself he would walk on to
+    # the 4-px grid first, and these tests measure the blast, not the walk
+    s = s.replace(player_x=jnp.int32(x - flee), walk_dir=jnp.int32(0))
     for _ in range(c.dyn_fuse_playable + 6):
         _, s, _, _, _ = env.step(s, NOOP)
     return s
 
 
 def test_a_stick_needs_solid_ground(env):
-    """DOWN in mid-air lays nothing and only makes him sink faster."""
+    """DOWN in mid-air lays nothing - and does nothing else either: measured
+    on the ROM, a DOWN frame in the air is a NOOP frame, pixel for pixel.
+    (The earlier hero, mod `slow`, sank faster under DOWN.)"""
     c = env.consts
     _, s = env.reset()
-    s = s.replace(player_x=jnp.int32(33), player_y=jnp.int32(30))   # mid-air
-    _, air, _, _, _ = env.step(s, DOWN)
-    assert not bool(air.dyn_active)
-    assert int(air.dynamite_count) == c.starting_dynamite
-    _, fall, _, _, _ = env.step(s, NOOP)
-    assert int(air.player_y) > int(fall.player_y), "DOWN must sink faster"
+    s = s.replace(player_x=jnp.int32(33), player_y=jnp.int32(30),   # mid-air
+                  has_moved=jnp.bool_(True))     # else he hovers there
+    air, fall = s, s
+    for _ in range(20):
+        _, air, _, _, _ = env.step(air, DOWN)
+        _, fall, _, _, _ = env.step(fall, NOOP)
+        assert not bool(air.dyn_active)
+        assert int(air.dynamite_count) == c.starting_dynamite
+        assert int(air.player_y) == int(fall.player_y), "DOWN in the air == NOOP"
+    assert int(fall.player_y) > 30, "and he really was falling"
 
 
 @pytest.mark.parametrize("facing, walk_away", [(1, LEFT), (-1, RIGHT), (1, RIGHT), (-1, LEFT)])
@@ -224,27 +233,48 @@ def test_the_laser_does_not_remove_magma(env):
 
 
 # --- the power gauge --------------------------------------------------------
-def test_the_gauge_is_seventy_eight_pixels_of_sixty_eight_frames(env):
+# Measured on the ROM 2026-09-29 (RAM 43 is the gauge): 81 units of 64 frames
+# from the first input of a life, draining every frame whatever he does; the
+# bar shows at most 78 of them, first shrinks on frame 255, reads empty on
+# frame 5,184 and he dies. Before the first input nothing drains (400 frames
+# of the level start cost nothing) - the Activision manual: "Power begins to
+# diminish when the Joystick is moved at the beginning of each level".
+def test_the_gauge_is_eighty_one_units_of_sixty_four_frames(env):
     c = env.consts
     assert c.power_bar_width == 78
     assert c.power_bar_x == 49 and c.power_bar_x + c.power_bar_width - 1 == 126
     assert c.power_bar_y == 145 and c.power_bar_height == 5       # rows 145-149
-    assert c.power_frames_per_pixel == 68
-    assert c.max_power == 78 * 68
+    assert c.power_frames_per_pixel == 64
+    assert c.max_power == 81 * 64
 
 
-def test_standing_still_costs_no_power_but_walking_does(env):
+def _bar_px(env, s):
+    c = env.consts
+    row = np.asarray(env.render(s))[147, c.power_bar_x:c.power_bar_x + c.power_bar_width]
+    return int((row == np.array(c.power_color, np.uint8)).all(axis=-1).sum())
+
+
+def test_power_drains_every_frame_after_the_first_input_standing_still_too(env):
     c = env.consts
     _, s = env.reset()
-    for _ in range(20):                       # get him moving and grounded
-        _, s, _, _, _ = env.step(s, RIGHT)
-    p0 = int(s.power)
-    for _ in range(600):
-        _, s, _, _, _ = env.step(s, NOOP)
-    assert int(s.power) == p0, "an idle hero must not burn power"
-    for _ in range(c.power_frames_per_pixel):
-        _, s, _, _, _ = env.step(s, RIGHT)
-    assert p0 - int(s.power) == c.power_frames_per_pixel          # one bar pixel
+    s = s.replace(banner_timer=jnp.int32(0))
+    step = jax.jit(env.step)
+    for _ in range(400):
+        _, s, *_ = step(s, NOOP)
+    assert int(s.power) == c.max_power, "nothing drains before the first input"
+    _, s, *_ = step(s, DOWN)                  # the first input drains too
+    bars = {}
+    for f in range(1, 5300):                  # f + 1 frames of drain so far
+        _, s, *_ = step(s, NOOP)
+        if f in (254, 255, 319, 5182):
+            bars[f] = _bar_px(env, s)
+        if int(s.lives) < c.starting_lives:
+            break
+    # the ROM probe, counted the same way: bar 77 at f 255, 76 at 319
+    assert bars[254] == 78 and bars[255] == 77 and bars[319] == 76, \
+        "the bar first shrinks on frame 255, then a pixel every 64 frames"
+    assert bars[5182] == 1
+    assert f == 5183, "the gauge runs out on the 5,184th frame of standing still"
 
 
 def test_the_bar_is_yellow_and_eaten_from_the_right_in_red(env):
@@ -256,22 +286,85 @@ def test_the_bar_is_yellow_and_eaten_from_the_right_in_red(env):
     s = s.replace(power=jnp.int32(c.max_power // 3),
                   banner_timer=jnp.int32(0))
     row = np.asarray(env.render(s))[147, c.power_bar_x:c.power_bar_x + c.power_bar_width]
-    lit = int(s.power) // c.power_frames_per_pixel
+    lit = -(-int(s.power) // c.power_frames_per_pixel)        # a started unit counts
     assert (row[:lit] == np.array(c.power_color, np.uint8)).all()
     assert (row[lit:] == np.array(c.power_spent_color, np.uint8)).all()
 
 
-def test_the_end_of_level_tally_pays_twenty_a_pixel(env):
+# The end-of-level tally, measured on the ROM 2026-09-29 (level 1, three
+# rescues). From the touch frame (+1000): power unit i (from 0) pays 20 on
+# frame 3 + 4*(i // 2) + i % 2 while the bar drains; the first stick left pays
+# 50 on the last unit's frame and the rest one every 16 frames, each icon
+# going as it is paid; 16 frames after the last stick level 2 starts. The
+# ROM runs: 79 units + 6 sticks -> last unit +159, level +255; 23 units + 3
+# sticks -> +47 and +95; 79 units + 0 sticks -> level on the last unit's
+# frame, +159. Lives pay nothing (the lives byte stays put all through).
+def _tally(env, units, sticks, lives=None):
     c = env.consts
     m = c.LEVEL_MINER[0]
     _, s = env.reset()
     s = s.replace(room=m[0], player_x=m[1], player_y=m[2],
+                  has_moved=jnp.bool_(True), banner_timer=jnp.int32(0),
+                  power=jnp.int32(units * c.power_frames_per_pixel),
+                  dynamite_count=jnp.int32(sticks),
                   spider_alive=jnp.zeros_like(s.spider_alive))
-    power0 = int(s.power)
-    _, _, reward, _, _ = env.step(s, NOOP)
-    bonus = (power0 // c.power_frames_per_pixel) * c.bonus_per_power_pixel
-    assert bonus == 1560                                  # a full gauge
-    assert float(reward) == float(c.miner_points + bonus)
+    if lives is not None:
+        s = s.replace(lives=jnp.int32(lives))
+    step = jax.jit(env.step)
+    trace = []
+    for f in range(400):
+        _, s, reward, *_ = step(s, NOOP if f else LEFT)
+        trace.append((f, float(reward), int(s.level), int(s.dynamite_count),
+                      int(s.lives), int(s.player_x)))
+        if int(s.level) == 1:
+            break
+    return trace, s
+
+
+@pytest.mark.parametrize("units, sticks, last_unit, next_level",
+                         [(79, 6, 159, 255), (23, 3, 47, 95), (79, 0, 159, 159)])
+def test_the_tally_pays_power_then_sticks_on_the_rom_clock(env, units, sticks,
+                                                           last_unit, next_level):
+    c = env.consts
+    trace, s = _tally(env, units, sticks)
+    assert trace[0][1] == c.miner_points, "the touch pays the rescue alone"
+    pays = [(f, r) for f, r, *_ in trace[1:] if r]
+    unit_frames = [f for f, r in pays if r in (20.0, 70.0)]
+    want = [3 + 4 * (i // 2) + i % 2 for i in range(units)]
+    assert unit_frames == want
+    stick_frames = [f for f, r in pays if r in (50.0, 70.0)]
+    assert stick_frames == [last_unit + 16 * j for j in range(sticks)]
+    assert trace[-1][0] == next_level and trace[-1][2] == 1
+    total = sum(r for _, r, *_ in trace)
+    assert total == c.miner_points + 20 * units + 50 * sticks
+
+
+def test_the_tally_holds_him_still_and_pays_nothing_for_lives(env):
+    trace, s = _tally(env, 30, 2, lives=5)
+    xs = {x for *_, lv, x in trace[1:-1]}
+    assert len(xs) == 1, "he stands by the miner through the tally"
+    assert {lv for *_, lv, x in trace} == {5}
+    assert sum(r for _, r, *_ in trace) == 1000 + 20 * 30 + 50 * 2
+
+
+def test_the_tally_drains_the_bar_and_takes_the_icons(env):
+    c = env.consts
+    m = c.LEVEL_MINER[0]
+    _, s = env.reset()
+    s = s.replace(room=m[0], player_x=m[1], player_y=m[2],
+                  has_moved=jnp.bool_(True), banner_timer=jnp.int32(0),
+                  power=jnp.int32(40 * c.power_frames_per_pixel),
+                  spider_alive=jnp.zeros_like(s.spider_alive))
+    step = jax.jit(env.step)
+    bars, sticks = [], []
+    for f in range(140):
+        _, s, *_ = step(s, NOOP)
+        bars.append(_bar_px(env, s)); sticks.append(int(s.dynamite_count))
+    # 40 units: the last one (i = 39) is paid on frame 3 + 4 * 19 + 1 = 80,
+    # and the first stick with it
+    assert bars[0] == 40 and bars[3] == 39 and bars[4] == 38 and bars[7] == 37
+    assert bars[79] == 1 and bars[80] == 0
+    assert sticks[79] == 6 and sticks[80] == 5 and sticks[96] == 4
 
 
 # --- darkness ---------------------------------------------------------------
@@ -401,7 +494,10 @@ def test_melted_rock_resets_on_the_next_level(env):
     s = s.replace(room=m[0], player_x=m[1], player_y=m[2],
                   spider_alive=jnp.zeros_like(s.spider_alive),
                   miner_rescued=jnp.bool_(False))
-    _, s, _, _, _ = env.step(s, NOOP)
+    for _ in range(400):                      # the touch, then the tally
+        _, s, _, _, _ = env.step(s, NOOP)
+        if int(s.level) == 1:
+            break
     assert int(s.level) == 1
     assert not bool(np.asarray(s.melted).any())
     assert int(s.burn_cell) == -1 and int(s.burn_timer) == 0
@@ -696,3 +792,98 @@ def test_the_creature_stays_gone_after_the_respawn(env):
         _, s, *_ = env.step(s, NOOP)
     assert not bool(s.spider_alive[slot])
     assert int(s.lives) == lives, "nothing left there to kill him again"
+
+
+# --- the walk: a 4-px grid, and the leg poses on the frame clock ------------
+# Measured on the ROM 2026-09-29 (ALE, level 1 room 0, the hero landed at x 33
+# after 250 idle frames, DOWN and 90 more; engine x == the ROM's screen x).
+# He walks 1 px a frame, but he only stops or turns where x = 1 (mod 4): let go
+# (or press the other way) between two of those and he walks on to the next
+# one first. The legs: the frame a walk starts still shows him standing; then
+# pose 0, and each new pose starts on a frame where the game's frame clock is
+# a multiple of 4 - so the first pose lasts 1-4 frames. They keep going while
+# he pushes against a wall, and the frame he lets go still shows one.
+R_, L_, N_ = RIGHT, LEFT, NOOP
+
+
+def _landed(env, delay=0):
+    _, s = env.reset(jax.random.PRNGKey(0))
+    step = jax.jit(env.step)
+    for a in [NOOP] * 250 + [DOWN] + [NOOP] * (90 + delay):
+        _, s, *_ = step(s, a)
+    assert (int(s.player_x), int(s.player_y)) == (33, 75)
+    return s, step
+
+
+def _xs(env, seq, delay=0):
+    s, step = _landed(env, delay)
+    out = []
+    for a in seq:
+        _, s, *_ = step(s, a)
+        out.append(int(s.player_x))
+    return out
+
+
+def test_letting_go_walks_on_to_the_grid(env):
+    assert _xs(env, [R_] * 9 + [N_] * 5) == list(range(34, 43)) + [43, 44, 45, 45, 45]
+    assert _xs(env, [R_] * 8 + [N_] * 3) == list(range(34, 42)) + [41, 41, 41], \
+        "on the grid already: he stops dead"
+
+
+def test_a_turn_waits_for_the_grid(env):
+    assert _xs(env, [R_] * 6 + [L_] * 6 + [N_] * 3) == \
+        [34, 35, 36, 37, 38, 39, 40, 41, 40, 39, 38, 37, 37, 37, 37]
+    assert _xs(env, [R_] * 8 + [L_] * 3) == list(range(34, 42)) + [40, 39, 38]
+
+
+def test_a_short_gap_between_taps(env):
+    assert _xs(env, [R_] * 4 + [N_] + [R_] * 4 + [N_] * 4) == \
+        [34, 35, 36, 37, 37, 38, 39, 40, 41, 41, 41, 41, 41]
+
+
+# poses per frame for 30 frames of RIGHT (the pillar stops him at x 54 on the
+# 21st) and 5 of nothing, starting 0-3 frames later: ROM, frame for frame
+ROM_POSES = {
+    0: "S" + "0000" + "1111" "2222" "3333" "4444" "0000" "1111" + "2" + "2SSSS",
+    1: "S" + "000" + "1111" "2222" "3333" "4444" "0000" "1111" + "22" + "2SSSS",
+    2: "S" + "00" + "1111" "2222" "3333" "4444" "0000" "1111" + "222" + "2SSSS",
+    3: "S" + "0" + "1111" "2222" "3333" "4444" "0000" "1111" + "2222" + "3SSSS",
+}
+
+
+@pytest.mark.parametrize("delay", [0, 1, 2, 3])
+def test_the_legs_run_on_the_frame_clock(env, delay):
+    s, step = _landed(env, delay)
+    r = env.renderer
+    names = {int(r.PLAYER_STAND_FRAME): "S"}
+    names.update({int(r.PLAYER_WALK_FRAME0) + k: str(k) for k in range(5)})
+    got = ""
+    for a in [R_] * 30 + [N_] * 5:
+        _, s, *_ = step(s, a)
+        got += names[int(r._player_frame(s))]
+    assert got == ROM_POSES[delay]
+
+
+# --- the HUD icon rows ------------------------------------------------------
+# Measured on the ROM 2026-09-29 (level 1 room 0, RAM 51 lives 2-7, RAM 50
+# sticks 1-6): both rows are right-aligned on 8-px slots, the last life icon
+# on columns 97-101 and the last stick on 99-101, so an icon that goes goes
+# from the LEFT.
+def _icon_starts(img, rows, lo=40, hi=130):
+    band = img[rows[0]:rows[1], lo:hi]
+    grey = img[rows[0], 20]
+    lit = (np.abs(band.astype(int) - grey.astype(int)).sum(-1) > 30).any(0)
+    xs = np.nonzero(lit)[0] + lo
+    return [int(x) for i, x in enumerate(xs) if i == 0 or xs[i - 1] != x - 1]
+
+
+@pytest.mark.parametrize("lives, sticks", [(2, 1), (4, 3), (7, 6), (5, 2)])
+def test_the_icon_rows_are_right_aligned(env, lives, sticks):
+    _, s = env.reset()
+    s = s.replace(lives=jnp.int32(lives), dynamite_count=jnp.int32(sticks),
+                  banner_timer=jnp.int32(0))
+    img = np.asarray(env.render(s))
+    life = _icon_starts(img, (152, 164))
+    dyn = _icon_starts(img, (166, 177))
+    assert life == [97 - 8 * k for k in range(lives - 2, -1, -1)]
+    assert dyn == [99 - 8 * k for k in range(sticks - 1, -1, -1)]

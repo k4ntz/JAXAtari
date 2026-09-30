@@ -7,7 +7,7 @@ agrees with the reference cell for cell. These tests re-check that agreement
 from the committed data alone (no ale-py), then play the level.
 
 Level 8 is the first level that needed DYNAMITE to be captured at all, and
-three things came out of it:
+four things came out of it:
 
   * THE WALK NOW REACHES ALL FOURTEEN ROOMS. The old reference had it at 11.
     Room 10 is left through its open LEFT edge, but only from near that edge:
@@ -23,6 +23,11 @@ three things came out of it:
     action from every drop point failed to leave in 1500 frames. A stick
     takes it - stock 6 -> 5 - and LEFT then reaches room 12 in 17 frames.
     Rooms 12 and 13 exist only on the far side of that blast.
+  * SEVENTEEN CREATURES, NOT NINE. The first capture read the magma rooms
+    with the hero parked at x = 0, which is magma: he died, the ROM drew the
+    room FROZEN, and eight creatures of rooms 1-8 were never seen while rooms
+    1-3's spiders were pinned to one bitmap. Re-read with the hero parked
+    above the picture (2026-09-30), nothing is pinned.
 
 The shape of the level, room by room:
 
@@ -105,7 +110,9 @@ BANDS = [
 # (room, what, x, y). Rooms 0 and 10 have NO row: no entity was measured in
 # them, and none is invented here. Rooms 11-13 were reached for the first
 # time in this session and have never been censused - see
-# test_the_deep_rooms_were_never_censused.
+# test_the_deep_rooms_were_never_censused. It parked the hero at the lethal
+# x = 0 in the magma rooms too, so it also misses eight creatures of rooms
+# 1-8 that the ROM stops drawing once he is dead.
 CHARACTERS_MD = [
     (1, "lantern", 83, 35),
     (1, "spider", 80, 109),
@@ -419,51 +426,63 @@ def test_the_miner_is_in_the_last_room():
     assert (x, y) == (25, 86)
 
 
-def test_the_two_snakes_are_anchored_in_rock_on_their_left():
+def test_the_five_snakes_are_anchored_in_rock_on_their_left():
     """A snake grows RIGHTWARDS out of a wall's right face, so the x it is
-    recorded at is the face, and the cell to its left has to be solid."""
+    recorded at is the face, and the cell to its left has to be solid. The
+    three of rooms 4, 7 and 8 were missed by the first capture, whose x = 0
+    reading park in those magma rooms killed the hero and froze the room."""
     snakes = [(r, x, y) for r, x, y, _h, k in HL.SPIDERS[L - 1] if k == 3]
-    assert len(snakes) == 2
+    assert snakes == [(4, 32, 111), (7, 96, 72), (8, 104, 111),
+                      (11, 104, 72), (12, 88, 111)]
     for room, x, y in snakes:
-        # A snake is anchored in the band it is DRAWN in: room 11's grows out
-        # of a corridor slab, room 12's out of the rock between its two
-        # stretches of water, in the floor band.
+        # A snake is anchored in the band it is DRAWN in: those of rooms 7
+        # and 11 grow out of a corridor slab, those of rooms 4 and 8 out of
+        # the side of a floor hole, room 12's out of the rock between its
+        # two stretches of water, in the floor band.
         band = "A" if y < 60 else ("B" if y < 99 else "C")
         left_cell = (x - 8) // 4 - 1
         assert BANDS[room][band][left_cell] in "#%~", (
             f"the snake of room {room} has no rock on its left in band {band}")
 
 
-def test_the_one_bat_patrols_22_px_on_184_frames_and_holds_a_pose_4():
-    """The bat's two clocks are different numbers and neither is the
+def test_the_two_bats_patrol_22_px_on_184_frames_and_hold_a_pose_4():
+    """Rooms 3 and 11 each hold one (room 3's was missed off the frozen x = 0
+    park). A bat's two clocks are different numbers and neither is the
     spider's: it sweeps 22 px on 184 frames and bobs on 64, holding each wing
     pose for 4 frames."""
     bats = [(i, c) for i, c in enumerate(HL.SPIDERS[L - 1]) if c[4] == 1]
-    assert len(bats) == 1
-    slot, (room, _x, _y, half, _k) = bats[0]
-    assert room == 11
-    assert 2 * half == 22
-    assert 2 * HL.CREATURE_PATROL[(L, slot)] == 184
-    travel, half_bob, hold = HL.CREATURE_MOTION[(L, slot)]
-    assert (travel, 2 * half_bob, hold) == (7, 64, 4)
+    assert [(i, c[0]) for i, c in bats] == [(3, 3), (12, 11)]
+    for slot, (_room, _x, _y, half, _k) in bats:
+        assert 2 * half == 22
+        assert 2 * HL.CREATURE_PATROL[(L, slot)] == 184
+        travel, half_bob, hold = HL.CREATURE_MOTION[(L, slot)]
+        assert (travel, 2 * half_bob, hold) == (7, 64, 4)
 
 
 def test_the_still_creatures_are_still():
-    """Most creatures do not move. The three spiders of rooms 1-3 that
-    the census calls still travel nothing and are drawn as ONE sprite."""
-    for slot, (room, _x, _y, half, _k) in enumerate(HL.SPIDERS[L - 1]):
-        if room in (1, 2, 3):
-            assert half == 0, f"slot {slot} should not patrol"
-            assert HL.CREATURE_MOTION[(L, slot)][0] == 0, "and should not bob"
-            assert HL.CREATURE_SPRITES[(L, slot)] == 1, "and not animate"
+    """Most creatures do not move: the nine hanging spiders travel nothing.
+    But they are NOT drawn as one sprite - the census and the first capture
+    saw rooms 1-3's that way only because the hero had died in the x = 0
+    park and the ROM froze the room; live, every one swaps its legs."""
+    still = [slot for slot, c in enumerate(HL.SPIDERS[L - 1]) if c[4] == 0]
+    assert still == [0, 1, 2, 4, 6, 7, 11, 14, 16]
+    for slot in still:
+        assert HL.SPIDERS[L - 1][slot][3] == 0, f"slot {slot} should not patrol"
+        assert HL.CREATURE_MOTION[(L, slot)] == (0, 0, 8), \
+            "and should not bob, but swaps its legs every 8 frames"
+        assert (L, slot) not in HL.CREATURE_SPRITES, "nothing is pinned"
+    assert not any(lvl == L for lvl, _s in HL.CREATURE_SPRITES)
 
 
-def test_only_the_bat_moves_at_all():
-    """Whether a creature moves is a property of the ROOM. On level 8 exactly
-    one of the nine does."""
+def test_only_the_bats_and_the_untethered_spider_move_at_all():
+    """Whether a creature moves is a property of its KIND. On level 8 three
+    of the seventeen do: the two bats and room 8's untethered spider (the
+    first capture's frozen rooms had left only room 11's bat moving)."""
     movers = [i for i, c in enumerate(HL.SPIDERS[L - 1])
               if c[3] or HL.CREATURE_MOTION[(L, i)][0]]
-    assert movers == [4]
+    assert movers == [3, 9, 12]
+    assert HL.SPIDERS[L - 1][9] == (8, 28, 65, 0, 4)
+    assert HL.CREATURE_MOTION[(L, 9)] == (7, 32, 8)
 
 
 # --- rendering --------------------------------------------------------------

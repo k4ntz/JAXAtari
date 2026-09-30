@@ -14,7 +14,8 @@ class HeroEnvMod(JaxAtariModController):
 
     The mods here are debugging aids (see hero/hero_mod_plugins.py):
     ``start_level_N`` (N = 1..20), ``unlimited_lives`` and ``unlimited_dynamite``.
-    ``scripts/play.py -g hero -l N -lifes -granades`` maps onto them.
+    Select them like any game's mods: ``scripts/play.py -g hero -m start_level_5
+    unlimited_lives unlimited_dynamite``.
     ``slow`` swaps the ROM hero (the default) for the earlier one.
     """
 
