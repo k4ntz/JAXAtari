@@ -30,6 +30,8 @@ class TowerLevelType(IntEnum):
     FULL = 0
     MIDDLE_CUT = 1
     SIDE_CUTS = 2
+    MIDDLE_4 = 3
+    MIDDLE_2 = 4
 
 class PlayerStableStates(IntEnum):
     NEUTRAL = 0
@@ -92,25 +94,32 @@ class PlayerMoveState:
 class TowerState:
     tower_step: int
     windows: jnp.ndarray
-    spawn_probability: float
+    spawn_prob: float
+    spawn_cycle_prob: float
+    open_prob: float
+    cycle_duration: int
     is_falling: bool
     lowest_level: int
-    levels: jnp.ndarray
+    tower: jnp.ndarray
 
     @classmethod
-    def new(cls, key, level: chex.Array):
+    def new(cls, level: chex.Array):
         blind_left = jnp.zeros((11, 3))
-        blind_dirs_left = jax.random.choice(key, jnp.array([0, 1]), (11, 3), p=jnp.array([0.8, 0.2]))
+        blind_dirs_left = jnp.zeros((11, 3)) 
+
         windows_left = jnp.stack([blind_left, blind_dirs_left], axis=2)
         windows = jnp.concatenate([windows_left, jnp.fliplr(windows_left)], axis=1)
 
         return cls(
             tower_step=0,
             windows=windows,
-            spawn_probability=0.2,
+            spawn_prob=CrazyClimberConstants.TOWER_BLIND_SPAWN_PROB[level - 1],
+            spawn_cycle_prob=CrazyClimberConstants.TOWER_BLIND_SPAWN_CYCLE_PROB[level - 1],
+            open_prob=CrazyClimberConstants.TOWER_BLIND_OPEN_PROB[level - 1],
+            cycle_duration=CrazyClimberConstants.TOWER_BLIND_CYCLE_DURATIONS[level - 1],
             is_falling=False,
             lowest_level=0,
-            levels=CrazyClimberConstants.TOWERS[level - 1]
+            tower=CrazyClimberConstants.TOWERS[level - 1],
         )
 
 class HeliFlyAwayStates(IntEnum):
@@ -253,20 +262,61 @@ def _create_block_sprite_with_padding(color: tuple[int, int, int, int], shape: t
     return padded_sprite
 
 def _get_default_asset_config() -> tuple:
-    wall_sprite = _create_block_sprite((0, 0, 148, 255), (169, 4))
-    ceiling_sprite = _create_block_sprite((0, 48, 100, 255), (5, 80))
-    floor_sprite = _create_block_sprite((0, 0, 148, 255), (1, 80))
-    window_sprites = jnp.array([
-        _create_block_sprite_with_padding((0, 0, 148,   0), (2, 8), (8, 8)),
-        _create_block_sprite_with_padding((0, 0, 148, 255), (2, 8), (8, 8)),
-        _create_block_sprite_with_padding((0, 0, 148, 255), (3, 8), (8, 8)),
-        _create_block_sprite_with_padding((0, 0, 148, 255), (4, 8), (8, 8)),
-        _create_block_sprite_with_padding((0, 0, 148, 255), (5, 8), (8, 8)),
-        _create_block_sprite_with_padding((0, 0, 148, 255), (6, 8), (8, 8)),
-        _create_block_sprite_with_padding((0, 0, 148, 255), (8, 8), (8, 8)),
-    ])
+    wall_colors = [
+        (0, 0, 148, 255),
+        (72, 44, 0, 255),
+        (128, 0, 128, 255),
+        (0, 204, 255, 255),
+    ]
+    ceiling_colors = [
+        (0, 48, 100, 255),
+        (124, 44, 0, 255),
+        (255, 102, 0, 255),
+        (128, 0, 0, 255),
+    ]
+    floor_colors = [
+        (0, 0, 148, 255),
+        (72, 44, 0, 255),
+        (128, 0, 128, 255),
+        (0, 204, 255, 255),
+    ]
+    window_colors = [
+        (0, 0, 148, 255),
+        (72, 44, 0, 255),
+        (128, 0, 128, 255),
+        (0, 204, 255, 255),
+    ]
+    window_states = [
+        ((2, 8), (8, 8)),
+        ((2, 8), (8, 8)),
+        ((3, 8), (8, 8)),
+        ((4, 8), (8, 8)),
+        ((5, 8), (8, 8)),
+        ((6, 8), (8, 8)),
+        ((8, 8), (8, 8)),
+    ]
 
-    return (
+    procedural_assets = []
+
+    for i in range(4):
+        procedural_assets.extend([
+            {'name': f'wall_{i}', 'type': 'procedural', 'data': _create_block_sprite(wall_colors[i], (169, 4))},
+            {'name': f'ceiling_{i}', 'type': 'procedural', 'data': _create_block_sprite(ceiling_colors[i], (5, 80))},
+            {'name': f'floor_{i}', 'type': 'procedural', 'data': _create_block_sprite(floor_colors[i], (1, 80))}
+        ])
+
+        for j in range(7):
+            color = window_colors[i]
+            current_color = (color[0], color[1], color[2], 0) if j == 0 else color
+            procedural_assets.extend([
+                {
+                    'name': f'window_sprite_{i}_{j}',
+                    'type': 'procedural',
+                    'data': _create_block_sprite_with_padding(current_color, window_states[j][0], window_states[j][1])
+                }
+            ])
+
+    return tuple([
         {'name': 'background', 'type': 'background', 'file': 'misc/background.npy'},
         {'name': 'digits', 'type': 'digits', 'pattern': 'numbers/score_{}.npy'},
         {'name': 'life', 'type': 'single', 'file': 'misc/life.npy'},
@@ -437,12 +487,6 @@ def _get_default_asset_config() -> tuple:
             'flowerpot_enemy/yellow_drop/yellow_drop_37.npy',
             'flowerpot_enemy/yellow_drop/yellow_drop_38.npy',
             ]},
-
-        {'name': 'wall', 'type': 'procedural', 'data': wall_sprite},
-        {'name': 'ceiling', 'type': 'procedural', 'data': ceiling_sprite},
-        {'name': 'floor', 'type': 'procedural', 'data': floor_sprite},
-        {'name': 'window_blind_group', 'type': 'procedural', 'data': window_sprites},
-        {'name': 'ceiling', 'type': 'procedural', 'data': ceiling_sprite},
         {'name': 'helicopter_right', 'type': 'group', 'files': [
             'helicopter/right/0+2.npy',
             'helicopter/right/1.npy',
@@ -453,8 +497,6 @@ def _get_default_asset_config() -> tuple:
             'helicopter/left/1.npy',
             'helicopter/left/3.npy',
         ]},
-        {'name': 'window_blind_group', 'type': 'procedural', 'data': window_sprites},
-
         {'name': 'bird_left', 'type': 'group', 'files': [
             'bird/left/0.npy',
             'bird/left/4.npy',
@@ -489,7 +531,7 @@ def _get_default_asset_config() -> tuple:
             'egg/break/2.npy',
             'egg/break/3.npy',
         ]}
-    )
+    ] + procedural_assets)
 
 class CrazyClimberConstants(struct.PyTreeNode):
     BACKGROUND_COLOR: Tuple[int, int, int] = struct.field(pytree_node=False, default=(0, 0, 0))
@@ -563,27 +605,41 @@ class CrazyClimberConstants(struct.PyTreeNode):
     )
 
     TOWER1 = jnp.concat([
-                jnp.repeat(TowerLevelType.MIDDLE_CUT, 5),
-                jnp.repeat(TowerLevelType.FULL, 9),
-                jnp.repeat(TowerLevelType.MIDDLE_CUT, 13),
-                jnp.repeat(TowerLevelType.FULL, 10),
-                jnp.repeat(TowerLevelType.SIDE_CUTS, 10),
-                jnp.repeat(TowerLevelType.FULL, 15),
-                jnp.repeat(TowerLevelType.MIDDLE_CUT, 8),
-                jnp.repeat(TowerLevelType.FULL, 15),
-                jnp.repeat(TowerLevelType.MIDDLE_CUT, 8),
-                jnp.repeat(TowerLevelType.FULL, 20),
-                jnp.repeat(TowerLevelType.SIDE_CUTS, 12),
-                jnp.repeat(TowerLevelType.FULL, 12),
-                jnp.repeat(TowerLevelType.MIDDLE_CUT, 8),
-                jnp.repeat(TowerLevelType.FULL, 18),
-            ]
-        )
+        jnp.repeat(TowerLevelType.MIDDLE_CUT, 5),
+        jnp.repeat(TowerLevelType.FULL, 9),
+        jnp.repeat(TowerLevelType.MIDDLE_CUT, 13),
+        jnp.repeat(TowerLevelType.FULL, 10),
+        jnp.repeat(TowerLevelType.SIDE_CUTS, 10),
+        jnp.repeat(TowerLevelType.FULL, 15),
+        jnp.repeat(TowerLevelType.MIDDLE_CUT, 8),
+        jnp.repeat(TowerLevelType.FULL, 15),
+        jnp.repeat(TowerLevelType.MIDDLE_CUT, 8),
+        jnp.repeat(TowerLevelType.FULL, 20),
+        jnp.repeat(TowerLevelType.SIDE_CUTS, 12),
+        jnp.repeat(TowerLevelType.FULL, 12),
+        jnp.repeat(TowerLevelType.MIDDLE_CUT, 8),
+        jnp.repeat(TowerLevelType.FULL, 18),
+    ])
+
     # TODO: Tower 2 - 4 currently placeholder. needs to be changed to correct design
-    TOWER2 = jnp.repeat(TowerLevelType.FULL, 163)
+    TOWER2 = jnp.concat([
+        jnp.repeat(TowerLevelType.MIDDLE_CUT, 5),
+        jnp.repeat(TowerLevelType.FULL, 9),
+        jnp.repeat(TowerLevelType.MIDDLE_4, 8),
+        jnp.repeat(TowerLevelType.MIDDLE_2, 32),
+        jnp.repeat(TowerLevelType.MIDDLE_4, 8),
+        jnp.repeat(TowerLevelType.FULL, 8),
+        jnp.repeat(TowerLevelType.MIDDLE_CUT, 48),
+        jnp.repeat(TowerLevelType.MIDDLE_4, 45), # TODO: placeholder for the end of the tower, needs to be correctly mapped
+    ])
     TOWER3 = jnp.repeat(TowerLevelType.FULL, 163)
     TOWER4 = jnp.repeat(TowerLevelType.FULL, 163)
     TOWERS = jnp.stack([TOWER1, TOWER2, TOWER3, TOWER4])
+    TOWER_BLIND_SPAWN_CYCLE_PROB = jnp.array([0.5, 0.6, 0.6, 0.6])
+    TOWER_BLIND_SPAWN_PROB = jnp.array([0.15, 0.2, 0.2, 0.2])
+    TOWER_BLIND_OPEN_PROB = jnp.array([0.9, 0.7, 0.7, 0.7])
+    TOWER_BLIND_CYCLE_DURATIONS = jnp.array([60, 45, 45, 45])
+    TOWER_BLINDS_MAX: int = 18
 
     PIXEL_MASK_ONE_ROW = jnp.zeros((13, 13), dtype=bool).at[-1, :].set(True).reshape(169, 1)
     PIXEL_MASK_NOTHING = jnp.zeros((169, 1), dtype=bool)
@@ -653,6 +709,7 @@ class JaxCrazyClimber(JaxEnvironment[CrazyClimberState, CrazyClimberObservation,
         self.FLOWERPOT_DROP_BOTTOM_Y_OFFSETS = self.renderer.FLOWERPOT_DROP_BOTTOM_Y_OFFSETS
 
     def reset(self, key: chex.PRNGKey = jax.random.PRNGKey(42)) -> tuple[CrazyClimberObservation, CrazyClimberState]:
+        level = Level.LEVEL_1
         state_key, _step_key = jax.random.split(key)
         state = CrazyClimberState(
             key=state_key,
@@ -662,10 +719,10 @@ class JaxCrazyClimber(JaxEnvironment[CrazyClimberState, CrazyClimberObservation,
             lifes=jnp.array(5),
             reached_apex=jnp.array(False),
             player_move_state=PlayerMoveState.new(),
-            tower_state=TowerState.new(state_key, 1),
+            tower_state=TowerState.new(level),
 
             bird_state=BirdState.new(),
-            level_state=LevelState.new(Level.LEVEL_1),
+            level_state=LevelState.new(level),
 
             climbed_floors=jnp.array(0, dtype=jnp.int32),
             flowerpot_enemy_state=FlowerpotEnemyState.new(
@@ -790,37 +847,74 @@ class JaxCrazyClimber(JaxEnvironment[CrazyClimberState, CrazyClimberObservation,
             blinds_left = windows[:, :3, 0]
             blind_dirs_left = windows[:, :3, 1]
 
-            new_blinds_left = jnp.where(
+            # make blinds close one step that should close
+            blinds_left = jnp.where(
                 blind_dirs_left == 1, 
                 jnp.minimum(blinds_left + 1, 6), 
                 blinds_left
             )
 
-            new_blinds_left = jnp.where(
+            # make blinds open one step that should open
+            blinds_left = jnp.where(
                 blind_dirs_left == -1, 
-                jnp.maximum(new_blinds_left - 1, 0), 
-                new_blinds_left
+                jnp.maximum(blinds_left - 1, 0), 
+                blinds_left
             )
 
-            new_blind_dirs_left = jnp.where(
-                new_blinds_left == 6,
-                blind_dirs_left * -1,
-                blind_dirs_left  
+            # set recently closed blinds direction to 0
+            blind_dirs_left = jnp.where(
+                (blind_dirs_left == 1) & (blinds_left == 6),
+                0,
+                blind_dirs_left,
+            )
+
+            open_prob = state.tower_state.open_prob
+            should_open = jax.random.choice(state.key, jnp.array([True, False]), (1, ), p=jnp.array([open_prob, 1 - open_prob]))[0]
+            # set blinds to open when counter is at 0 if we sample should_open with p(should_open) = open_prob
+            
+            blind_dirs_left = jax.lax.cond(
+                should_open,
+                lambda: jnp.where(
+                    (blinds_left == 6) & (blind_dirs_left == 0),
+                    -1,
+                    blind_dirs_left
+                ),
+                lambda: blind_dirs_left,
+            )
+
+            # set blind direction to 0 for recently closed blind
+            blind_dirs_left = jnp.where(
+                (blinds_left == 0) & (blind_dirs_left == -1),
+                0,
+                blind_dirs_left
+            )
+
+            spawn_cycle_prob = state.tower_state.spawn_cycle_prob * jnp.maximum(
+                jnp.minimum(CrazyClimberConstants.TOWER_BLINDS_MAX - jnp.count_nonzero(blinds_left), 1), 0)
+            spawn_prob = state.tower_state.spawn_prob
+            new_closing_blinds = jax.random.choice(state.key, jnp.array([1, 0]), (11, 3), p=jnp.array([spawn_prob, 1 - spawn_prob]))
+
+            # first we sample spawn_cycle with p(spawn_cycle) = spawn_cycle_prob, which is 0 when we already have TOWER_BLINDS_MAX blinds spawned
+            # if spawn_cycle is sampled we sample new_closing_blinds for each window blind 
+            # that is open currently with a probability of p(new_closing_blinds) = spawn_prob
+            spawn_cycle = jax.random.choice(state.key, jnp.array([True, False]), (1,), p=jnp.array([spawn_cycle_prob, 1 - spawn_cycle_prob]))[0]
+            blind_dirs_left = jax.lax.cond(
+                spawn_cycle,
+                lambda: jnp.where(
+                    (blinds_left == 0) & (blind_dirs_left == 0),
+                    new_closing_blinds,
+                    blind_dirs_left,
+                ),
+                lambda: blind_dirs_left,
             )
             
-            new_blind_dirs_left = jnp.where(
-                new_blinds_left == 0,
-                jnp.zeros_like(new_blind_dirs_left),
-                new_blind_dirs_left
-            )
-            
-            windows_left = jnp.stack([new_blinds_left, new_blind_dirs_left], axis=-1)
+            windows_left = jnp.stack([blinds_left, blind_dirs_left], axis=-1)
             return jnp.concatenate([windows_left, jnp.fliplr(windows_left)], axis=1)
         
         @partial(jax.jit)
-        def shift_windows(windows: jnp.ndarray, spawn_propability: float, key) -> jnp.ndarray:
+        def shift_windows(windows: jnp.ndarray) -> jnp.ndarray:
             windows = jnp.roll(windows, shift=1, axis=0)
-            new_blind_dirs_left = jax.random.choice(key, jnp.array([0, 1]), (1, 3), p=jnp.array([1 - spawn_propability, spawn_propability]))
+            new_blind_dirs_left = jnp.zeros((1, 3))
             new_blinds_left = jnp.zeros((1, 3))
             new_row_left = jnp.stack([new_blinds_left, new_blind_dirs_left], axis=2)
             new_row = jnp.concatenate([new_row_left, jnp.fliplr(new_row_left)], axis=1) 
@@ -838,14 +932,14 @@ class JaxCrazyClimber(JaxEnvironment[CrazyClimberState, CrazyClimberObservation,
             )
 
             windows = jax.lax.cond(
-                state.step_counter % 59 == 0,
+                state.step_counter % state.tower_state.cycle_duration == 0,
                 lambda: update_blinds(state.tower_state.windows),
                 lambda: state.tower_state.windows
             )
 
             windows = jax.lax.cond(
                 (state.player_move_state.main_state == PlayerStableStates.NEUTRAL) & state.reached_apex,
-                lambda: shift_windows(windows, state.tower_state.spawn_probability, state.key),
+                lambda: shift_windows(windows),
                 lambda: windows,
             )
 
@@ -874,7 +968,7 @@ class JaxCrazyClimber(JaxEnvironment[CrazyClimberState, CrazyClimberObservation,
             branch_idx,
             [
                 lambda: update_tower(state.tower_state),
-                lambda: TowerState.new(state.key, state.level_state.current_level).replace(lowest_level=state.tower_state.lowest_level),
+                lambda: TowerState.new(state.level_state.current_level).replace(lowest_level=state.tower_state.lowest_level),
                 lambda: state.tower_state.replace(is_falling=True),
                 lambda: state.tower_state,
             ]
@@ -1053,6 +1147,8 @@ class JaxCrazyClimber(JaxEnvironment[CrazyClimberState, CrazyClimberObservation,
         POSSIBLE_X_FULL = jnp.array([0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10])
         POSSIBLE_X_MIDDLE_CUT = jnp.array([0, 1, 2, 8, 9, 10])
         POSSIBLE_X_SIDE_CUTS = jnp.array([4, 5, 6])
+        POSSIBLE_X_MIDDLE_4 = jnp.array([2, 3, 4, 5, 6, 7, 8])
+        POSSIBLE_X_MIDDLE_2 = jnp.array([4, 5, 6])
 
         def can_move_left(state: CrazyClimberState) -> bool:
             left_arm_up = (state.player_move_state.hand_dir == 1) & (state.player_move_state.main_state != PlayerStableStates.NEUTRAL)
@@ -1060,11 +1156,14 @@ class JaxCrazyClimber(JaxEnvironment[CrazyClimberState, CrazyClimberObservation,
             next_pos_x = state.player_move_state.pos_x - 1
 
             can_move_left = jax.lax.switch(
-                state.tower_state.levels[state.tower_state.lowest_level + 2 + hand_offset],
+                state.tower_state.tower[state.tower_state.lowest_level + 2 + hand_offset],
                 [
                     lambda: jnp.any(POSSIBLE_X_FULL == next_pos_x),
                     lambda: jnp.any(POSSIBLE_X_MIDDLE_CUT == next_pos_x),
                     lambda: jnp.any(POSSIBLE_X_SIDE_CUTS == next_pos_x),
+                    lambda: jnp.any(POSSIBLE_X_MIDDLE_4 == next_pos_x),
+                    lambda: jnp.any(POSSIBLE_X_MIDDLE_2 == next_pos_x),
+
                 ]
             )
 
@@ -1080,11 +1179,13 @@ class JaxCrazyClimber(JaxEnvironment[CrazyClimberState, CrazyClimberObservation,
             next_pos_x = state.player_move_state.pos_x + 1
 
             can_move_right = jax.lax.switch(
-                state.tower_state.levels[state.tower_state.lowest_level + 2 + hand_offset],
+                state.tower_state.tower[state.tower_state.lowest_level + 2 + hand_offset],
                 [
                     lambda: jnp.any(POSSIBLE_X_FULL == next_pos_x),
                     lambda: jnp.any(POSSIBLE_X_MIDDLE_CUT == next_pos_x),
                     lambda: jnp.any(POSSIBLE_X_SIDE_CUTS == next_pos_x),
+                    lambda: jnp.any(POSSIBLE_X_MIDDLE_4 == next_pos_x),
+                    lambda: jnp.any(POSSIBLE_X_MIDDLE_2 == next_pos_x),
                 ]
             )
 
@@ -1096,11 +1197,13 @@ class JaxCrazyClimber(JaxEnvironment[CrazyClimberState, CrazyClimberObservation,
         
         def can_move_up(state: CrazyClimberState) -> bool:
             can_move_up = jax.lax.switch(
-                state.tower_state.levels[state.tower_state.lowest_level + 3],
+                state.tower_state.tower[state.tower_state.lowest_level + 3],
                 [
                     lambda: jnp.any(POSSIBLE_X_FULL == state.player_move_state.pos_x),
                     lambda: jnp.any(POSSIBLE_X_MIDDLE_CUT == state.player_move_state.pos_x),
                     lambda: jnp.any(POSSIBLE_X_SIDE_CUTS == state.player_move_state.pos_x),
+                    lambda: jnp.any(POSSIBLE_X_MIDDLE_4 == state.player_move_state.pos_x),
+                    lambda: jnp.any(POSSIBLE_X_MIDDLE_2 == state.player_move_state.pos_x),
                 ]
             )
             
@@ -1540,7 +1643,7 @@ class JaxCrazyClimber(JaxEnvironment[CrazyClimberState, CrazyClimberObservation,
                 s.tower_state.windows[candidate_rows, :, 0] > 0,
                 axis=1,
             )
-            candidate_level_types = s.tower_state.levels[
+            candidate_level_types = s.tower_state.tower[
                 s.tower_state.lowest_level + 12 - candidate_rows
             ]
             candidate_window_exists = (
@@ -1925,7 +2028,10 @@ class JaxCrazyClimber(JaxEnvironment[CrazyClimberState, CrazyClimberObservation,
         player_reset_state = PlayerMoveState.new()
         next_level = (state.level_state.current_level % 4) + 1
         level_reset_state = LevelState.new(next_level)
-        tower_reset_state = TowerState.new(state.key, next_level) #TODO: do something with a new key?
+        tower_reset_state = TowerState.new(next_level) 
+        
+        #TODO: do something with a new key?
+        #I reckon the key gets renewed every step, so we dont have to generate a new key.
 
         bonus_reset = CrazyClimberConstants.BONUS_BASE_VALUE * next_level
 
@@ -1936,8 +2042,8 @@ class JaxCrazyClimber(JaxEnvironment[CrazyClimberState, CrazyClimberObservation,
             tower_state=tower_reset_state,
             climbed_floors=0,
             bonus=bonus_reset,
-
         )
+
         return next_state
 
     def render(self, state: CrazyClimberState) -> jnp.ndarray:
@@ -2218,9 +2324,16 @@ class JaxCrazyClimber(JaxEnvironment[CrazyClimberState, CrazyClimberObservation,
                 self.FLOWERPOT_DROP_SPRITES
             )
 
-            self.TOWER_SPRITE = self._generate_tower_sprite()
-            self.TOWER_CUTOUTS = self._generate_tower_cutouts()
+            self.WALL_SPRITES = jnp.stack([self.SHAPE_MASKS[f"wall_{i}"] for i in range(4)], axis=0)
+            self.CEILING_SPRITES = jnp.stack([self.SHAPE_MASKS[f"ceiling_{i}"] for i in range(4)], axis=0)
+            self.FLOOR_SPRITES = jnp.stack([self.SHAPE_MASKS[f"floor_{i}"] for i in range(4)], axis=0)
+            self.WINDOW_BLIND_SPRITES = jnp.stack([
+                jnp.stack([self.SHAPE_MASKS[f"window_sprite_{i}_{j}"] for j in range(7)], axis=0)
+                for i in range(4)
+            ], axis=0)
 
+            self.TOWER_SPRITES = self._generate_tower_sprites()
+            self.TOWER_CUTOUTS = self._generate_tower_cutouts()
 
         def _get_visible_sprite_anchors(self, sprites: jnp.ndarray) -> tuple[jnp.ndarray, jnp.ndarray]:
             visible = sprites != self.jr.TRANSPARENT_ID
@@ -2239,14 +2352,26 @@ class JaxCrazyClimber(JaxEnvironment[CrazyClimberState, CrazyClimberObservation,
             level_full = floor_raster
             level_middle_cut = level_full.at[:, 28:52].set(0)
             level_side_cuts = level_full.at[:, 4:24].set(0).at[:, 56:76].set(0)
-            return jnp.array([level_full, level_middle_cut, level_side_cuts])
+            level_middle_4 = level_full.at[:, :12].set(0).at[:, 68:].set(0) 
+            level_middle_2 = level_full.at[:, :24].set(0).at[:, 56:].set(0) 
             
-        def _generate_tower_sprite(self) -> jnp.ndarray:
+            return jnp.array([level_full, level_middle_cut, level_side_cuts, level_middle_4, level_middle_2])
+            
+        def _generate_tower_sprites(self) -> tuple[jnp.ndarray, jnp.ndarray, jnp.ndarray, jnp.ndarray]:
+            tower_rasters = (
+                self._generate_tower_sprite(0),
+                self._generate_tower_sprite(1),
+                self._generate_tower_sprite(2),
+                self._generate_tower_sprite(3),
+            )
+            return jnp.stack(tower_rasters, axis=0)
+
+        def _generate_tower_sprite(self, level_index:int) -> jnp.ndarray:
             tower_raster = self._create_raster((170, 80))
 
             wall_offset_x = jnp.array([0, 12, 24, 36, 40, 52, 64, 76])
             wall_offset_y = jnp.repeat(0, 8)
-            wall_sprite = self.SHAPE_MASKS["wall"]
+            wall_sprite = self.WALL_SPRITES[level_index]
             wall_sprite_masks = jnp.repeat(wall_sprite[jnp.newaxis, :, :], 8, axis=0)
             tower_raster = self.jr.render_at_batch(
                 tower_raster,
@@ -2254,10 +2379,9 @@ class JaxCrazyClimber(JaxEnvironment[CrazyClimberState, CrazyClimberObservation,
                 wall_offset_y,
                 wall_sprite_masks,
             )
-            
             ceiling_offset_x = jnp.repeat(0, 13)
             ceiling_offset_y = jnp.array([0, 13, 26, 39, 52, 65, 78, 91, 104, 117, 130, 143, 156])
-            ceiling_sprite = self.SHAPE_MASKS["ceiling"]
+            ceiling_sprite = self.CEILING_SPRITES[level_index]
             ceiling_sprite_masks = jnp.repeat(ceiling_sprite[jnp.newaxis, :, :], 13, axis=0)
             tower_raster = self.jr.render_at_batch(
                 tower_raster,
@@ -2265,8 +2389,7 @@ class JaxCrazyClimber(JaxEnvironment[CrazyClimberState, CrazyClimberObservation,
                 ceiling_offset_y,
                 ceiling_sprite_masks,
             )
-
-            floor_sprite = self.SHAPE_MASKS["floor"]
+            floor_sprite = self.FLOOR_SPRITES[level_index]
             tower_raster = self.jr.render_at(tower_raster, 0, 169, floor_sprite)
 
             return tower_raster
@@ -2339,21 +2462,47 @@ class JaxCrazyClimber(JaxEnvironment[CrazyClimberState, CrazyClimberObservation,
                     (y, 0),
                     (13, 80)
                 )
+                wall = jax.lax.dynamic_slice(raster, (0, 0), (13, 4))
 
                 cutout = cutouts[level_type]
-                return jnp.where(cutout != 255, cutout, raster)
+                raster = jnp.where(cutout != 255, cutout, raster)
+
+                raster = jax.lax.switch(
+                    level_type,
+                    [
+                        lambda: raster,
+                        lambda: raster,
+                        lambda: raster,
+                        lambda: jax.lax.dynamic_update_slice(raster, wall, (0, 8)),
+                        lambda: jax.lax.dynamic_update_slice(raster, wall, (0, 20)),
+                    ],
+                )
+                raster = jax.lax.switch(
+                    level_type,
+                    [
+                        lambda: raster,
+                        lambda: raster,
+                        lambda: raster,
+                        lambda: jax.lax.dynamic_update_slice(raster, wall, (0, 68)),
+                        lambda: jax.lax.dynamic_update_slice(raster, wall, (0, 56)),
+                    ],
+                )
+                
+                return raster
             
             batched_clip_tower_cut = jax.vmap(clip_tower_cut, in_axes=(None, None, 0, 0))
 
-            tower_raster = jnp.copy(self.TOWER_SPRITE)
+            tower_index = state.level_state.current_level - 1
+            current_state_tower = self.TOWER_SPRITES[tower_index]
+            tower_raster = jnp.copy(current_state_tower)
             window_offset_x = jnp.tile(jnp.array([4, 16, 28, 44, 56, 68]), 11)
             window_offset_y = jnp.repeat(jnp.array([5, 18, 31, 44, 57, 70, 83, 96, 109, 122, 135]), 6)
-            sprites = self.SHAPE_MASKS["window_blind_group"][state.tower_state.windows[:, :, 0].astype(jnp.int32)]
+            sprites = self.WINDOW_BLIND_SPRITES[tower_index][state.tower_state.windows[:, :, 0].astype(jnp.int32)]
             sprites = jnp.reshape(sprites, (-1, *sprites.shape[2:]))
             tower_sprite = self.jr.render_at_batch(tower_raster, window_offset_x, window_offset_y, sprites)
 
             level_indices = jax.lax.dynamic_slice_in_dim(
-                state.tower_state.levels,
+                state.tower_state.tower,
                 state.tower_state.lowest_level,
                 13,
                 axis=0
@@ -2361,7 +2510,7 @@ class JaxCrazyClimber(JaxEnvironment[CrazyClimberState, CrazyClimberObservation,
             level_offset_y = jnp.array([1, 14, 27, 40, 53, 66, 79, 92, 105, 118, 131, 144, 157])
             tower_sprite = jnp.concat(batched_clip_tower_cut(tower_sprite, self.TOWER_CUTOUTS, level_offset_y, level_indices[::-1]), axis=0)
 
-            falling_tower_raster = jnp.copy(self.TOWER_SPRITE)
+            falling_tower_raster = jnp.copy(current_state_tower)
             falling_tower_sprite = jnp.concat(
                 batched_clip_tower_cut(
                     falling_tower_raster, 
