@@ -852,6 +852,7 @@ class JaxStarGunner(
         key_r, k_x = jax.random.split(state.key)
         respawn_x = jax.random.uniform(k_x, (n,), minval=10.0,
                                        maxval=float(self.consts.WIDTH - 10))
+
         respawn_y = jnp.full((n,), float(self.consts.ENEMY_Y_MIN), jnp.float32)
 
         # Nur Gegner, die gerade durch Kill fertig reformiert sind, bekommen
