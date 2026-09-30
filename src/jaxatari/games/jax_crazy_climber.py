@@ -627,10 +627,10 @@ class CrazyClimberConstants(struct.PyTreeNode):
         jnp.repeat(TowerLevelType.FULL, 9),
         jnp.repeat(TowerLevelType.MIDDLE_4, 8),
         jnp.repeat(TowerLevelType.MIDDLE_2, 32),
-        jnp.repeat(TowerLevelType.MIDDLE_4, 4),
+        jnp.repeat(TowerLevelType.MIDDLE_4, 8),
         jnp.repeat(TowerLevelType.FULL, 8),
         jnp.repeat(TowerLevelType.MIDDLE_CUT, 48),
-        jnp.repeat(TowerLevelType.FULL, 49), # TODO: placeholder for the end of the tower, needs to be correctly mapped
+        jnp.repeat(TowerLevelType.MIDDLE_4, 45), # TODO: placeholder for the end of the tower, needs to be correctly mapped
     ])
     TOWER3 = jnp.repeat(TowerLevelType.FULL, 163)
     TOWER4 = jnp.repeat(TowerLevelType.FULL, 163)
@@ -709,7 +709,7 @@ class JaxCrazyClimber(JaxEnvironment[CrazyClimberState, CrazyClimberObservation,
         self.FLOWERPOT_DROP_BOTTOM_Y_OFFSETS = self.renderer.FLOWERPOT_DROP_BOTTOM_Y_OFFSETS
 
     def reset(self, key: chex.PRNGKey = jax.random.PRNGKey(42)) -> tuple[CrazyClimberObservation, CrazyClimberState]:
-        level = Level.LEVEL_2
+        level = Level.LEVEL_1
         state_key, _step_key = jax.random.split(key)
         state = CrazyClimberState(
             key=state_key,
