@@ -18,25 +18,25 @@ SAVE_MODEL: False
 UPLOAD_MODEL: False
 HF_ENTITY: ""
 
-TASKS: [pong, pong, pong] # replaces ENV_ID
+TASKS: [seaquest, seaquest, seaquest] # replaces ENV_ID
 TIMESTEPS_PER_TASK: 10000000  # replaces TOTAL_TIMESTEPS
 
 # mods applied during training, for each environment
 TRAIN_MODS: 
   - []
-  - [lazy_enemy]
-  - [shift_player]
+  - [unlimited_oxygen]
+  - [no_divers]
 # sets of mods applied during evaluation, for each environment
 EVAL_MODS: 
   - [ [] ]
-  - [ [lazy_enemy] ]
-  - [ [shift_player] ]
+  - [ [unlimited_oxygen] ]
+  - [ [no_divers] ]
 
-CL_METHOD: agem  # ewc, agem, packnet
+CL_METHOD: ewc  # ewc, agem, packnet
 
 # EWC
 EWC_DECAY: 0.9  # Decay for Online EWC
-EWC_LAMBDA: 500000.0  # Weight for EWC penalty
+EWC_LAMBDA: 1000000.0  # Weight for EWC penalty
 
 # AGEM
 SAMPLES_PER_TASK: 256  # Samples to store in the memory buffer per task

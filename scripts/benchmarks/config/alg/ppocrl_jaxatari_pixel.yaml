@@ -1,6 +1,6 @@
-EXP_NAME: seaquest3
+EXP_NAME: pong_visual
 TRACK: True
-CAPTURE_VIDEO: False
+CAPTURE_VIDEO: True
 VIDEO_AT_END: True  # True: capture videos only at the end of training on a task
 
 EVAL_DURING_TRAIN: True
@@ -24,15 +24,15 @@ TIMESTEPS_PER_TASK: 10000000  # replaces TOTAL_TIMESTEPS
 # mods applied during training, for each environment
 TRAIN_MODS: 
   - []
-  - [lazy_enemy]
-  - [shift_player]
+  - [change_background_color]
+  - [change_player_color]
 # sets of mods applied during evaluation, for each environment
 EVAL_MODS: 
   - [ [] ]
-  - [ [lazy_enemy] ]
-  - [ [shift_player] ]
+  - [ [change_background_color] ]
+  - [ [change_player_color] ]
 
-CL_METHOD: none  # ewc, agem, packnet
+CL_METHOD: ewc  # ewc, agem, packnet
 
 # EWC
 EWC_DECAY: 0.9  # Decay for Online EWC
