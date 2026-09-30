@@ -182,7 +182,7 @@ class StarGunnerConstants(struct.PyTreeNode):
 
     REFORM_FRAMES: int = struct.field(pytree_node=False, default=20)
     NUM_ENEMIES: int = struct.field(pytree_node=False, default=3)
-    ENEMY_SPEED: float = struct.field(pytree_node=False, default=0.5)
+    ENEMY_SPEED: float = struct.field(pytree_node=False, default=0.2)
     ENEMY_SPEED_INCREMENT: float = struct.field(pytree_node=False, default=0.10)
     MAX_ENEMY_SPEED_MULTIPLIER: float = struct.field(pytree_node=False, default=2.0)
     ENEMY_AMP: float = struct.field(pytree_node=False, default=0.0)
