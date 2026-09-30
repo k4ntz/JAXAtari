@@ -94,13 +94,13 @@ ENEMY_SPRITE = jnp.array([
 ], dtype=jnp.bool_)
 
 ENEMY_SPRITE_DOUBLE = jnp.array([
-    [1, 1, 1, 0, 0, 0, 0],
-    [1, 0, 1, 0, 0, 0, 0],
-    [1, 1, 1, 1, 1, 1, 0],
-    [0, 0, 1, 0, 1, 1, 0],
-    [0, 0, 1, 1, 1, 1, 0],
-    [0, 0, 0, 0, 0, 0, 0],
-    [0, 0, 0, 0, 0, 0, 0],
+    [1, 1, 1, 1, 1, 0, 0],
+    [1, 0, 0, 0, 1, 0, 0],
+    [1, 0, 1, 1, 1, 1, 1],
+    [1, 0, 1, 0, 1, 0, 1],
+    [1, 1, 1, 1, 1, 0, 1],
+    [0, 0, 1, 0, 0, 0, 1],
+    [0, 0, 1, 1, 1, 1, 1],
     [0, 0, 0, 0, 0, 0, 0],
     [0, 0, 0, 0, 0, 0, 0],
     [0, 0, 0, 0, 0, 0, 0],
@@ -168,7 +168,7 @@ class StarGunnerConstants(struct.PyTreeNode):
     PLAYER_HEIGHT: int = struct.field(pytree_node=False, default=4)
     PLAYER_SPEED: float = struct.field(pytree_node=False, default=1.5)
     PLAYER_START_X: int = struct.field(pytree_node=False, default=80)
-    PLAYER_START_Y: int = struct.field(pytree_node=False, default=165)
+    PLAYER_START_Y: int = struct.field(pytree_node=False, default=110)
     PLAYER_LIVES_START: int = struct.field(pytree_node=False, default=5)
     EXTRA_LIFE_THRESHOLD: int = struct.field(pytree_node=False, default=10_000)
     MAX_LIVES: int = struct.field(pytree_node=False, default=255)
@@ -203,7 +203,7 @@ class StarGunnerConstants(struct.PyTreeNode):
     MAX_BOMBS: int = struct.field(pytree_node=False, default=4)
     BOMB_WIDTH: int = struct.field(pytree_node=False, default=4)
     BOMB_HEIGHT: int = struct.field(pytree_node=False, default=1)
-    BOMB_SPEED: float = struct.field(pytree_node=False, default=2.5)
+    BOMB_SPEED: float = struct.field(pytree_node=False, default=1.5)
 
     HILL_SCROLL_SPEED: float = struct.field(pytree_node=False, default=0.85)
 
@@ -212,7 +212,7 @@ class StarGunnerConstants(struct.PyTreeNode):
 
     DEATH_PENALTY: float = struct.field(pytree_node=False, default=0.0)
     PLAYER_EXPLOSION_SIZE: int = struct.field(pytree_node=False, default=14)
-    PLAYER_EXPLOSION_DURATION: int = struct.field(pytree_node=False, default=140)
+    PLAYER_EXPLOSION_DURATION: int = struct.field(pytree_node=False, default=90)
 
 
 class StarGunnerState(struct.PyTreeNode):
