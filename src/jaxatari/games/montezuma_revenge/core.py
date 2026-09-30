@@ -91,6 +91,7 @@ class MontezumaRevengeState:
     out_of_ladder_delay: jnp.ndarray
     last_rope: jnp.ndarray
     last_ladder: jnp.ndarray
+    prev_is_fire: jnp.ndarray
     
     # Homogeneous Entities for the CURRENT room
     enemies_x: jnp.ndarray
@@ -159,6 +160,8 @@ class MontezumaRevengeObservation:
     doors: ObjectObservation
     ropes: ObjectObservation
     platforms: ObjectObservation
+    ladders: ObjectObservation
+    lasers: ObjectObservation
 
 @struct.dataclass
 class MontezumaRevengeInfo:

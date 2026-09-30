@@ -1,9 +1,8 @@
 import jax
 import jax.numpy as jnp
-from jaxatari.games.jax_montezumarevenge import JaxMontezumaRevenge
 
-def test_walking_on_platform():
-    env = JaxMontezumaRevenge()
+def test_walking_on_platform(montezuma_env):
+    env = montezuma_env
     key = jax.random.PRNGKey(0)
     obs, state = env.reset(key)
     from jaxatari.games.montezuma_revenge.rooms import load_room
@@ -20,8 +19,8 @@ def test_walking_on_platform():
     assert state.player_x > initial_x
     assert state.is_falling == 0
     
-def test_falling_off_platform():
-    env = JaxMontezumaRevenge()
+def test_falling_off_platform(montezuma_env):
+    env = montezuma_env
     key = jax.random.PRNGKey(0)
     obs, state = env.reset(key)
     from jaxatari.games.montezuma_revenge.rooms import load_room
@@ -42,8 +41,8 @@ def test_falling_off_platform():
     assert state.is_falling == 1
     assert state.player_y > 26
 
-def test_jumping_on_platform():
-    env = JaxMontezumaRevenge()
+def test_jumping_on_platform(montezuma_env):
+    env = montezuma_env
     key = jax.random.PRNGKey(0)
     obs, state = env.reset(key)
     from jaxatari.games.montezuma_revenge.rooms import load_room

@@ -10,12 +10,12 @@ ATARI_ENVS = [
     "freeway", "frostbite", "gravitar",
     "kangaroo",
     "montezuma_revenge",
-    #"ms_pacman",
-    #"phoenix", "pong", "qbert",
-    #"seaquest", "skiing",
-    #"tennis",
-    #"venture",
-    #"time_pilot", "asteroids", "breakout", 
+    "ms_pacman",
+    "phoenix", "pong", "qbert",
+    "seaquest", "skiing",
+    "tennis",
+    "venture",
+    "time_pilot", "asteroids", "breakout", 
 ]
 
 # Setting to control how often to rerun an exp (with different seeds)

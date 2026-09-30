@@ -93,7 +93,19 @@ class KingKongConstants(AutoDerivedConstants):
 	PRINCESS_SIZE: chex.Array = struct.field(pytree_node=False, default_factory=lambda: jnp.array([8, 17]))
 	BOMB_SIZE: chex.Array = struct.field(pytree_node=False, default_factory=lambda: jnp.array([8, 14]))
 	NUMBER_SIZE: chex.Array = struct.field(pytree_node=False, default_factory=lambda: jnp.array([12, 14]))
-	
+	PLAYER_SPRITE_BOX_W: int = struct.field(pytree_node=False, default=8)
+	PLAYER_SPRITE_BOX_H: int = struct.field(pytree_node=False, default=16)
+	PLAYER_GROUP_FLIP_PAD: int = struct.field(pytree_node=False, default=3)
+	PLAYER_W_IDLE: int = struct.field(pytree_node=False, default=5)
+	PLAYER_W_MOVE: int = struct.field(pytree_node=False, default=6)
+	PLAYER_W_CLIMB: int = struct.field(pytree_node=False, default=7)
+	PLAYER_W_JUMP: int = struct.field(pytree_node=False, default=8)
+	PLAYER_H_DEAD: int = struct.field(pytree_node=False, default=8)
+	PRINCESS_W_WAVING: int = struct.field(pytree_node=False, default=6)
+	PRINCESS_W_STANDING: int = struct.field(pytree_node=False, default=8)
+	BOMB_W_NORMAL: int = struct.field(pytree_node=False, default=8)
+	BOMB_W_MAGIC: int = struct.field(pytree_node=False, default=6)
+
 	### Locations & Bounds
 
 	# Player 
@@ -136,8 +148,39 @@ class KingKongConstants(AutoDerivedConstants):
 		[16, 150], # Sixth floor
 		[20, 142], # Seventh floor 
 		[12, 150], # Princess floor - no bounds required bc goal reached 
-	])) # floor bounds by floor (min_x, min_y) - y is always the same (see FLOOR_LOCATIONS)
+	])) # floor bounds by floor (min_x, max_x) - the y of each floor is in FLOOR_LOCATIONS
 	FLOOR_LOCATIONS: chex.Array = struct.field(pytree_node=False, default_factory=lambda: jnp.array([228, 204, 180, 156, 132, 108, 84, 60, 40, 0])) # y corrdinate, 0 for topmost floor calculation reuqired
+	PLATFORM_SEGMENTS: chex.Array = struct.field(pytree_node=False, default_factory=lambda: jnp.array([
+		[  8, 227, 144,   2],
+		[  8, 203, 144,   2],
+		[  8, 179,  48,   2],
+		[ 60, 179,  40,   2],
+		[104, 179,  48,   2],
+		[  8, 155, 144,   2],
+		[  8, 131,  32,   2],
+		[ 44, 131,  72,   2],
+		[120, 131,  32,   2],
+		[  8, 107, 144,   2],
+		[  8,  83,  44,   2],
+		[ 56,  83,  48,   2],
+		[108,  83,  44,   2],
+		[ 12,  59, 136,   2],
+		[ 24,  39, 112,   2],
+		[ 24,  41,   4,   4],
+		[132,  41,   4,   4],
+		[ 20,  45,   8,   2],
+		[132,  45,   8,   2],
+		[ 20,  47,   4,   2],
+		[136,  47,   4,   2],
+		[ 16,  49,   8,   2],
+		[136,  49,   8,   2],
+		[ 16,  51,   4,   8],
+		[140,  51,   4,   8],
+		[ 12,  61,   4,  22],
+		[144,  61,   4,  22],
+		[  8,  85,   4, 142],
+		[148,  85,   4, 142],
+	]))
 
 	PRINCESS_MOVEMENT_BOUNDS: chex.Array = struct.field(pytree_node=False, default_factory=lambda: jnp.array([77, 113]))
 
@@ -451,6 +494,8 @@ class KingKongObservation(struct.PyTreeNode):
     kong: ObjectObservation
     princess: ObjectObservation
     bombs: ObjectObservation
+    ladders: ObjectObservation
+    platforms: ObjectObservation
     score: jnp.ndarray
     lives: jnp.ndarray
     level: jnp.ndarray
@@ -458,6 +503,16 @@ class KingKongObservation(struct.PyTreeNode):
 @struct.dataclass
 class KingKongInfo:
 	time: chex.Array
+
+def _clip_box_to_screen(x, y, w, h, width: int, height: int):
+	"""Intersects a top-left (x, y, w, h) box with the screen, trimming rather than shifting it."""
+	x1 = jnp.clip(x, 0, width)
+	y1 = jnp.clip(y, 0, height)
+	x2 = jnp.clip(x + w, 0, width)
+	y2 = jnp.clip(y + h, 0, height)
+	cw = jnp.maximum(x2 - x1, 0)
+	ch = jnp.maximum(y2 - y1, 0)
+	return x1, y1, cw, ch, (cw > 0) & (ch > 0)
 
 class JaxKingKong(JaxEnvironment[KingKongState, KingKongObservation, KingKongInfo, KingKongConstants]):
 	# Minimal ALE action set for King Kong (from scripts/action_space_helper.py)
@@ -477,7 +532,13 @@ class JaxKingKong(JaxEnvironment[KingKongState, KingKongObservation, KingKongInf
 		consts = consts or KingKongConstants()
 		super().__init__(consts)
 		self.renderer = KingKongRenderer(self.consts)
-		self.obs_size = 5 + 5 + 5 + (6 * self.consts.MAX_BOMBS) + 6  # player + kong + princess + bombs + game_info
+		_lad = np.asarray(self.consts.LADDER_LOCATIONS)
+		_floors = np.asarray(self.consts.FLOOR_LOCATIONS)
+		_y2 = np.array([_floors[_floors <= y2].max() for y2 in _lad[:, 3]])
+		self.LADDER_BOXES = jnp.array(
+			np.stack([_lad[:, 0], _lad[:, 1], _lad[:, 2] - _lad[:, 0], _y2 - _lad[:, 1]], axis=1),
+			dtype=jnp.int32,
+		)
 
 	def reset(self, key=None) -> Tuple[KingKongObservation, KingKongState]:
 		if key is None:
@@ -2096,36 +2157,86 @@ class JaxKingKong(JaxEnvironment[KingKongState, KingKongObservation, KingKongInf
 					(state.gamestate == self.consts.GAMESTATE_DEATH) | \
 					(state.gamestate == self.consts.GAMESTATE_SUCCESS)
 
+		ps = state.player_state
+		p_is_climb = (ps == self.consts.PLAYER_CLIMB_UP) | \
+					 (ps == self.consts.PLAYER_CLIMB_DOWN) | \
+					 (ps == self.consts.PLAYER_CLIMB_IDLE)
+		p_is_dead = ps == self.consts.PLAYER_DEAD
+		p_is_fall = ps == self.consts.PLAYER_FALL
+		p_is_jump = (ps == self.consts.PLAYER_JUMP_LEFT) | \
+					(ps == self.consts.PLAYER_JUMP_RIGHT) | \
+					(ps == self.consts.PLAYER_CATAPULT_LEFT) | \
+					(ps == self.consts.PLAYER_CATAPULT_RIGHT)
+		p_is_move = (ps == self.consts.PLAYER_MOVE_LEFT) | (ps == self.consts.PLAYER_MOVE_RIGHT)
+
+		p_w = jnp.select(
+			[p_is_jump | p_is_fall | p_is_dead, p_is_climb, p_is_move],
+			[self.consts.PLAYER_W_JUMP, self.consts.PLAYER_W_CLIMB, self.consts.PLAYER_W_MOVE],
+			default=self.consts.PLAYER_W_IDLE,
+		).astype(jnp.int32)
+		p_h = jnp.where(p_is_dead, self.consts.PLAYER_H_DEAD,
+						self.consts.PLAYER_SPRITE_BOX_H).astype(jnp.int32)
+
+		p_x_off = jnp.where(p_is_climb, -3,
+					jnp.where(p_is_fall | p_is_dead, -2,
+					jnp.where(is_right, -2, -5)))
+		p_x_left = state.player_x + jnp.where(
+			is_left,
+			p_x_off + (self.consts.PLAYER_SPRITE_BOX_W - self.consts.PLAYER_GROUP_FLIP_PAD) - p_w,
+			p_x_off,
+		)
+		p_y_top = state.player_y - self.consts.PLAYER_SPRITE_BOX_H
+
+		p_x, p_y, p_w, p_h, p_visible = _clip_box_to_screen(
+			p_x_left, p_y_top, p_w, p_h, self.consts.WIDTH, self.consts.HEIGHT
+		)
+
 		player = ObjectObservation.create(
-			x=jnp.clip(state.player_x, 0, self.consts.WIDTH),
-			y=jnp.clip(state.player_y, 0, self.consts.HEIGHT),
-			width=jnp.array(self.consts.PLAYER_SIZE[0], dtype=jnp.int32),
-			height=jnp.array(self.consts.PLAYER_SIZE[1], dtype=jnp.int32),
+			x=p_x.astype(jnp.int32),
+			y=p_y.astype(jnp.int32),
+			width=p_w.astype(jnp.int32),
+			height=p_h.astype(jnp.int32),
 			orientation=p_ori.astype(jnp.float32),
 			# We pass the player_state enum as 'state' so the agent knows if it's climbing/jumping
-			state=state.player_state.astype(jnp.int32), 
-			active=p_active.astype(jnp.int32)
+			state=state.player_state.astype(jnp.int32),
+			active=(p_active & p_visible).astype(jnp.int32)
 		)
 
 		# --- Kong ---
+		k_x, k_y, k_w, k_h, k_visible = _clip_box_to_screen(
+			state.kong_x,
+			state.kong_y - self.consts.KONG_SIZE[1],
+			self.consts.KONG_SIZE[0],
+			self.consts.KONG_SIZE[1],
+			self.consts.WIDTH, self.consts.HEIGHT,
+		)
 		kong = ObjectObservation.create(
-			x=jnp.clip(state.kong_x, 0, self.consts.WIDTH),
-			y=jnp.clip(state.kong_y, 0, self.consts.HEIGHT),
-			width=jnp.array(self.consts.KONG_SIZE[0], dtype=jnp.int32),
-			height=jnp.array(self.consts.KONG_SIZE[1], dtype=jnp.int32),
+			x=k_x.astype(jnp.int32),
+			y=k_y.astype(jnp.int32),
+			width=k_w.astype(jnp.int32),
+			height=k_h.astype(jnp.int32),
 			orientation=jnp.array(0.0, dtype=jnp.float32),
-			active=state.kong_visible.astype(jnp.int32)
+			active=((state.kong_visible != 0) & k_visible).astype(jnp.int32)
 		)
 
 		# --- Princess ---
+		pr_x, pr_y, pr_w, pr_h, pr_visible = _clip_box_to_screen(
+			state.princess_x + jnp.where(state.princess_waving, 0, -1),
+			state.princess_y - self.consts.PRINCESS_SIZE[1],
+			jnp.where(state.princess_waving,
+					  self.consts.PRINCESS_W_WAVING,
+					  self.consts.PRINCESS_W_STANDING),
+			self.consts.PRINCESS_SIZE[1],
+			self.consts.WIDTH, self.consts.HEIGHT,
+		)
 		princess = ObjectObservation.create(
-			x=jnp.clip(state.princess_x, 0, self.consts.WIDTH),
-			y=jnp.clip(state.princess_y, 0, self.consts.HEIGHT),
-			width=jnp.array(self.consts.PRINCESS_SIZE[0], dtype=jnp.int32),
-			height=jnp.array(self.consts.PRINCESS_SIZE[1], dtype=jnp.int32),
+			x=pr_x.astype(jnp.int32),
+			y=pr_y.astype(jnp.int32),
+			width=pr_w.astype(jnp.int32),
+			height=pr_h.astype(jnp.int32),
 			orientation=jnp.array(0.0, dtype=jnp.float32),
 			state=state.princess_waving.astype(jnp.int32), # 0=Standing, 1=Waving
-			active=state.princess_visible.astype(jnp.int32)
+			active=((state.princess_visible != 0) & pr_visible).astype(jnp.int32)
 		)
 
 		# --- Bombs ---
@@ -2140,14 +2251,38 @@ class JaxKingKong(JaxEnvironment[KingKongState, KingKongObservation, KingKongInf
 			default=0.0
 		)
 
+		b_is_magic = state.bomb_is_magic > 0
+		b_x, b_y, b_w, b_h, b_visible = _clip_box_to_screen(
+			state.bomb_positions_x + jnp.where(b_is_magic, 1, 0),
+			state.bomb_positions_y - self.consts.BOMB_SIZE[1],
+			jnp.where(b_is_magic, self.consts.BOMB_W_MAGIC, self.consts.BOMB_W_NORMAL),
+			jnp.full((self.consts.MAX_BOMBS,), self.consts.BOMB_SIZE[1], dtype=jnp.int32),
+			self.consts.WIDTH, self.consts.HEIGHT,
+		)
 		bombs = ObjectObservation.create(
-			x=jnp.clip(state.bomb_positions_x, 0, self.consts.WIDTH),
-			y=jnp.clip(state.bomb_positions_y, 0, self.consts.HEIGHT),
-			width=jnp.full((self.consts.MAX_BOMBS,), self.consts.BOMB_SIZE[0], dtype=jnp.int32),
-			height=jnp.full((self.consts.MAX_BOMBS,), self.consts.BOMB_SIZE[1], dtype=jnp.int32),
+			x=b_x.astype(jnp.int32),
+			y=b_y.astype(jnp.int32),
+			width=b_w.astype(jnp.int32),
+			height=b_h.astype(jnp.int32),
 			orientation=b_ori.astype(jnp.float32),
 			visual_id=state.bomb_is_magic.astype(jnp.int32), # 0=Normal, 1=Magic
-			active=state.bomb_active.astype(jnp.int32)
+			active=((state.bomb_active > 0) & b_visible).astype(jnp.int32)
+		)
+
+		ladders = ObjectObservation.create(
+			x=self.LADDER_BOXES[:, 0],
+			y=self.LADDER_BOXES[:, 1],
+			width=self.LADDER_BOXES[:, 2],
+			height=self.LADDER_BOXES[:, 3],
+			active=jnp.ones((self.LADDER_BOXES.shape[0],), dtype=jnp.int32),
+		)
+
+		platforms = ObjectObservation.create(
+			x=self.consts.PLATFORM_SEGMENTS[:, 0],
+			y=self.consts.PLATFORM_SEGMENTS[:, 1],
+			width=self.consts.PLATFORM_SEGMENTS[:, 2],
+			height=self.consts.PLATFORM_SEGMENTS[:, 3],
+			active=jnp.ones((self.consts.PLATFORM_SEGMENTS.shape[0],), dtype=jnp.int32),
 		)
 
 		return KingKongObservation(
@@ -2155,6 +2290,8 @@ class JaxKingKong(JaxEnvironment[KingKongState, KingKongObservation, KingKongInf
 			kong=kong,
 			princess=princess,
 			bombs=bombs,
+			ladders=ladders,
+			platforms=platforms,
 			score=state.score,
 			lives=state.lives,
 			level=state.level
@@ -2169,6 +2306,8 @@ class JaxKingKong(JaxEnvironment[KingKongState, KingKongObservation, KingKongInf
 			"kong": spaces.get_object_space(n=None, screen_size=(self.consts.HEIGHT, self.consts.WIDTH)),
 			"princess": spaces.get_object_space(n=None, screen_size=(self.consts.HEIGHT, self.consts.WIDTH)),
 			"bombs": spaces.get_object_space(n=self.consts.MAX_BOMBS, screen_size=(self.consts.HEIGHT, self.consts.WIDTH)),
+			"ladders": spaces.get_object_space(n=self.consts.LADDER_LOCATIONS.shape[0], screen_size=(self.consts.HEIGHT, self.consts.WIDTH)),
+			"platforms": spaces.get_object_space(n=self.consts.PLATFORM_SEGMENTS.shape[0], screen_size=(self.consts.HEIGHT, self.consts.WIDTH)),
 			"score": spaces.Box(low=0, high=self.consts.MAX_SCORE, shape=(), dtype=jnp.int32),
 			"lives": spaces.Box(low=0, high=self.consts.MAX_LIVES, shape=(), dtype=jnp.int32),
 			"level": spaces.Box(low=1, high=100, shape=(), dtype=jnp.int32),
