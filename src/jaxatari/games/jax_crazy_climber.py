@@ -2704,13 +2704,14 @@ class JaxCrazyClimber(JaxEnvironment[CrazyClimberState, CrazyClimberObservation,
     class CrazyClimberRenderer(JAXGameRenderer):
         def __init__(self, consts: CrazyClimberConstants = None, config: render_utils.RendererConfig = None):
             self.consts = consts or CrazyClimberConstants()
-            super().__init__(consts)
-            self.config = render_utils.RendererConfig(
+            config = config or render_utils.RendererConfig(
                 game_dimensions=(210, 160),
                 channels=3,
                 downscale=None
             )
-            self.jr = render_utils.JaxRenderingUtils(self.config)
+            super().__init__(self.consts, config)
+            # Tower clipping and sprite anchors use original pixel coordinates.
+            self.jr = render_utils.JaxRenderingUtils(self.config.replace(downscale=None))
             
             final_asset_config = list(self.consts.ASSET_CONFIG)
 
@@ -3320,4 +3321,8 @@ class JaxCrazyClimber(JaxEnvironment[CrazyClimberState, CrazyClimberObservation,
             raster = self.jr.render_label_selective(raster, 57, 20, bonus_digits, digit_masks, start_index=0, num_to_render=5, spacing=8, max_digits_to_render=6)
             raster = self.jr.render_label_selective(raster, 49, 30, score_digits, digit_masks, start_index=0, num_to_render=6, spacing=8, max_digits_to_render=6)
 
+            if self.config.downscale is not None:
+                raster = jax.image.resize(
+                    raster, self.config.downscale, method="nearest",
+                ).astype(raster.dtype)
             return self.jr.render_from_palette(raster, self.PALETTE)
