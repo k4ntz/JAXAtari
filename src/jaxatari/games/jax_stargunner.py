@@ -23,7 +23,7 @@ BUZZIE = 1
 SQUEEZER = 2
 
 SUBWAVE_KILL_TARGET = jnp.array([10, 20, 30], jnp.int32)
-SUBWAVE_CONCURRENT = jnp.array([1, 1, 1], jnp.int32)
+SUBWAVE_CONCURRENT = jnp.array([1, 2, 3], jnp.int32)
 
 ENEMY_EMPTY = 0
 ENEMY_ALIVE = 1
@@ -167,7 +167,7 @@ class StarGunnerConstants(struct.PyTreeNode):
     FIRE_COOLDOWN: int = struct.field(pytree_node=False, default=8)
 
     REFORM_FRAMES: int = struct.field(pytree_node=False, default=20)
-    NUM_ENEMIES: int = struct.field(pytree_node=False, default=1)
+    NUM_ENEMIES: int = struct.field(pytree_node=False, default=3)
     ENEMY_SPEED: float = struct.field(pytree_node=False, default=0.5)
     ENEMY_SPEED_INCREMENT: float = struct.field(pytree_node=False, default=0.10)
     MAX_ENEMY_SPEED_MULTIPLIER: float = struct.field(pytree_node=False, default=2.0)
@@ -486,14 +486,14 @@ class JaxStarGunner(
             explosion_active=jnp.zeros((n,), jnp.bool_),
             explosion_frag_vx=jnp.zeros((n, 6), jnp.float32),
             explosion_frag_vy=jnp.zeros((n, 6), jnp.float32),
-            player_explosion_x=jnp.array(0.0, jnp.float32),
-            player_explosion_y=jnp.array(0.0, jnp.float32),
-            player_explosion_timer=jnp.array(0, jnp.int32),
-            player_explosion_active=jnp.array(False, jnp.bool_),
+            player_explosion_x=start_x,
+            player_explosion_y=start_y,
+            player_explosion_timer=jnp.array(self.consts.PLAYER_EXPLOSION_DURATION, jnp.int32),
+            player_explosion_active=jnp.array(True, jnp.bool_),
             score=jnp.array(0, jnp.int32),
             lives=jnp.array(self.consts.PLAYER_LIVES_START, jnp.int32),
-            invuln_timer=jnp.array(0, jnp.int32),
-            respawn_timer=jnp.array(0, jnp.int32),
+            invuln_timer=jnp.array(self.consts.PLAYER_EXPLOSION_DURATION, jnp.int32),
+            respawn_timer=jnp.array(self.consts.PLAYER_EXPLOSION_DURATION, jnp.int32),
         )
 
     def _apply_sticky_action(self, state, action):
@@ -835,14 +835,10 @@ class JaxStarGunner(
         new_enemy_state = jnp.where(goes_to_reform, ENEMY_REFORMING, new_enemy_state)
         new_enemy_state = jnp.where(goes_empty, ENEMY_EMPTY, new_enemy_state)
         # When an enemy finishes reforming and becomes ALIVE again,
-        # respawn it at the top of the screen with a new random X and mode.
-        key_r, k_x, k_mode = jax.random.split(state.key, 3)
-        respawn_x = jax.random.uniform(k_x, (n,), minval=10.0,
-                                       maxval=float(self.consts.WIDTH - 10))
-        respawn_y = jnp.full((n,), float(self.consts.ENEMY_Y_MIN), jnp.float32)
-        respawn_mode = jax.random.randint(k_mode, (n,), 0, 2).astype(jnp.int32)
+        respawn_x, respawn_y = self._spawn_positions()
+        key_r = state.key
 
-        # Only reset position/mode for enemies that JUST finished reforming
+        # Only reset position for enemies that JUST finished reforming
         reset_pos = finished_reform
 
         new_enemy_state = jnp.where(finished_reform, ENEMY_ALIVE, new_enemy_state)
@@ -874,8 +870,9 @@ class JaxStarGunner(
         # Apply respawn position/mode only to enemies that just reformed
         final_x = jnp.where(reset_pos, respawn_x, final_x)
         final_y = jnp.where(reset_pos, respawn_y, final_y)
-        final_mode = jnp.where(reset_pos, respawn_mode, state.enemy_mode)
+        final_mode = state.enemy_mode
         final_timer2 = jnp.where(reset_pos, 0, state.enemy_mode_timer)
+
 
         return state.replace(
             key=key_r,
