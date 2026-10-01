@@ -3,6 +3,7 @@ env
 
 .venv
 .vscode
+.vs
 .idea
 *.bc
 results/
@@ -14,3 +15,5 @@ data/oc_parity_corpus/reports/
 data/oc_parity_corpus/reports_oracle/
 data/oc_parity_corpus/final_report/
 
+.venv312/
+.venv312/
