@@ -1,0 +1,4 @@
+Random policy over 32 episodes of 5000 steps each:
+- mean final score: 443.75
+- max final score:  2100
+- mean total reward: 17432.8

@@ -1,0 +1,7 @@
+devices: [CpuDevice(id=0)]
+B=   1     11365.5 steps/sec  (1.0x vs B=1)
+B=   8     87684.4 steps/sec  (7.7x vs B=1)
+B=  32    354858.3 steps/sec  (31.0x vs B=1)
+B=  64    661968.2 steps/sec  (57.8x vs B=1)
+B= 128    881848.4 steps/sec  (76.9x vs B=1)
+B= 256   1301540.8 steps/sec  (113.6x vs B=1)
