@@ -53,6 +53,7 @@ GAME_MODULES = {
     "hangman": "jaxatari.games.jax_hangman",
     "hauntedhouse": "jaxatari.games.jax_hauntedhouse",
     "humancannonball": "jaxatari.games.jax_humancannonball",
+    "icehockey": "jaxatari.games.jax_icehockey",
     "kangaroo": "jaxatari.games.jax_kangaroo",
     "kingkong": "jaxatari.games.jax_kingkong",
     "klax": "jaxatari.games.jax_klax",
@@ -106,6 +107,7 @@ MOD_MODULES = {
     "montezumarevenge": "jaxatari.games.mods.montezuma_revenge_mods.MontezumaRevengeEnvMod",
     "frostbite": "jaxatari.games.mods.frostbite_mods.FrostbiteEnvMod",
     "gravitar": "jaxatari.games.mods.gravitar_mods.GravitarEnvMod",
+    "icehockey": "jaxatari.games.mods.icehockey_mods.IceHockeyEnvMod",
     "phoenix": "jaxatari.games.mods.phoenix_mods.PhoenixEnvMod",
     "enduro": "jaxatari.games.mods.enduro_mods.EnduroEnvMod",
     "qbert": "jaxatari.games.mods.qbert_mods.QbertEnvMod",
@@ -121,6 +123,7 @@ MOD_MODULES = {
     "pacman": "jaxatari.games.mods.pacman_mods.PacmanEnvMod",
     "amidar": "jaxatari.games.mods.amidar_mods.AmidarEnvMod",
     "timepilot": "jaxatari.games.mods.timepilot_mods.TimePilotEnvMod",
+    "icehockey": "jaxatari.games.mods.icehockey_mods.IceHockeyEnvMod",
 }
 
 
