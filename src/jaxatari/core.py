@@ -110,6 +110,7 @@ GAME_ALIASES = {
 
 # Mod modules registry: for each game, provide the Controller class path
 MOD_MODULES = {
+    "donkeykong": "jaxatari.games.mods.donkeykong_mods.DonkeyKongEnvMod",
     "pong": "jaxatari.games.mods.pong_mods.PongEnvMod",
     "kangaroo": "jaxatari.games.mods.kangaroo_mods.KangarooEnvMod",
     "freeway": "jaxatari.games.mods.freeway_mods.FreewayEnvMod",
@@ -138,6 +139,8 @@ MOD_MODULES = {
     "skiing": "jaxatari.games.mods.skiing_mods.SkiingEnvMod",
     "alien": "jaxatari.games.mods.alien_mods.AlienEnvMod",
     "asteroids": "jaxatari.games.mods.asteroids_mods.AsteroidsEnvMod",
+    "choppercommand": "jaxatari.games.mods.choppercommand_mods.ChopperCommandEnvMod",
+    "centipede": "jaxatari.games.mods.centipede_mods.CentipedeEnvMod",
     "pacman": "jaxatari.games.mods.pacman_mods.PacmanEnvMod",
     "othello": "jaxatari.games.mods.othello_mods.OthelloEnvMod",
     "wizardofwor": "jaxatari.games.mods.wizardofwor_mods.WizardOfWorEnvMod",
@@ -147,6 +150,8 @@ MOD_MODULES = {
     "miniaturegolf": "jaxatari.games.mods.miniature_golf_mods.MiniatureGolfEnvMod",
     "yarsrevenge": "jaxatari.games.mods.yarsrevenge_mods.YarsRevengeEnvMod",
     "boxing": "jaxatari.games.mods.boxing_mods.BoxingEnvMod",
+    "amidar": "jaxatari.games.mods.amidar_mods.AmidarEnvMod",
+    "timepilot": "jaxatari.games.mods.timepilot_mods.TimePilotEnvMod",
 }
 
 

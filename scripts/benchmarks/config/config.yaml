@@ -1,6 +1,6 @@
 # experiment params
 NAME_INITIALS: "RE"
-NUM_SEEDS: 3
+NUM_SEEDS: 1
 SEED: 0
 
 # if  hyperparameters tuning

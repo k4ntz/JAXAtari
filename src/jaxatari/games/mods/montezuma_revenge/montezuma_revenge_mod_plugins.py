@@ -1,6 +1,11 @@
 import jax
 import jax.numpy as jnp
 from functools import partial
+from flax import struct
+
+import os
+
+from jaxatari.rendering import jax_rendering_utils as render_utils
 
 from jaxatari.modification import JaxAtariInternalModPlugin, JaxAtariPostStepModPlugin
 from jaxatari.games.montezuma_revenge.core import MontezumaRevengeState
@@ -283,3 +288,224 @@ class ThreeSwordsMod(JaxAtariPostStepModPlugin):
             inventory=new_inventory
         )
         return obs, state
+
+class DifferentStart(JaxAtariInternalModPlugin):
+    """
+    Internal mod to provide bonus points if the player kills an enemy with the sword.
+    It overrides the KILL_ENEMY_REWARD constant to 300.
+    """
+    constants_overrides = {
+        "CUSTOM_ROOMS": True,
+        "INITIAL_ROOM_ID": 5
+    }
+
+class ChangeEnemyActivity(JaxAtariPostStepModPlugin):
+    """
+    Post-step mod to immediately remove any enemies in the current room.
+    """
+    
+    @partial(jax.jit, static_argnums=(0,))
+    def after_reset(self, obs, state: MontezumaRevengeState):
+
+        # remove enemies
+        gea = jnp.zeros_like(state.global_enemies_active)
+        gea = gea.at[4, 0].set(0) # New 4 (Mid)
+        gea = gea.at[5, 0].set(0) # New 5 (Right)
+        gea = gea.at[5, 1].set(0)
+        gea = gea.at[11, 0].set(1)
+        gea = gea.at[10, 0].set(0)
+        gea = gea.at[10, 1].set(0)
+        gea = gea.at[12, 0].set(0)
+        gea = gea.at[18, 0].set(0)
+        gea = gea.at[18, 1].set(0)
+        gea = gea.at[20, 0].set(0)
+        gea = gea.at[20, 1].set(0)
+        gea = gea.at[22, 0].set(0)
+        gea = gea.at[31, 0].set(0) # Snake in Room 31
+        gea = gea.at[30, 0].set(0) # Spider in Room 30
+        gea = gea.at[27, 0].set(0) # Skull in Room 27 (ROOM_3_3)
+
+        # add and remove doores
+        gda = state.global_doors_active
+        gda = gda.at[4, 1].set(0)
+        gda = gda.at[5, 0].set(1)
+        gda = gda.at[26, 1].set(0)
+
+        # add items
+        gia= state.global_items_active
+        gia = gia.at[5, 0].set(1)
+        gia = gia.at[12, 0].set(0)
+
+        # change item types
+        git = state.global_items_type
+        git = git.at[3, 0].set(3)
+        git = git.at[19, 0].set(4)
+
+        # overwrite game state
+        new_state = state.replace(
+            global_doors_active=gda,
+            doors_active=gda[state.room_id],
+            global_enemies_active=gea,
+            enemies_active=gea[state.room_id],
+            global_items_active=gia,
+            items_active=gia[state.room_id],
+            global_items_type=git,
+        )
+
+        return obs, new_state
+
+
+class ChangeCollision(JaxAtariInternalModPlugin):
+    """
+    Internal mod to .
+    """
+    sprite_path = os.path.join(render_utils.get_base_sprite_dir(), "montezuma")
+    
+    sprite_path_0 = os.path.join(sprite_path, "backgrounds", "base_collision_map.npy")
+    col_map_0 = jnp.load(sprite_path_0)[:149, :, 0]
+    
+    # New 3: Leftmost
+    room_col_0_3 = jnp.where(col_map_0 > 0, 1, 0).astype(jnp.int32)
+    room_col_0_3 = room_col_0_3.at[6:48, 0:4].set(1) # Left wall
+    room_col_0_3 = room_col_0_3.at[147:149, 72:88].set(0) # Hole for ladder down
+
+    sprite_path_1 = os.path.join(sprite_path, "backgrounds", "mid_room_collision_level_0.npy")
+    col_map_1 = jnp.load(sprite_path_1)[:149, :, 0] # (149, 160)
+    # New 4: Middle
+    room_col_0_4 = jnp.where(col_map_1 > 0, 1, 0).astype(jnp.int32)
+    room_col_0_4 = room_col_0_4.at[147:149, 72:88].set(0) # Hole for ladder down
+    # No side walls for room_0_4
+
+    # New 5: Rightmost
+    room_col_0_5 = jnp.where(col_map_0 > 0, 1, 0).astype(jnp.int32)
+    room_col_0_5 = room_col_0_5.at[6:48, 156:160].set(1) # Right wall
+    room_col_0_5 = room_col_0_5.at[147:149, 72:88].set(0) # Hole for ladder down
+    
+    room_col_1_3 = jnp.where(col_map_0 > 0, 1, 0).astype(jnp.int32)
+    room_col_1_3 = room_col_1_3.at[147:149, 72:88].set(0) # Hole for ladder down
+    room_col_1_2 = jnp.where(col_map_0 > 0, 1, 0).astype(jnp.int32)
+    room_col_1_2 = room_col_1_2.at[6:48, 0:4].set(1)
+    room_col_1_2 = room_col_1_2.at[147:149, 72:88].set(0) # Hole for ladder down to room 18
+    
+    sprite_path_2 = os.path.join(sprite_path, "backgrounds", "mid_room_collision_level_1.npy")
+    col_map_2 = jnp.load(sprite_path_2)[:149, :, 0]
+    room_col_1_4 = jnp.where(col_map_2 > 0, 1, 0).astype(jnp.int32)
+    room_col_1_4 = room_col_1_4.at[147:149, 72:88].set(0) # Hole for ladder
+    room_col_1_4 = room_col_1_4.at[6:46, 124:126].set(0) # Fix pillar 2 and rope collision (Right)
+    
+    # New 18: Level 2, col 2 (corresponds to ROOM_2_1 in M1)
+    room_col_2_2 = jnp.where(col_map_0 > 0, 1, 0).astype(jnp.int32)
+    # room_col_2_2 = room_col_2_2.at[6:48, 156:160].set(1) # Right wall removed
+    
+    sprite_path_3 = os.path.join(sprite_path, "backgrounds", "room_0_collision_level_2.npy")
+    col_map_3 = jnp.load(sprite_path_3)[:149, :, 0]
+    room_col_2_1 = jnp.where(col_map_3 > 0, 1, 0).astype(jnp.int32)
+    room_col_2_1 = room_col_2_1.at[6:, 0:4].set(1) # Left wall
+
+    sprite_path_4 = os.path.join(sprite_path, "backgrounds", "pitroom_collision_map.npy")
+    col_map_4 = jnp.load(sprite_path_4)[:149, :, 0]
+    room_col_2_3 = jnp.where(col_map_4 > 0, 1, 0).astype(jnp.int32)
+    # room_col_2_3 = room_col_2_3.at[6:48, 0:4].set(1) # Left wall
+    room_col_2_3 = room_col_2_3.at[6:48, 156:160].set(1) # Right wall
+
+    # New 27: Level 3, col 3 (corresponds to ROOM_3_3 in M1)
+    # Using pitroom_collision_map.npy as specified for ROOM_3_3
+    sprite_path_7 = os.path.join(sprite_path, "backgrounds", "pitroom_collision_map.npy")
+    col_map_7 = jnp.load(sprite_path_7)[:149, :, 0]
+    room_col_3_3 = jnp.where(col_map_7 > 0, 1, 0).astype(jnp.int32)
+    # No left wall (open to ROOM_3_2)
+
+    # New 29: Level 3, col 5 (corresponds to ROOM_3_5 in M1)
+    # Using pitroom_collision_map.npy as specified for ROOM_3_5
+    sprite_path_8 = os.path.join(sprite_path, "backgrounds", "pitroom_collision_map.npy")
+    col_map_8 = jnp.load(sprite_path_8)[:149, :, 0]
+
+    # New 25: Level 3, col 1 (corresponds to ROOM_3_1 in M1)
+    room_col_3_1 = jnp.where(col_map_0 > 0, 1, 0).astype(jnp.int32)
+
+    # New 26: Level 3, col 2 (corresponds to ROOM_3_2 in M1)
+    room_col_3_2 = jnp.where(col_map_0 > 0, 1, 0).astype(jnp.int32)
+    room_col_3_2 = room_col_3_2.at[6:48, 156:160].set(1) # Right wall
+
+    # New 24: Bonus Room (corresponds to ROOM_3_0 in M1)
+    sprite_path_9 = os.path.join(sprite_path, "backgrounds", "bonus_room_collision_map.npy")
+    col_map_9 = jnp.load(sprite_path_9)[:149, :, 0]
+    room_col_3_0 = jnp.zeros((149, 160), dtype=jnp.int32)
+    room_col_3_0 = room_col_3_0.at[:col_map_9.shape[0], :].set(jnp.where(col_map_9 > 0, 1, 0))
+    room_col_3_0 = room_col_3_0.at[6:148, 0:4].set(1) # Left wall
+    room_col_3_0 = room_col_3_0.at[6:148, 156:160].set(1) # Right wall
+    room_col_3_0 = room_col_3_0.at[47:50, :].set(1) # Thin invisible horizontal platform at Y=47
+
+    attribute_overrides = {
+        "ROOM_COLLISION_MAPS": jnp.stack([room_col_0_3, room_col_0_4, room_col_0_5, \
+                                          room_col_1_3, room_col_1_2, room_col_1_4, jnp.zeros_like(room_col_0_3), jnp.zeros_like(room_col_0_3), \
+                                          room_col_2_2, room_col_2_1, room_col_2_3, jnp.zeros_like(room_col_0_3), jnp.zeros_like(room_col_0_3), jnp.zeros_like(room_col_0_3), jnp.zeros_like(room_col_0_3), \
+                                          jnp.zeros_like(room_col_0_3), jnp.zeros_like(room_col_0_3), jnp.zeros_like(room_col_0_3), jnp.zeros_like(room_col_0_3), room_col_3_3, jnp.zeros_like(room_col_0_3), room_col_3_1, room_col_3_2, room_col_3_0])
+    }
+
+
+class LadderPits(JaxAtariInternalModPlugin):
+    """
+    Fill or Remove pits for the ladders.
+    """
+    @partial(jax.jit, static_argnums=(0,))
+    def _render_hook_post_ui(self, raster: jnp.ndarray, state: MontezumaRevengeState) -> jnp.ndarray:
+        renderer = self._env.renderer
+
+        room_y = 47
+
+        # fill pit in room five
+        raster = jax.lax.cond(
+            state.room_id == 5,
+            # lambda r: stamp_room(r, jnp.concatenate([renderer.SHAPE_MASKS["room_bg_0"][:48], renderer.SHAPE_MASKS["room_bg_level2_base"][48:]], axis=0)),
+            lambda r: jnp.concatenate([raster[:(room_y+48)], renderer.SHAPE_MASKS["room_bg_level2_base"][48:], renderer.SHAPE_MASKS["room_bg_level2_base"][135:]], axis=0),
+            lambda r: r,
+            raster,
+        )
+
+        # jax.debug.print("{x}", x=raster[80, 80])
+
+        mask_l2 = jnp.where(renderer.SHAPE_MASKS["room_bg_level2_base"] == 1, renderer.LEVEL2_PLATFORM_ID, renderer.SHAPE_MASKS["room_bg_level2_base"])
+
+        def draw_ladder(r_in):
+            return jnp.where(raster == 20, raster, r_in)
+
+        def redraw_player(r_in):
+            return jnp.where(jnp.logical_and(raster > 8, raster < 20), raster, r_in)
+
+        def clear_hole(r_in, y0, y1, x0, x1):
+            pos = jnp.array([[x0, room_y + y0]])
+            size = jnp.array([[x1 - x0, y1 - y0]])
+            return renderer.jr.draw_rects(r_in, pos, size, jnp.uint8(0))
+        
+        def stamp_room(r_in, mask):
+            return renderer.jr.render_at(r_in, 0, room_y, mask)
+
+        def remove_wall(r_in, x_min, x_max):
+            return r_in.at[53:94, x_min:x_max].set(jnp.uint8(0))
+
+        def add_wall(r_in):
+            return r_in.at[53:95, 156:160].set(jnp.uint8(20))
+        
+        raster = jax.lax.cond(
+            state.room_id == 18,
+            lambda r: redraw_player(remove_wall(draw_ladder(clear_hole(stamp_room(r, mask_l2), 48, 149, 72, 88)), 156, 160)),
+            lambda r: r,
+            raster,
+        )
+        
+        raster = jax.lax.cond(
+            state.room_id == 19,
+            lambda r: redraw_player(remove_wall(add_wall(raster), 0, 6)),
+            lambda r: r,
+            raster,
+        )
+        
+        raster = jax.lax.cond(
+            state.room_id == 26,
+            lambda r: add_wall(raster),
+            lambda r: r,
+            raster,
+        )
+
+        return raster

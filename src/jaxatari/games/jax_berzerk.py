@@ -136,6 +136,9 @@ class BerzerkConstants(AutoDerivedConstants):
     ENABLE_EVIL_OTTO: bool = struct.field(pytree_node=False, default=False)    # Variation 1: enable immortal evil otto
     MORTAL_EVIL_OTTO: bool = struct.field(pytree_node=False, default=False)    # Variation 2: enable mortal evil otto (ENABLE_EVIL_OTTO has to be True)
     EVIL_OTTO_SIZE: Tuple[int, int] = struct.field(pytree_node=False, default=(8, 7))
+    OTTO_SPRITE_SIZE: Tuple[int, int] = struct.field(pytree_node=False, default=(8, 16))
+    PLAYER_SPRITE_SIZES: Tuple[Tuple[int, int], ...] = struct.field(pytree_node=False, default=((6, 20), (8, 20), (5, 20), (8, 24), (4, 20), (4, 20), (5, 20), (4, 20), (4, 20), (5, 20)))
+    ENEMY_SPRITE_SIZES: Tuple[Tuple[int, int], ...] = struct.field(pytree_node=False, default=((8, 16),) * 11 + ((8, 18), (8, 18)))
     EVIL_OTTO_SPEED: float = struct.field(pytree_node=False, default=0.4)
     EVIL_OTTO_SPEED_SLOW: float = struct.field(pytree_node=False, default=0.2)  # Slower than player (0.4)
     EVIL_OTTO_SPEED_FAST: float = struct.field(pytree_node=False, default=0.5)  # "Amazing speed!" - faster than player
@@ -266,7 +269,6 @@ class JaxBerzerk(JaxEnvironment[BerzerkState, BerzerkObservation, BerzerkInfo, B
     def __init__(self, consts: BerzerkConstants = None):
         super().__init__(consts)
         self.consts = consts or BerzerkConstants()
-        self.obs_size = 111
         self.renderer = BerzerkRenderer(self.consts)
         # Initialize AABB wall geometry
         self.wall_geometry = self._define_wall_geometry()
@@ -836,13 +838,36 @@ class JaxBerzerk(JaxEnvironment[BerzerkState, BerzerkObservation, BerzerkInfo, B
             return jnp.mod(jnp.degrees(jnp.arctan2(v[..., 1], v[..., 0])), 360.0)
 
         # --- Player ---
+        visible = state.room_transition_timer == 0
+        p_sizes = jnp.array(self.consts.PLAYER_SPRITE_SIZES, dtype=jnp.int32)
+        p_dir = state.player.last_dir
+        p_shoot_frame = jnp.where(
+            p_dir[1] < 0,
+            jnp.where(p_dir[0] < 0, 8, 4),
+            jnp.where(p_dir[1] > 0, jnp.where(p_dir[0] < 0, 9, 6), jnp.where(p_dir[0] < 0, 7, 5)),
+        )
+        p_move_frame = jnp.array([1, 1, 2, 2, 0, 0])[(state.player.animation_counter - 1) % 6]
+        p_frame = jnp.where(
+            state.player.death_timer > 0,
+            jnp.where((state.player.death_timer - 1) % 4 < 2, 0, 3),
+            jnp.where(
+                state.player.is_firing,
+                p_shoot_frame,
+                jnp.where(state.player.animation_counter > 0, p_move_frame, 0),
+            ),
+        )
+        p_w = p_sizes[p_frame, 0]
+        p_max_w = max(w for w, _ in self.consts.PLAYER_SPRITE_SIZES)
+        p_flip_pad = p_max_w - self.consts.PLAYER_SPRITE_SIZES[0][0]
+        p_flip = (p_dir[0] < 0) & ~state.player.is_firing
+        p_flip_x = (state.player.pos[0] - p_flip_pad).astype(jnp.int32) + p_max_w - p_w
         player = ObjectObservation.create(
-            x=jnp.clip(state.player.pos[0], 0, self.consts.WIDTH - 1),
-            y=jnp.clip(state.player.pos[1], 0, self.consts.HEIGHT - 1),
-            width=jnp.array(self.consts.PLAYER_SIZE[0], dtype=jnp.int32),
-            height=jnp.array(self.consts.PLAYER_SIZE[1], dtype=jnp.int32),
+            x=jnp.where(p_flip, p_flip_x, state.player.pos[0].astype(jnp.int32)),
+            y=state.player.pos[1].astype(jnp.int32),
+            width=p_w,
+            height=p_sizes[p_frame, 1],
             orientation=vec_to_deg(state.player.last_dir),
-            active=jnp.array(1, dtype=jnp.int32)
+            active=visible.astype(jnp.int32)
         )
 
         # --- Player Bullet ---
@@ -853,12 +878,12 @@ class JaxBerzerk(JaxEnvironment[BerzerkState, BerzerkObservation, BerzerkInfo, B
         pb_h = jnp.where(pb_is_horiz, self.consts.BULLET_SIZE_HORIZONTAL[1], self.consts.BULLET_SIZE_VERTICAL[1])
         
         player_bullet = ObjectObservation.create(
-            x=jnp.clip(state.player.bullet[0, 0], 0, self.consts.WIDTH - 1),
-            y=jnp.clip(state.player.bullet[0, 1], 0, self.consts.HEIGHT - 1),
+            x=state.player.bullet[0, 0].astype(jnp.int32),
+            y=state.player.bullet[0, 1].astype(jnp.int32),
             width=pb_w.astype(jnp.int32),
             height=pb_h.astype(jnp.int32),
             orientation=vec_to_deg(pb_dir),
-            active=state.player.bullet_active[0].astype(jnp.int32)
+            active=(state.player.bullet_active[0] & visible).astype(jnp.int32)
         )
 
         # --- Enemies ---
@@ -869,13 +894,21 @@ class JaxBerzerk(JaxEnvironment[BerzerkState, BerzerkObservation, BerzerkInfo, B
         e_dy = jnp.where(e_axis == 1, e_dir, 0.0)
         e_vec = jnp.stack([e_dx, e_dy], axis=-1)
 
+        e_sizes = jnp.array(self.consts.ENEMY_SPRITE_SIZES, dtype=jnp.int32)
+        e_count = state.enemy.animation_counter - 1
+        e_frame = jnp.select(
+            [e_axis == 0, e_axis == 1],
+            [8 + (e_count % 14) // 7, jnp.array([10, 11, 10, 12])[(e_count % 24) // 6]],
+            (e_count % 32) // 4,
+        )
+        e_active = state.enemy.alive.astype(jnp.bool_) & visible
         enemies = ObjectObservation.create(
-            x=jnp.clip(state.enemy.pos[:, 0], 0, self.consts.WIDTH - 1),
-            y=jnp.clip(state.enemy.pos[:, 1], 0, self.consts.HEIGHT - 1),
-            width=jnp.full((self.consts.MAX_NUM_ENEMIES,), self.consts.ENEMY_SIZE[0], dtype=jnp.int32),
-            height=jnp.full((self.consts.MAX_NUM_ENEMIES,), self.consts.ENEMY_SIZE[1], dtype=jnp.int32),
+            x=jnp.where(e_active, state.enemy.pos[:, 0].astype(jnp.int32), 0),
+            y=jnp.where(e_active, state.enemy.pos[:, 1].astype(jnp.int32), 0),
+            width=e_sizes[e_frame, 0],
+            height=e_sizes[e_frame, 1],
             orientation=vec_to_deg(e_vec),
-            active=state.enemy.alive.astype(jnp.int32)
+            active=e_active.astype(jnp.int32)
         )
 
         # --- Enemy Bullets ---
@@ -885,12 +918,12 @@ class JaxBerzerk(JaxEnvironment[BerzerkState, BerzerkObservation, BerzerkInfo, B
         eb_h = jnp.where(eb_is_horiz, self.consts.BULLET_SIZE_HORIZONTAL[1], self.consts.BULLET_SIZE_VERTICAL[1])
 
         enemy_bullets = ObjectObservation.create(
-            x=jnp.clip(state.enemy.bullets[:, 0], 0, self.consts.WIDTH - 1),
-            y=jnp.clip(state.enemy.bullets[:, 1], 0, self.consts.HEIGHT - 1),
+            x=state.enemy.bullets[:, 0].astype(jnp.int32),
+            y=state.enemy.bullets[:, 1].astype(jnp.int32),
             width=eb_w.astype(jnp.int32),
             height=eb_h.astype(jnp.int32),
             orientation=vec_to_deg(eb_dirs),
-            active=state.enemy.bullet_active.astype(jnp.int32)
+            active=(state.enemy.bullet_active.astype(jnp.bool_) & visible).astype(jnp.int32)
         )
 
         # --- Otto ---
@@ -898,10 +931,10 @@ class JaxBerzerk(JaxEnvironment[BerzerkState, BerzerkObservation, BerzerkInfo, B
         otto_vec = state.player.pos - state.otto.pos
         
         otto = ObjectObservation.create(
-            x=jnp.clip(state.otto.pos[0], 0, self.consts.WIDTH - 1),
-            y=jnp.clip(state.otto.pos[1], 0, self.consts.HEIGHT - 1),
-            width=jnp.array(self.consts.EVIL_OTTO_SIZE[0], dtype=jnp.int32),
-            height=jnp.array(self.consts.EVIL_OTTO_SIZE[1], dtype=jnp.int32),
+            x=jnp.where(state.otto.active, state.otto.pos[0].astype(jnp.int32), 0),
+            y=jnp.where(state.otto.active, state.otto.pos[1].astype(jnp.int32), 0),
+            width=jnp.array(self.consts.OTTO_SPRITE_SIZE[0], dtype=jnp.int32),
+            height=jnp.array(self.consts.OTTO_SPRITE_SIZE[1], dtype=jnp.int32),
             orientation=vec_to_deg(otto_vec),
             active=state.otto.active.astype(jnp.int32)
         )
