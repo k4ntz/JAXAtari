@@ -22,6 +22,32 @@ class DonkeyKongConstants(AutoDerivedConstants):
     WINDOW_WIDTH: int = struct.field(pytree_node=False, default=160 * 3)
     WINDOW_HEIGHT: int = struct.field(pytree_node=False, default=210 * 3)
 
+    ASSET_CONFIG: tuple = struct.field(pytree_node=False, default=(
+        {"name": "background", "type": "background", "file": "donkeyKong_background_level_1.npy"},
+        {"name": "background_level_2", "type": "single", "file": "donkeyKong_background_level_2.npy"},
+        {"name": "donkeykong", "type": "group", "files": ["donkeyKong1.npy", "donkeyKong2.npy"]},
+        {"name": "girlfriend", "type": "single", "file": "girlfriend.npy"},
+        {"name": "lifebar_level_1", "type": "single", "file": "level_1_life_bar.npy"},
+        {"name": "lifebar_level_2", "type": "single", "file": "level_2_life_bar.npy"},
+        {"name": "mario_standing", "type": "group", "files": ["mario_standing_right.npy", "mario_standing_left.npy"]},
+        {"name": "mario_jumping", "type": "group", "files": ["mario_jumping_right.npy", "mario_jumping_left.npy"]},
+        {"name": "mario_walking_1", "type": "group", "files": ["mario_walking_1_right.npy", "mario_walking_1_left.npy"]},
+        {"name": "mario_walking_2", "type": "group", "files": ["mario_walking_2_right.npy", "mario_walking_2_left.npy"]},
+        {"name": "mario_climbing", "type": "group", "files": ["mario_climbing_left.npy", "mario_climbing_right.npy"]},
+        {"name": "hammer_up_level_1", "type": "single", "file": "hammer_up_level_1.npy"},
+        {"name": "hammer_up_level_2", "type": "single", "file": "hammer_up_level_2.npy"},
+        {"name": "hammer_down_right_level_1", "type": "single", "file": "hammer_down_right_level_1.npy"},
+        {"name": "hammer_down_left_level_1", "type": "single", "file": "hammer_down_left_level_1.npy"},
+        {"name": "hammer_down_right_level_2", "type": "single", "file": "hammer_down_right_level_2.npy"},
+        {"name": "hammer_down_left_level_2", "type": "single", "file": "hammer_down_left_level_2.npy"},
+        {"name": "fire", "type": "single", "file": "fire.npy"},
+        {"name": "drop_pit", "type": "single", "file": "drop_pit.npy"},
+        {"name": "barrel", "type": "group", "files": ["barrel0.npy", "barrel1.npy", "barrel2.npy"]},
+        {"name": "blue_digits", "type": "digits", "pattern": "digits/blue_score_{}.npy"},
+        {"name": "yellow_digits", "type": "digits", "pattern": "digits/yellow_score_{}.npy"},
+    ))
+
+
     # Frame rate
     FRAME_RATE: int = struct.field(pytree_node=False, default=30) # if more frame rate is provided, one needs to change the game behaviour
 
@@ -77,6 +103,8 @@ class DonkeyKongConstants(AutoDerivedConstants):
     # Mario movement and physics
     LEVEL_1_MARIO_START_X: chex.Array = struct.field(pytree_node=False, default_factory=lambda: jnp.float32(176.0))
     LEVEL_1_MARIO_START_Y: chex.Array = struct.field(pytree_node=False, default_factory=lambda: jnp.float32(45.0))
+    LEVEL_1_MARIO_DEFAULT_START_X: chex.Array = struct.field(pytree_node=False, default_factory=lambda: jnp.float32(176.0))
+    LEVEL_1_MARIO_DEFAULT_START_Y: chex.Array = struct.field(pytree_node=False, default_factory=lambda: jnp.float32(45.0))
     LEVEL_2_MARIO_START_X: chex.Array = struct.field(pytree_node=False, default_factory=lambda: jnp.float32(155.0))
     LEVEL_2_MARIO_START_Y: chex.Array = struct.field(pytree_node=False, default_factory=lambda: jnp.float32(32.0))
     MARIO_JUMPING_HEIGHT: chex.Array = struct.field(pytree_node=False, default_factory=lambda: jnp.float32(5.0))
@@ -90,7 +118,12 @@ class DonkeyKongConstants(AutoDerivedConstants):
     GAME_FREEZE_DURATION: int = struct.field(pytree_node=False, default=70)
 
     # If mario reaches that height on the ladder, game round is cleared
-    LEVEL_1_GOAL_X: int = struct.field(pytree_node=False, default=40)
+    LEVEL_1_GOAL_X: int = struct.field(pytree_node=False, default=20)
+    LEVEL_1_GOAL_PAULINE_X: int = struct.field(pytree_node=False, default=68)
+
+    # Mario initial stage and direction
+    LEVEL_1_MARIO_START_STAGE: int = struct.field(pytree_node=False, default=1)
+    LEVEL_1_MARIO_START_DIRECTION: int = struct.field(pytree_node=False, default=1)
 
     # Mario sprite indexes
     MARIO_WALK_SPRITE_0: int = struct.field(pytree_node=False, default=0)
@@ -107,6 +140,7 @@ class DonkeyKongConstants(AutoDerivedConstants):
     MARIO_CLIMB_SPRITE_1: int = struct.field(pytree_node=False, default=1)
 
     # Barrel positions and sprites
+    ENABLE_BARRELS: bool = struct.field(pytree_node=False, default=True)
     BARREL_START_X: int = struct.field(pytree_node=False, default=52)
     BARREL_START_Y: int = struct.field(pytree_node=False, default=34)
     BARREL_SPRITE_FALL: int = struct.field(pytree_node=False, default=0)
@@ -245,6 +279,8 @@ class Ladder:
     start_x: chex.Array
     end_y: chex.Array
     end_x: chex.Array
+    render_positions: chex.Array = struct.field(default=None)
+    render_sizes: chex.Array = struct.field(default=None)
 
 # Barrels - Level 1 Enemy
 @struct.dataclass
@@ -409,9 +445,30 @@ class JaxDonkeyKong(JaxEnvironment[DonkeyKongState, DonkeyKongObservation, Donke
         return x
 
     @partial(jax.jit, static_argnums=(0,))
+    def snap_ladder_to_girders(self, stage: int, x: int, level: int = 1):
+        """
+        Calculates the vertical endpoints (y_top, y_bottom) of a ladder connecting
+        the floor girder at `stage` to the ceiling girder at `stage + 1` at horizontal coordinate `x`.
+        """
+        y_bot = self.bar_linear_equation(stage, x, level)
+        y_top = self.bar_linear_equation(stage + 1, x, level)
+        return jnp.round(y_top).astype(jnp.int32), jnp.round(y_bot).astype(jnp.int32)
+
+    @partial(jax.jit, static_argnums=(0,))
     def init_ladders_for_level(self, level: int) -> Ladder:
         # Ladder positions for level 1  --- the last 3 ladders are dummy ladders which do not exist in the real game
         # this is needed because jax needs same size of array for the Ladders to compile correctly
+        l1_render_pos = jnp.array([
+            [76, 40], [76, 52], [76, 68], [76, 80], [108, 68], [48, 92], [68, 88], [100, 84], [100, 104],
+            [64, 120], [64, 132], [88, 116], [108, 120], [48, 148], [80, 148], [72, 176], [72, 188], [108, 176],
+            [-1, -1], [-1, -1]
+        ], dtype=jnp.int32)
+        l1_render_sizes = jnp.array([
+            [4, 17], [4, 5], [4, 1], [4, 1], [4, 13], [4, 17], [4, 21], [4, 9], [4, 5],
+            [4, 1], [4, 5], [4, 21], [4, 17], [4, 17], [4, 17], [4, 1], [4, 5], [4, 17],
+            [0, 0], [0, 0]
+        ], dtype=jnp.int32)
+
         Ladder_level_1 = Ladder(
             stage=jnp.array([6, 5, 5, 4, 4, 4, 3, 3, 3, 2, 2, 1, 1,                                                     -1, -1, -1], dtype=jnp.int32),
             climbable=jnp.array([True, False, True, True, True, False, False, True, True, True, True, False, True,      False, False, False]),
@@ -419,16 +476,32 @@ class JaxDonkeyKong(JaxEnvironment[DonkeyKongState, DonkeyKongObservation, Donke
             start_x=jnp.array([76, 74, 106, 46, 66, 98, 62, 86, 106, 46, 78, 70, 106,                                   -1, -1, -1], dtype=jnp.int32),
             end_y=jnp.array([34, 53, 53, 79, 78, 76, 104, 106, 108, 135, 133, 161, 164,                                 -1, -1, -1], dtype=jnp.int32),
             end_x=jnp.array([76, 74, 106, 46, 66, 98, 62, 86, 106, 46, 78, 70, 106,                                     -1, -1, -1], dtype=jnp.int32),
+            render_positions=l1_render_pos,
+            render_sizes=l1_render_sizes,
         )
 
         # Ladder positions for level 2
+        l2_render_pos = jnp.array([
+            [40, 144], [60, 144], [96, 144], [116, 144],
+            [40, 116], [60, 116], [96, 116], [116, 116],
+            [40, 88],  [60, 88],  [96, 88],  [116, 88],
+            [40, 60],  [60, 60],  [96, 60],  [116, 60],
+            [40, 36],  [60, 36],  [96, 36],  [116, 36],
+        ], dtype=jnp.int32)
+        l2_render_sizes = jnp.array(
+            [[4, 29]] * 16 + [[4, 25]] * 4,
+            dtype=jnp.int32
+        )
+
         Ladder_level_2 = Ladder(
             stage=jnp.array([4, 4, 4, 4, 3, 3, 3, 3, 2, 2, 2, 2, 1, 1, 1, 1], dtype=jnp.int32),
             climbable=jnp.array([True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True]),
             start_y=jnp.array([171, 171, 171, 171, 143, 143, 143, 143, 115, 115, 115, 115, 87, 87, 87, 87], dtype=jnp.int32),
             start_x=jnp.array([40, 60, 96, 116, 40, 60, 96, 116, 40, 60, 96, 116, 40, 60, 96, 116], dtype=jnp.int32),
-            end_y=jnp.array([143, 143, 143, 143, 115, 115, 115, 155, 87, 87, 87, 87, 59, 59, 59, 59], dtype=jnp.int32),
+            end_y=jnp.array([143, 143, 143, 143, 115, 115, 115, 115, 87, 87, 87, 87, 59, 59, 59, 59], dtype=jnp.int32),
             end_x=jnp.array([40, 60, 96, 116, 40, 60, 96, 116, 40, 60, 96, 116, 40, 60, 96, 116], dtype=jnp.int32),
+            render_positions=l2_render_pos,
+            render_sizes=l2_render_sizes,
         )
 
         return jax.lax.cond(
@@ -442,15 +515,15 @@ class JaxDonkeyKong(JaxEnvironment[DonkeyKongState, DonkeyKongObservation, Donke
     def init_invisible_wall_for_level(self, level: int) -> invisible_wall_each_stage:
         # Set invisible wall depending of level
         invisible_wall_level_1 = invisible_wall_each_stage(
-            stage=jnp.array([6, 5, 4, 3, 2, 1], dtype=jnp.int32),
-            left_end=jnp.array([32, 37, 32, 37, 32, 37], dtype=jnp.int32),
-            right_end=jnp.array([113, 120, 113, 120, 113, 120], dtype=jnp.int32),
+            stage=jnp.array([6, 5, 4, 3, 2, 1, 7], dtype=jnp.int32),
+            left_end=jnp.array([32, 37, 32, 37, 32, 37, 46], dtype=jnp.int32),
+            right_end=jnp.array([113, 120, 113, 120, 113, 120, 77], dtype=jnp.int32),
         )
         # level 2
         invisible_wall_level_2 = invisible_wall_each_stage(
-            stage=jnp.array([6, 5, 4, 3, 2, 1], dtype=jnp.int32),
-            left_end=jnp.array([32, 32, 32, 32, 32, 32], dtype=jnp.int32),
-            right_end=jnp.array([120, 120, 120, 120, 120, 120], dtype=jnp.int32),
+            stage=jnp.array([6, 5, 4, 3, 2, 1, 7], dtype=jnp.int32),
+            left_end=jnp.array([32, 32, 32, 32, 32, 32, 32], dtype=jnp.int32),
+            right_end=jnp.array([120, 120, 120, 120, 120, 120, 120], dtype=jnp.int32),
         )
 
         return jax.lax.cond(
@@ -751,6 +824,8 @@ class JaxDonkeyKong(JaxEnvironment[DonkeyKongState, DonkeyKongObservation, Donke
     # Barrel enemy
     @partial(jax.jit, static_argnums=(0,))
     def _barrel_step(self, state):
+        if not self.consts.ENABLE_BARRELS:
+            return state
         step_counter = state.step_counter
         
         # pick other sprite for animation after 8 frames --> for animation
@@ -842,7 +917,8 @@ class JaxDonkeyKong(JaxEnvironment[DonkeyKongState, DonkeyKongObservation, Donke
                 )
                 
                 # check first if barrel is positioned on top of a ladder
-                mask = jnp.logical_and(ladders.stage == curr_stage, ladders.end_x == y)
+                ladder_aligned = jnp.abs(y - ladders.end_x) <= (self.consts.BARREL_MOVING_SPEED * 0.5)
+                mask = jnp.logical_and(ladders.stage == curr_stage, ladder_aligned)
                 barrel_is_on_ladder = jnp.any(mask)
                 key = jax.random.PRNGKey(jnp.round(x).astype(jnp.int32) + jnp.round(y).astype(jnp.int32) + stage + state.step_counter)
                 roll_down_prob = jax.random.bernoulli(key, prob_barrel_rolls_down_a_ladder)
@@ -992,7 +1068,10 @@ class JaxDonkeyKong(JaxEnvironment[DonkeyKongState, DonkeyKongObservation, Donke
             )
 
             return jax.lax.cond(
-                jnp.logical_and(state.frames_since_last_barrel_spawn >= self.consts.SPAWN_STEP_COUNTER_BARREL, jnp.logical_and(idx != -1, jnp.logical_and(state.mario_got_hit == False, state.mario_reached_goal == False))),
+                jnp.logical_and(
+                    self.consts.ENABLE_BARRELS,
+                    jnp.logical_and(state.frames_since_last_barrel_spawn >= self.consts.SPAWN_STEP_COUNTER_BARREL, jnp.logical_and(idx != -1, jnp.logical_and(state.mario_got_hit == False, state.mario_reached_goal == False)))
+                ),
                 lambda _: new_state,
                 lambda _: state,
                 operand=None
@@ -1559,10 +1638,12 @@ class JaxDonkeyKong(JaxEnvironment[DonkeyKongState, DonkeyKongObservation, Donke
             )
         new_state = reset_jumping(new_state)
 
-        # check if mario reached the goal -- only for level 1 climbing the ladder, for level 2 there is an another goal to be reached
+        # check if mario reached the goal -- only for level 1 climbing the ladder or reaching the princess on the platform
         def mario_reached_goal(state):
-            reached_goal = state.mario_y <= self.consts.LEVEL_1_GOAL_X
-            reached_goal &= state.mario_climbing
+            reached_goal = (state.level == 1) & (
+                (state.mario_climbing & (state.mario_y <= self.consts.LEVEL_1_GOAL_X))
+                | ((state.mario_stage == 7) & (state.mario_x <= self.consts.LEVEL_1_GOAL_PAULINE_X))
+            )
             reached_goal &= jnp.logical_not(state.mario_reached_goal) # false if already reached the goal
             new_state = state.replace(
                 game_freeze_start = state.step_counter,
@@ -1602,12 +1683,12 @@ class JaxDonkeyKong(JaxEnvironment[DonkeyKongState, DonkeyKongObservation, Donke
                 mario_jumping_over_enemy=False,
                 mario_climbing=False,
                 start_frame_when_mario_jumped=-1,
-                mario_view_direction=self.consts.MOVING_RIGHT,
+                mario_view_direction=self.consts.LEVEL_1_MARIO_START_DIRECTION,
                 mario_walk_frame_counter=0,
                 mario_climb_frame_counter=0,
                 mario_walk_sprite=self.consts.MARIO_WALK_SPRITE_0,
                 mario_climb_sprite=self.consts.MARIO_CLIMB_SPRITE_0,
-                mario_stage=1,
+                mario_stage=self.consts.LEVEL_1_MARIO_START_STAGE,
                 lives = 2,
                 mario_got_hit = False,
                 game_freeze_start = -1,
@@ -1664,6 +1745,18 @@ class JaxDonkeyKong(JaxEnvironment[DonkeyKongState, DonkeyKongObservation, Donke
                 operand=None
             )
             # new_state_life_loose --> Mario got hit by an enemy, Mario's life counter decrement
+            mario_stage_life_loose = jax.lax.cond(
+                state.level == 1,
+                lambda _: self.consts.LEVEL_1_MARIO_START_STAGE,
+                lambda _: 1,
+                operand=None
+            )
+            mario_dir_life_loose = jax.lax.cond(
+                state.level == 1,
+                lambda _: self.consts.LEVEL_1_MARIO_START_DIRECTION,
+                lambda _: self.consts.MOVING_RIGHT,
+                operand=None
+            )
             new_state_life_loose = new_state.replace(
                 lives = state.lives - 1,
                 level = state.level,
@@ -1671,6 +1764,8 @@ class JaxDonkeyKong(JaxEnvironment[DonkeyKongState, DonkeyKongObservation, Donke
                 invisible_wall_each_stage = invisible_wall,
                 mario_y = mario_y.astype(jnp.float32),
                 mario_x = mario_x.astype(jnp.float32),
+                mario_stage = mario_stage_life_loose,
+                mario_view_direction = mario_dir_life_loose,
                 hammer_y = hammer_y,
                 hammer_x = hammer_x,
             )
@@ -1686,7 +1781,7 @@ class JaxDonkeyKong(JaxEnvironment[DonkeyKongState, DonkeyKongObservation, Donke
             invisible_wall = self.init_invisible_wall_for_level(level)
             mario_y, mario_x, hammer_y, hammer_x = jax.lax.cond(
                 level == 1,
-                lambda _: (self.consts.LEVEL_1_MARIO_START_X, self.consts.LEVEL_1_MARIO_START_Y, self.consts.LEVEL_1_HAMMER_X, self.consts.LEVEL_1_HAMMER_Y),
+                lambda _: (self.consts.LEVEL_1_MARIO_DEFAULT_START_X, self.consts.LEVEL_1_MARIO_DEFAULT_START_Y, self.consts.LEVEL_1_HAMMER_X, self.consts.LEVEL_1_HAMMER_Y),
                 lambda _: (self.consts.LEVEL_2_MARIO_START_X, self.consts.LEVEL_2_MARIO_START_Y, self.consts.LEVEL_2_HAMMER_X, self.consts.LEVEL_2_HAMMER_Y),
                 operand=None
             )
@@ -1739,6 +1834,8 @@ class JaxDonkeyKong(JaxEnvironment[DonkeyKongState, DonkeyKongObservation, Donke
                 invisible_wall_each_stage=invisible_wall,
                 mario_y = mario_y.astype(jnp.float32),
                 mario_x = mario_x.astype(jnp.float32),
+                mario_stage = 1,
+                mario_view_direction = self.consts.MOVING_RIGHT,
                 hammer_y = hammer_y,
                 hammer_x = hammer_x,
                 game_score = game_score,
@@ -2013,12 +2110,12 @@ class JaxDonkeyKong(JaxEnvironment[DonkeyKongState, DonkeyKongObservation, Donke
             mario_jumping_over_enemy=False,
             mario_climbing=False,
             start_frame_when_mario_jumped=-1,
-            mario_view_direction=self.consts.MOVING_RIGHT,
+            mario_view_direction=self.consts.LEVEL_1_MARIO_START_DIRECTION,
             mario_walk_frame_counter=0,
             mario_climb_frame_counter=0,
             mario_walk_sprite=self.consts.MARIO_WALK_SPRITE_0,
             mario_climb_sprite=self.consts.MARIO_CLIMB_SPRITE_0,
-            mario_stage=1,
+            mario_stage=self.consts.LEVEL_1_MARIO_START_STAGE,
             lives = 2,
             mario_got_hit = False,
             game_freeze_start = -1,
@@ -2112,16 +2209,21 @@ class JaxDonkeyKong(JaxEnvironment[DonkeyKongState, DonkeyKongObservation, Donke
         
         # Check if game was even started --> with human_action FIRE
         def start_game():
-            started_state_level_1 = state.replace(
-                game_started = True,
-                barrels = BarrelPosition(
+            barrels_start = (
+                BarrelPosition(
                     barrel_y = jnp.array([self.consts.BARREL_START_X, -1, -1, -1]).astype(jnp.int32),
                     barrel_x = jnp.array([self.consts.BARREL_START_Y, -1, -1, -1]).astype(jnp.int32), 
                     sprite = jnp.array([self.consts.BARREL_SPRITE_RIGHT, self.consts.BARREL_SPRITE_RIGHT, self.consts.BARREL_SPRITE_RIGHT, self.consts.BARREL_SPRITE_RIGHT]).astype(jnp.int32),
                     moving_direction = jnp.array([self.consts.MOVING_RIGHT, self.consts.MOVING_RIGHT, self.consts.MOVING_RIGHT, self.consts.MOVING_RIGHT]).astype(jnp.int32),
                     stage = jnp.array([6, 6, 6, 6]).astype(jnp.int32),
                     reached_the_end=jnp.array([False, True, True, True]).astype(bool)
-                ),
+                )
+                if self.consts.ENABLE_BARRELS
+                else state.barrels
+            )
+            started_state_level_1 = state.replace(
+                game_started = True,
+                barrels = barrels_start,
             )
             started_state_level_2 = state.replace(
                 game_started = True,
@@ -2313,30 +2415,7 @@ class DonkeyKongRenderer(JAXGameRenderer):
         self.jr = render_utils.JaxRenderingUtils(self.config)
 
         sprite_path = os.path.join(render_utils.get_base_sprite_dir(), "donkeykong")
-        asset_config = [
-            {"name": "background", "type": "background", "file": "donkeyKong_background_level_1.npy"},
-            {"name": "background_level_2", "type": "single", "file": "donkeyKong_background_level_2.npy"},
-            {"name": "donkeykong", "type": "group", "files": ["donkeyKong1.npy", "donkeyKong2.npy"]},
-            {"name": "girlfriend", "type": "single", "file": "girlfriend.npy"},
-            {"name": "lifebar_level_1", "type": "single", "file": "level_1_life_bar.npy"},
-            {"name": "lifebar_level_2", "type": "single", "file": "level_2_life_bar.npy"},
-            {"name": "mario_standing", "type": "group", "files": ["mario_standing_right.npy", "mario_standing_left.npy"]},
-            {"name": "mario_jumping", "type": "group", "files": ["mario_jumping_right.npy", "mario_jumping_left.npy"]},
-            {"name": "mario_walking_1", "type": "group", "files": ["mario_walking_1_right.npy", "mario_walking_1_left.npy"]},
-            {"name": "mario_walking_2", "type": "group", "files": ["mario_walking_2_right.npy", "mario_walking_2_left.npy"]},
-            {"name": "mario_climbing", "type": "group", "files": ["mario_climbing_left.npy", "mario_climbing_right.npy"]},
-            {"name": "hammer_up_level_1", "type": "single", "file": "hammer_up_level_1.npy"},
-            {"name": "hammer_up_level_2", "type": "single", "file": "hammer_up_level_2.npy"},
-            {"name": "hammer_down_right_level_1", "type": "single", "file": "hammer_down_right_level_1.npy"},
-            {"name": "hammer_down_left_level_1", "type": "single", "file": "hammer_down_left_level_1.npy"},
-            {"name": "hammer_down_right_level_2", "type": "single", "file": "hammer_down_right_level_2.npy"},
-            {"name": "hammer_down_left_level_2", "type": "single", "file": "hammer_down_left_level_2.npy"},
-            {"name": "fire", "type": "single", "file": "fire.npy"},
-            {"name": "drop_pit", "type": "single", "file": "drop_pit.npy"},
-            {"name": "barrel", "type": "group", "files": ["barrel0.npy", "barrel1.npy", "barrel2.npy"]},
-            {"name": "blue_digits", "type": "digits", "pattern": "digits/blue_score_{}.npy"},
-            {"name": "yellow_digits", "type": "digits", "pattern": "digits/yellow_score_{}.npy"},
-        ]
+        asset_config = self.consts.ASSET_CONFIG
 
         (
             self.PALETTE,
@@ -2345,6 +2424,7 @@ class DonkeyKongRenderer(JAXGameRenderer):
             self.COLOR_TO_ID,
             self.FLIP_OFFSETS,
         ) = self.jr.load_and_setup_assets(asset_config, sprite_path)
+        self.BLANK_BACKGROUND = jnp.full_like(self.BACKGROUND, self.BACKGROUND[0, 0])
 
     @partial(jax.jit, static_argnums=(0,))
     def render(self, state):
@@ -2375,7 +2455,36 @@ class DonkeyKongRenderer(JAXGameRenderer):
         raster = jax.lax.cond(
             state.level == 1,
             lambda: self.BACKGROUND,
-            lambda: draw_level_2_drop_pits(self.BACKGROUND),
+            lambda: draw_level_2_drop_pits(self.BLANK_BACKGROUND),
+        )
+
+        # Draw dynamic ladders
+        ladder_color = jax.lax.cond(
+            state.level == 1,
+            lambda: 0,
+            lambda: 1,
+        )
+        if state.ladders.render_positions is not None:
+            ladder_positions = state.ladders.render_positions
+            ladder_sizes = state.ladders.render_sizes
+        else:
+            ladder_positions = jnp.stack([
+                state.ladders.start_x,
+                jnp.minimum(state.ladders.start_y, state.ladders.end_y)
+            ], axis=-1)
+            ladder_sizes = jnp.stack([
+                jnp.full_like(state.ladders.start_x, self.consts.LADDER_WIDTH),
+                jnp.abs(state.ladders.start_y - state.ladders.end_y)
+            ], axis=-1)
+
+        raster = self.jr.draw_ladders(
+            raster,
+            ladder_positions,
+            ladder_sizes,
+            rung_height=1,
+            space_height=3,
+            color_id=ladder_color,
+            global_grid=True,
         )
 
         raster = self.jr.render_at(

@@ -1240,7 +1240,7 @@ class JaxRenderingUtils:
         return jnp.where(combined_mask, jnp.asarray(color_id, raster.dtype), raster)
 
 
-    @partial(jax.jit, static_argnums=(0, 4, 5, 6))
+    @partial(jax.jit, static_argnums=(0, 4, 5, 7))
     def draw_ladders(
         self,
         raster: jnp.ndarray,
@@ -1249,9 +1249,10 @@ class JaxRenderingUtils:
         rung_height: int,
         space_height: int,
         color_id: int,
+        global_grid: bool = False,
     ) -> jnp.ndarray:
         """
-        Draws multiple ladders (rectangles with a repeating rung pattern). Examples include the ladders in the kangaroo game.
+        Draws multiple ladders (rectangles with a repeating rung pattern). Examples include the ladders in the kangaroo and donkey kong games.
 
         Args:
             raster: The 2D raster array to draw on.
@@ -1260,6 +1261,7 @@ class JaxRenderingUtils:
             rung_height: The height of each ladder rung in game coordinates.
             space_height: The height of the space between rungs in game coordinates.
             color_id: The palette ID to use for the rungs.
+            global_grid: Whether to align rungs to the global scanline grid (yy % pattern_height) rather than relative to the ladder top.
 
         Returns:
             The modified raster with the ladders drawn.
@@ -1282,9 +1284,12 @@ class JaxRenderingUtils:
             area_mask = (xx >= x_start) & (xx < x_start + width) & \
                         (yy >= y_start) & (yy < y_start + height)
             
-            relative_y = yy - y_start
             pattern_height = rung_scaled + space_scaled
-            pattern_mask = (relative_y % pattern_height) < rung_scaled
+            if global_grid:
+                pattern_mask = (yy % pattern_height) < rung_scaled
+            else:
+                relative_y = yy - y_start
+                pattern_mask = (relative_y % pattern_height) < rung_scaled
             
             final_mask = area_mask & pattern_mask
             return jax.lax.select(should_draw, final_mask, jnp.zeros_like(final_mask))
