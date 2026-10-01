@@ -199,6 +199,8 @@ class AsterixObservation(struct.PyTreeNode):
     player: ObjectObservation
     enemies: ObjectObservation
     collectibles: ObjectObservation
+    score: chex.Array
+    lives: chex.Array
 
 
 class AsterixInfo(struct.PyTreeNode):
@@ -307,7 +309,10 @@ class JaxAsterix(JaxEnvironment[AsterixState, AsterixObservation, AsterixInfo, A
     def step(self, state: AsterixState, action: chex.Array) -> tuple[
         AsterixObservation, AsterixState, float, bool, AsterixInfo]:
 
-        action = jnp.take(self.ACTION_SET, action.astype(jnp.int32))
+        # ``action`` is a Discrete(9) index into ACTION_SET / the move tables below.
+        # Do not ``take(ACTION_SET, action)`` before indexing: ACTION_SET stores Atari
+        # action ids (0,2,3,…), while dx/dy tables are ordered by the 0..8 index.
+        action = action.astype(jnp.int32)
         
         player_height = self.consts.player_height
         cooldown_frames = self.consts.cooldown_frames
@@ -319,6 +324,8 @@ class JaxAsterix(JaxEnvironment[AsterixState, AsterixObservation, AsterixInfo, A
         stage_diffs = jnp.abs(stage_borders - state.player_y)
         current_stage = jnp.argmin(stage_diffs)
 
+        # Index order matches ACTION_SET: NOOP, UP, RIGHT, LEFT, DOWN,
+        # UPRIGHT, UPLEFT, DOWNRIGHT, DOWNLEFT.
         dx_table = jnp.array([0, 0, 1, -1, 0, 1, -1, 1, -1], dtype=jnp.int32)
         dy_table = jnp.array([0, -1, 0, 0, 1, -1, -1, 1, 1], dtype=jnp.int32)
         dx = dx_table[action]
@@ -722,7 +729,13 @@ class JaxAsterix(JaxEnvironment[AsterixState, AsterixObservation, AsterixInfo, A
             visual_id=state.collectibles.type_index.astype(jnp.int32),
         )
         
-        return AsterixObservation(player=player, enemies=enemy, collectibles=collectible)
+        return AsterixObservation(
+            player=player,
+            enemies=enemy,
+            collectibles=collectible,
+            score=state.score.astype(jnp.int32),
+            lives=state.lives.astype(jnp.int32),
+        )
 
 
     @partial(jax.jit, static_argnums=(0,))
@@ -750,6 +763,8 @@ class JaxAsterix(JaxEnvironment[AsterixState, AsterixObservation, AsterixInfo, A
         # - collectibles: array of shape (8, 4)
         return spaces.Dict({
             "player": spaces.get_object_space(n=None, screen_size=(self.consts.screen_height, self.consts.screen_width)),
+            "score": spaces.Box(low=0, high=jnp.iinfo(jnp.int32).max, shape=(), dtype=jnp.int32),
+            "lives": spaces.Box(low=0, high=10, shape=(), dtype=jnp.int32),
             "enemies": spaces.get_object_space(n=8, screen_size=(self.consts.screen_height, self.consts.screen_width)),
             "collectibles": spaces.get_object_space(n=8, screen_size=(self.consts.screen_height, self.consts.screen_width)),
         })

@@ -6,10 +6,9 @@
 # Simulates the Atari Casino Blackjack game
 #
 
-from typing import NamedTuple, Tuple
+from typing import Tuple
 from functools import partial
 
-import os
 import chex
 import jax
 import jax.numpy as jnp
@@ -18,26 +17,17 @@ from flax import struct
 from jaxatari.environment import JAXAtariAction as Action
 from jaxatari.environment import JaxEnvironment
 from jaxatari.spaces import Space, Discrete, Box, Dict
-try:
-    from jaxatari.games.jax_casino import CasinoRenderer
-except ImportError:
-    from jax_casino import CasinoRenderer
+from jaxatari.games.casino.renderer import CasinoRenderer
 
 
 class CasinoBlackjackConstants(struct.PyTreeNode):
     WIDTH: int = struct.field(pytree_node=False, default=160)
     HEIGHT: int = struct.field(pytree_node=False, default=210)
-    INITIAL_PLAYER_SCORE: jnp.ndarray = struct.field(
+    INITIAL_PLAYER_SCORE: int = struct.field(pytree_node=False, default=1000)
+    INITIAL_PLAYER_MAIN_BET: int = struct.field(pytree_node=False, default=20)
+    CARD_VALUES: Tuple[int, ...] = struct.field(
         pytree_node=False,
-        default_factory=lambda: jnp.array(1000, dtype=jnp.int32),
-    )
-    INITIAL_PLAYER_MAIN_BET: jnp.ndarray = struct.field(
-        pytree_node=False,
-        default_factory=lambda: jnp.array(20, dtype=jnp.int32),
-    )
-    CARD_VALUES: jnp.ndarray = struct.field(
-        pytree_node=False,
-        default_factory=lambda: jnp.array([2, 3, 4, 5, 6, 7, 8, 9, 10, 10, 10, 10, 0], dtype=jnp.int32),
+        default=(2, 3, 4, 5, 6, 7, 8, 9, 10, 10, 10, 10, 0),
     )
     CARD_SHUFFLING_RULE: int = struct.field(pytree_node=False, default=0)
     """ Determines when the cards are being shuffled, 0 = after every round, 1 = after drawing 34 cards """
@@ -52,7 +42,7 @@ class CasinoBlackjackConstants(struct.PyTreeNode):
     Computer dealer must stay on 17 or more points
     """
 
-class CasinoBlackjackState(NamedTuple):
+class CasinoBlackjackState(struct.PyTreeNode):
     # colors:   D -> diamonds ♦
     #           C -> clubs ♣
     #           H -> hearts ♥
@@ -114,7 +104,7 @@ class CasinoBlackjackState(NamedTuple):
     current_hand: chex.Numeric
     """ Tells whether the main hand or the split hand is selected: 0 = main hand, 1 = split hand """
 
-class CasinoBlackjackObservation(NamedTuple):
+class CasinoBlackjackObservation(struct.PyTreeNode):
     player_score: jnp.ndarray
     """ The score of the player """
     player_main_bet: jnp.ndarray
@@ -134,7 +124,7 @@ class CasinoBlackjackObservation(NamedTuple):
     char: jnp.ndarray
     """ Shows an i when the insurance action can be selected, and a question mark, when the bet can be selected """
 
-class CasinoBlackjackInfo(NamedTuple):
+class CasinoBlackjackInfo(struct.PyTreeNode):
     time: jnp.ndarray
 
 @jax.jit
@@ -148,7 +138,7 @@ def calculate_card_value_sum(hand: chex.Array, consts):
 
         # Checks the value for the current card and adds it to csum
         # Aces are ignored
-        csum = jnp.where(value != 0, csum + consts.CARD_VALUES[(value - 1) % 13], csum)
+        csum = jnp.where(value != 0, csum + jnp.asarray(consts.CARD_VALUES)[(value - 1) % 13], csum)
 
         # Checks if the current card is an ace
         number_of_A = jnp.where(jnp.logical_and(value != 0, value % 13 == 0), number_of_A + 1, number_of_A)
@@ -279,7 +269,7 @@ def draw_initial_cards(state_action_tuple) -> CasinoBlackjackState:
     # When dealer has an ace as first card, then go to insurance otherwise check for Blackjack and go to check_winner or when no one has a Blackjack continue with the game
     new_state_counter = jnp.select(
         condlist=[
-            consts.CARD_VALUES[(card_dealer1 - 1) % 13] == 0,
+            jnp.asarray(consts.CARD_VALUES)[(card_dealer1 - 1) % 13] == 0,
             jnp.logical_or(calculate_card_value_sum(new_cards_dealer, consts) == 21, calculate_card_value_sum(new_cards_player_main, consts) == 21)
         ],
         choicelist=[
@@ -425,7 +415,8 @@ def select_next_action(state_action_tuple) -> CasinoBlackjackState:
 
     # Check if splitting is possible
     # It is the first round and the first and the second card of the player have the same value
-    has_same_value_cards = jnp.logical_and(consts.CARD_VALUES[(state.cards_player_main[0] - 1) % 13] == consts.CARD_VALUES[(state.cards_player_main[1] - 1) % 13], state.cards_player_main_counter == 2)
+    card_values = jnp.asarray(consts.CARD_VALUES)
+    has_same_value_cards = jnp.logical_and(card_values[(state.cards_player_main[0] - 1) % 13] == card_values[(state.cards_player_main[1] - 1) % 13], state.cards_player_main_counter == 2)
     # The game mode is selected in which splitting is allowed
     splitting_rule_condition = consts.ALLOW_SPLITTING == 1
     # The player has enough points to take a second hand with the same bet amount
@@ -995,13 +986,15 @@ class JaxCasinoBlackjack(JaxEnvironment[CasinoBlackjackState, CasinoBlackjackObs
         super().__init__(consts)
         self.renderer = CasinoRenderer(self.consts)
 
-    def reset(self, key=jax.random.PRNGKey(int.from_bytes(os.urandom(3), byteorder='big'))) -> Tuple[CasinoBlackjackObservation, CasinoBlackjackState]:
+    def reset(self, key=None) -> Tuple[CasinoBlackjackObservation, CasinoBlackjackState]:
         # Resets the game state to the initial state.
+        if key is None:
+            key = jax.random.PRNGKey(0)
         key1, subkey1 = jax.random.split(key)
         key2, subkey2 = jax.random.split(key1)
         state = CasinoBlackjackState(
-            player_score=self.consts.INITIAL_PLAYER_SCORE,
-            player_main_bet=self.consts.INITIAL_PLAYER_MAIN_BET,
+            player_score=jnp.asarray(self.consts.INITIAL_PLAYER_SCORE, dtype=jnp.int32),
+            player_main_bet=jnp.asarray(self.consts.INITIAL_PLAYER_MAIN_BET, dtype=jnp.int32),
             player_split_bet=jnp.array(0, dtype=jnp.int32),
             player_main_action=jnp.array(0, dtype=jnp.int32),
             player_split_action=jnp.array(0, dtype=jnp.int32),
@@ -1047,7 +1040,6 @@ class JaxCasinoBlackjack(JaxEnvironment[CasinoBlackjackState, CasinoBlackjackObs
     def _get_reward(self, previous_state: CasinoBlackjackState, state: CasinoBlackjackState):
         return state.player_score - previous_state.player_score
 
-    @partial(jax.jit, static_argnums=(0,))
     def render(self, state: CasinoBlackjackState) -> jnp.ndarray:
         return self.renderer.render(state)
 

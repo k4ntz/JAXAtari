@@ -12,6 +12,7 @@ from jaxatari.games.mods.mspacman.mspacman_mod_plugins import (
     Only2GhostMod,
     Only3GhostMod,
     RandomGhostNavigationMod,
+    NoStartDelayMod,
     MatrixMod
 )
 
@@ -31,6 +32,7 @@ class MsPacmanEnvMod(JaxAtariModController):
         "only_2_ghost": Only2GhostMod,
         "only_3_ghost": Only3GhostMod,
         "random_ghost_navigation": RandomGhostNavigationMod,
+        "no_start_delay": NoStartDelayMod,
         "matrix_theme": MatrixMod,
     }
 

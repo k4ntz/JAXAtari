@@ -38,7 +38,9 @@ GAME_MODULES = {
     "blackjack": "jaxatari.games.jax_blackjack",
     "boxing": "jaxatari.games.jax_boxing",
     "breakout": "jaxatari.games.jax_breakout",
-    "casino": "jaxatari.games.jax_casino",
+    "casinoblackjack": "jaxatari.games.jax_casino_blackjack",
+    "casinofivestudpoker": "jaxatari.games.jax_casino_five_stud_poker",
+    "casinopokersolitaire": "jaxatari.games.jax_casino_poker_solitaire",
     "centipede": "jaxatari.games.jax_centipede",
     "choppercommand": "jaxatari.games.jax_choppercommand",
     "donkeykong": "jaxatari.games.jax_donkeykong",
@@ -48,10 +50,12 @@ GAME_MODULES = {
     "freeway": "jaxatari.games.jax_freeway",
     "frostbite": "jaxatari.games.jax_frostbite",
     "galaxian": "jaxatari.games.jax_galaxian",
+    "gopher": "jaxatari.games.jax_gopher",
     "gravitar": "jaxatari.games.jax_gravitar",
     "hangman": "jaxatari.games.jax_hangman",
     "hauntedhouse": "jaxatari.games.jax_hauntedhouse",
     "humancannonball": "jaxatari.games.jax_humancannonball",
+    "journeyescape": "jaxatari.games.jax_journeyescape",
     "kangaroo": "jaxatari.games.jax_kangaroo",
     "kingkong": "jaxatari.games.jax_kingkong",
     "klax": "jaxatari.games.jax_klax",
@@ -61,6 +65,7 @@ GAME_MODULES = {
     "pong": "jaxatari.games.jax_pong",
     "qbert": "jaxatari.games.jax_qbert",
     "riverraid": "jaxatari.games.jax_riverraid",
+    "roadrunner": "jaxatari.games.jax_roadrunner",
     "seaquest": "jaxatari.games.jax_seaquest",
     "sirlancelot": "jaxatari.games.jax_sirlancelot",
     "skiing": "jaxatari.games.jax_skiing",
@@ -73,15 +78,35 @@ GAME_MODULES = {
     "timepilot": "jaxatari.games.jax_timepilot",
     "tron": "jaxatari.games.jax_tron",
     "turmoil": "jaxatari.games.jax_turmoil",
+    "upndown": "jaxatari.games.jax_upndown",
     "venture": "jaxatari.games.jax_venture",
     "videocheckers": "jaxatari.games.jax_videocheckers",
+    "videochess": "jaxatari.games.jax_videochess",
     "videocube": "jaxatari.games.jax_videocube",
     "videopinball": "jaxatari.games.jax_videopinball",
     "wordzapper": "jaxatari.games.jax_wordzapper",
+    "wizardofwor": "jaxatari.games.jax_wizardofwor",
+    "assault": "jaxatari.games.jax_assault",
+    "backgammon": "jaxatari.games.jax_backgammon",
+    "othello": "jaxatari.games.jax_othello",
     "mspacman": "jaxatari.games.jax_mspacman",
     "montezumarevenge": "jaxatari.games.jax_montezumarevenge",
     "pacman": "jaxatari.games.jax_pacman",
     "boxing": "jaxatari.games.jax_boxing",
+    "kaboom": "jaxatari.games.jax_kaboom",
+    "basicmath": "jaxatari.games.jax_basicmath",
+    "miniaturegolf": "jaxatari.games.jax_miniature_golf",
+    "yarsrevenge": "jaxatari.games.jax_yarsrevenge",
+    # Add new games here
+}
+
+# ALE / Gymnasium names that differ from the JAXAtari registry key.
+GAME_ALIASES = {
+    "journey_escape": "journeyescape",
+    "road_runner": "roadrunner",
+    "trondead": "tron",
+    "up_n_down": "upndown",
+    "video_chess": "videochess",
 }
 
 # Mod modules registry: for each game, provide the Controller class path
@@ -91,17 +116,22 @@ MOD_MODULES = {
     "freeway": "jaxatari.games.mods.freeway_mods.FreewayEnvMod",
     "breakout": "jaxatari.games.mods.breakout_mods.BreakoutEnvMod",
     "seaquest": "jaxatari.games.mods.seaquest_mods.SeaquestEnvMod",
+    "videochess": "jaxatari.games.mods.videochess_mods.VideochessEnvMod",
     "videopinball": "jaxatari.games.mods.videopinball_mods.VideoPinballEnvMod",
-    'tennis': "jaxatari.games.mods.tennis_mods.TennisEnvMod",
+    "tennis": "jaxatari.games.mods.tennis_mods.TennisEnvMod",
+    "upndown": "jaxatari.games.mods.upndown_mods.UpNDownEnvMod",
     "fishingderby": "jaxatari.games.mods.fishingderby_mods.FishingDerbyEnvMod",
     "atlantis": "jaxatari.games.mods.atlantis_mods.AtlantisEnvMod",
     "bankheist": "jaxatari.games.mods.bankheist_mods.BankHeistEnvMod",
     "montezumarevenge": "jaxatari.games.mods.montezuma_revenge_mods.MontezumaRevengeEnvMod",
     "frostbite": "jaxatari.games.mods.frostbite_mods.FrostbiteEnvMod",
+    "gopher": "jaxatari.games.mods.gopher_mods.GopherEnvMod",
     "gravitar": "jaxatari.games.mods.gravitar_mods.GravitarEnvMod",
+    "journeyescape": "jaxatari.games.mods.journey_escape_mods.JourneyEscapeEnvMod",
     "phoenix": "jaxatari.games.mods.phoenix_mods.PhoenixEnvMod",
     "enduro": "jaxatari.games.mods.enduro_mods.EnduroEnvMod",
     "qbert": "jaxatari.games.mods.qbert_mods.QbertEnvMod",
+    "roadrunner": "jaxatari.games.mods.roadrunner_mods.RoadRunnerEnvMod",
     "mspacman": "jaxatari.games.mods.mspacman_mods.MsPacmanEnvMod",
     "beamrider": "jaxatari.games.mods.beamrider_mods.BeamRiderEnvMod",
     "venture": "jaxatari.games.mods.venture_mods.VentureEnvMod",
@@ -110,6 +140,14 @@ MOD_MODULES = {
     "alien": "jaxatari.games.mods.alien_mods.AlienEnvMod",
     "asteroids": "jaxatari.games.mods.asteroids_mods.AsteroidsEnvMod",
     "boxing": "jaxatari.games.mods.boxing_mods.BoxingEnvMod",
+    "pacman": "jaxatari.games.mods.pacman_mods.PacmanEnvMod",
+    "othello": "jaxatari.games.mods.othello_mods.OthelloEnvMod",
+    "wizardofwor": "jaxatari.games.mods.wizardofwor_mods.WizardOfWorEnvMod",
+    "backgammon": "jaxatari.games.mods.backgammon_mods.BackgammonEnvMod",
+    "kaboom": "jaxatari.games.mods.kaboom_mods.KaboomEnvMod",
+    "basicmath": "jaxatari.games.mods.basicmath_mods.BasicmathEnvMod",
+    "miniaturegolf": "jaxatari.games.mods.miniature_golf_mods.MiniatureGolfEnvMod",
+    "yarsrevenge": "jaxatari.games.mods.yarsrevenge_mods.YarsRevengeEnvMod",
 }
 
 
@@ -150,6 +188,7 @@ def make(game_name: str,
 
     if isinstance(game_name, str):
         game_name_clean = game_name.lower().replace("_", "").replace("-", "")
+        game_name_clean = GAME_ALIASES.get(game_name_clean, game_name_clean)
         for key in GAME_MODULES:
             if key.lower().replace("_", "").replace("-", "") == game_name_clean:
                 game_name = key

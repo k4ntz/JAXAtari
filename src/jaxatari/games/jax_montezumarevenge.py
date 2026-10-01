@@ -182,6 +182,7 @@ class JaxMontezumaRevenge(JaxEnvironment[MontezumaRevengeState, MontezumaRevenge
             out_of_ladder_delay=jnp.array(0, dtype=jnp.int32),
             last_rope=jnp.array(-1, dtype=jnp.int32),
             last_ladder=jnp.array(-1, dtype=jnp.int32),
+            prev_is_fire=jnp.array(False),
             enemies_x=jnp.zeros(self.consts.MAX_ENEMIES_PER_ROOM, dtype=jnp.int32),
             enemies_y=jnp.zeros(self.consts.MAX_ENEMIES_PER_ROOM, dtype=jnp.int32),
             enemies_active=jnp.zeros(self.consts.MAX_ENEMIES_PER_ROOM, dtype=jnp.int32),
@@ -476,7 +477,7 @@ class JaxMontezumaRevenge(JaxEnvironment[MontezumaRevengeState, MontezumaRevenge
         # 2. Process Jump Initiation
         was_on_ladder = jnp.logical_and(state.is_climbing == 1, state.last_ladder != -1)
         start_jump_normal = jnp.logical_and(
-            is_fire,
+            jnp.logical_and(is_fire, jnp.logical_not(state.prev_is_fire)),
             jnp.logical_and(
                 on_ground,
                 jnp.logical_and(
@@ -811,6 +812,7 @@ class JaxMontezumaRevenge(JaxEnvironment[MontezumaRevengeState, MontezumaRevenge
         final_last_ladder = jnp.where(jnp.logical_or(respawn_now, new_death_timer > 0), jnp.where(respawn_now, state.entry_last_ladder, -1), new_last_ladder)
         final_jump_counter = jnp.where(jnp.logical_or(respawn_now, new_death_timer > 0), 0, new_jump_counter)
         final_fall_distance = jnp.where(respawn_now, 0, jnp.where(new_death_timer > 0, state.fall_distance, new_fall_distance))
+        final_prev_is_fire = jnp.where(jnp.logical_or(respawn_now, new_death_timer > 0), jnp.where(respawn_now, False, state.prev_is_fire), is_fire)
 
         # if jumped before
         # fall_after_jump -> (prev_jumped, not anymore , or prev fall_after_jump) and falling
@@ -832,6 +834,7 @@ class JaxMontezumaRevenge(JaxEnvironment[MontezumaRevengeState, MontezumaRevenge
             out_of_ladder_delay=jnp.where(jnp.logical_or(respawn_now, new_death_timer > 0), 0, new_out_of_ladder_delay),
             last_rope=new_last_rope,
             last_ladder=final_last_ladder,
+            prev_is_fire=final_prev_is_fire,
             is_falling=final_is_falling,
             fall_distance=final_fall_distance,
             frame_count=jnp.where(is_active, state.frame_count + 1, state.frame_count),

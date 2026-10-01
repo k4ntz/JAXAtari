@@ -500,6 +500,8 @@ class VentureObservation(struct.PyTreeNode):
     chest: ObjectObservation
     lasers: ObjectObservation
     chaser: ObjectObservation
+    score: jnp.ndarray
+    lives: jnp.ndarray
 
 class VentureInfo(struct.PyTreeNode):
     """Auxiliary information about the game state."""
@@ -1675,7 +1677,9 @@ class JaxVenture(JaxEnvironment[GameState, VentureObservation, VentureInfo, Vent
             portals=portals,
             chest=chest,
             lasers=lasers,
-            chaser=chaser
+            chaser=chaser,
+            score=state.score.astype(jnp.int32),
+            lives=state.lives.astype(jnp.int32),
         )
         return obs
 
@@ -1719,6 +1723,8 @@ class JaxVenture(JaxEnvironment[GameState, VentureObservation, VentureInfo, Vent
             "chest": single_obj,
             "lasers": spaces.get_object_space(n=4, screen_size=screen_size, xy_low=-1.0),
             "chaser": single_obj,
+            "score": spaces.Box(low=0, high=jnp.iinfo(jnp.int32).max, shape=(), dtype=jnp.int32),
+            "lives": spaces.Box(low=0, high=10, shape=(), dtype=jnp.int32),
         })
 
     def image_space(self) -> spaces.Box:
