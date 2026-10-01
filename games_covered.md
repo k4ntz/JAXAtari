@@ -112,7 +112,7 @@ These are distinct from `blackjack`, the separate ALE Blackjack environment.
 | kaboom                       | ❌       | 0 |
 | keystone_kapers              | ❌       | 0 |
 | king_kong                    | 🥈       | 0 |
-| klax                         | 🥉       | 0 |
+| klax                         | 🥈       | 0 |
 | koolaid                      | ❌       | 0 |
 | laser_gates                  | 🥈       | 0 |
 | lost_luggage                 | ❌       | 0 |
