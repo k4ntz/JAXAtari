@@ -14,3 +14,7 @@ data/oc_parity_corpus/reports/
 data/oc_parity_corpus/reports_oracle/
 data/oc_parity_corpus/final_report/
 
+# Reference material (not tracked)
+reference_material/*
+
+

@@ -36,6 +36,7 @@ GAME_MODULES = {
     "beamrider": "jaxatari.games.jax_beamrider",
     "berzerk": "jaxatari.games.jax_berzerk",
     "blackjack": "jaxatari.games.jax_blackjack",
+    "boxing": "jaxatari.games.jax_boxing",
     "breakout": "jaxatari.games.jax_breakout",
     "casinoblackjack": "jaxatari.games.jax_casino_blackjack",
     "casinofivestudpoker": "jaxatari.games.jax_casino_five_stud_poker",
@@ -145,6 +146,7 @@ MOD_MODULES = {
     "basicmath": "jaxatari.games.mods.basicmath_mods.BasicmathEnvMod",
     "miniaturegolf": "jaxatari.games.mods.miniature_golf_mods.MiniatureGolfEnvMod",
     "yarsrevenge": "jaxatari.games.mods.yarsrevenge_mods.YarsRevengeEnvMod",
+    "boxing": "jaxatari.games.mods.boxing_mods.BoxingEnvMod",
 }
 
 

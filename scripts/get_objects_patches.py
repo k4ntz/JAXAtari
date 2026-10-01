@@ -85,6 +85,8 @@ class Renderer:
         self.env.render()  # initialize pygame video system
 
         self.paused = False
+        self.frame_by_frame = False
+        self.next_frame_asked = False
         self.current_actions = set()
         self.keys2actions = {}
         for i, action in enumerate(self.env.get_action_meanings()):
@@ -103,7 +105,7 @@ class Renderer:
         self.running = True
         while self.running:
             self._handle_user_input()
-            if not self.paused:
+            if not self.paused and (not self.frame_by_frame or self.next_frame_asked):
                 action = self._get_action()
                 obs, reward, term, trunc, info = self.env.step(action)
                 self.env.render()
@@ -114,6 +116,9 @@ class Renderer:
                 if args.print_reward and reward != 0:
                     print(reward)
                 self.frame += 1
+                self.next_frame_asked = False
+            else:
+                self.env.render()
         pygame.quit()
 
     def _get_action(self):
@@ -140,6 +145,12 @@ class Renderer:
             elif event.type == pygame.KEYDOWN:  # keyboard key pressed                
                 if event.key == pygame.K_p:  # 'P': pause/resume
                     self.paused = not self.paused
+
+                if event.key == pygame.K_f:  # 'F': frame-by-frame
+                    self.frame_by_frame = not self.frame_by_frame
+
+                if event.key == pygame.K_n:  # 'N': next frame
+                    self.next_frame_asked = True
 
                 if event.key == pygame.K_r:  # 'R': reset
                     self.env.reset()

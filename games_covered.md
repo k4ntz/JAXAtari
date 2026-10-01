@@ -36,7 +36,7 @@ Total:  🥇: 1   |   🥈: 2   |   🥉: 0   |   🚧: 2   |   ❌: 0
 | beam_rider        | 🥈     | 8              |
 | berzerk           | 🥈     | 0              |
 | bowling           | 🚧     | 0              |
-| boxing            | 🚧     | 0              |
+| boxing            | 🥇     | 8              |
 | breakout          | 🥇     | 8              |
 | centipede         | 🥈     | 0              |
 | chopper_command   | 🥈     | 0              |
@@ -84,7 +84,7 @@ Total:  🥇: 1   |   🥈: 2   |   🥉: 0   |   🚧: 2   |   ❌: 0
 | zaxxon            | ❌     | 0              |
 
 
-Total:  🥇: 19   |   🥈: 15   |   🥉: 4   |   🚧: 6   |   ❌: 13
+Total:  🥇: 20   |   🥈: 15   |   🥉: 4   |   🚧: 5   |   ❌: 13
 
 ## Remaining ALE games
 
