@@ -42,7 +42,8 @@ class SeaquestConstants(AutoDerivedConstants):
     SHARK_DIFFICULTY_COLORS: jnp.ndarray = struct.field(pytree_node=False, default_factory=lambda: jnp.array(
         [
             [92, 186, 92],  # Level 0: Base green
-            [213, 130, 74],  # Level 1: Orange (adjusted from original ROM)
+            # Level 1: yellow-olive from ALE frames after first surface
+            [160, 171, 79],
             [
                 170,
                 92,
@@ -55,15 +56,42 @@ class SeaquestConstants(AutoDerivedConstants):
     ENEMY_SUB_COLOR: jnp.ndarray = struct.field(pytree_node=False, default_factory=lambda: jnp.array([170, 170, 170]))  # Gray for enemy subs
     OXYGEN_BAR_COLOR: jnp.ndarray = struct.field(pytree_node=False, default_factory=lambda: jnp.array([214, 214, 214, 255]))  # White for oxygen
     OXYGEN_BAR_BG_COLOR: jnp.ndarray = struct.field(pytree_node=False, default_factory=lambda: jnp.array([163, 57, 21, 255]))  # Reddish background
+    # Low-O₂ warning flash (ALE lockstep frames): when oxygen <= threshold the
+    # white fill blinks to black 16f off / 16f on (period 32). Flash starts with
+    # BLACK on the drain tick that reaches the threshold (step%32 < 16). Measured
+    # on seaquest_play01.npz. Disabled while refilling at the surface / init fill.
+    # Threshold 16 is 25% of the 64-unit tank (ALE fill width hits 16 then blacks).
+    OXYGEN_FLASH_THRESHOLD: jnp.ndarray = struct.field(
+        pytree_node=False, default_factory=lambda: jnp.array(16, dtype=jnp.int32)
+    )
+    OXYGEN_FLASH_PERIOD: jnp.ndarray = struct.field(
+        pytree_node=False, default_factory=lambda: jnp.array(32, dtype=jnp.int32)
+    )
     SCORE_COLOR: jnp.ndarray = struct.field(pytree_node=False, default_factory=lambda: jnp.array([210, 210, 64]))  # Score color
     OXYGEN_TEXT_COLOR: jnp.ndarray = struct.field(pytree_node=False, default_factory=lambda: jnp.array([0, 0, 0]))  # Black for oxygen text
 
     # Object sizes and initial positions from RAM state
     PLAYER_SIZE: jnp.ndarray = struct.field(pytree_node=False, default_factory=lambda: jnp.array([16, 11]))  # Width, Height
+    # Shrink the *damage* hitbox horizontally only (not missile kills / render).
+    # ALE TIA ignores grazing side overlaps with bobbing sharks in the lane gap;
+    # vertical size stays full so real overlaps still kill.
+    PLAYER_COLLISION_INSET_X: jnp.ndarray = struct.field(
+        pytree_node=False, default_factory=lambda: jnp.array(3, dtype=jnp.int32)
+    )
     DIVER_SIZE: jnp.ndarray = struct.field(pytree_node=False, default_factory=lambda: jnp.array([8, 11]))
     SHARK_SIZE: jnp.ndarray = struct.field(pytree_node=False, default_factory=lambda: jnp.array([8, 7]))
     ENEMY_SUB_SIZE: jnp.ndarray = struct.field(pytree_node=False, default_factory=lambda: jnp.array([8, 11]))
     MISSILE_SIZE: jnp.ndarray = struct.field(pytree_node=False, default_factory=lambda: jnp.array([8, 1]))
+    # Missile y = player_y + OFFSET. ALE OC sits at +7; +4 was over-hitting
+    # sharks on low bob (false L2 kill → early diver co-spawn / phantom pair).
+    PLAYER_MISSILE_Y_OFFSET: jnp.ndarray = struct.field(
+        pytree_node=False, default_factory=lambda: jnp.array(7, dtype=jnp.int32)
+    )
+    SHARK_BOB_PHASE_OFFSET: jnp.ndarray = struct.field(
+        # Locked to ALE OC on seaquest_play01 (episode frame = step_counter):
+        # residual Y matches wave[(step+8)%64]-4 with MAE 0.
+        pytree_node=False, default_factory=lambda: jnp.array(8, dtype=jnp.int32)
+    )
 
     PLAYER_START_X: jnp.ndarray = struct.field(pytree_node=False, default_factory=lambda: jnp.array(76))
     PLAYER_START_Y: jnp.ndarray = struct.field(pytree_node=False, default_factory=lambda: jnp.array(46))
@@ -84,15 +112,106 @@ class SeaquestConstants(AutoDerivedConstants):
     FACE_LEFT: jnp.ndarray = struct.field(pytree_node=False, default_factory=lambda: jnp.array(-1))
     FACE_RIGHT: jnp.ndarray = struct.field(pytree_node=False, default_factory=lambda: jnp.array(1))
 
-    SPAWN_POSITIONS_Y: jnp.ndarray = struct.field(pytree_node=False, default_factory=lambda: jnp.array([71, 95, 119, 139]))  # submarines at y=69?
-    SUBMARINE_Y_OFFSET: jnp.ndarray = struct.field(pytree_node=False, default_factory=lambda: jnp.array(2))
-    ENEMY_MISSILE_Y: jnp.ndarray = struct.field(pytree_node=False, default_factory=lambda: jnp.array([73, 97, 121, 141]))  # missile x = submarine.x + 4
+    # Lane Y bases from ALE OC (seaquest_play_fresh): shark bob midpoints sit at
+    # 68.5/92.5/116.5/140.5 with SHARK_BOB_WAVE mean offset -0.5 → bases 69/93/117/141.
+    # Subs and divers share the same fixed lane Ys (no bob). Old [71,95,119,139]
+    # was ~+2px high and made stacked sharks look "out of phase" vs nearest-lane residuals.
+    SPAWN_POSITIONS_Y: jnp.ndarray = struct.field(
+        pytree_node=False, default_factory=lambda: jnp.array([69, 93, 117, 141])
+    )
+    # Subs sit on the lane base (ALE sub y ∈ {69,93,117,141}). Previously 2 with the
+    # old shark bases to land near 69/93/117 — keep 0 now that bases match ALE.
+    SUBMARINE_Y_OFFSET: jnp.ndarray = struct.field(pytree_node=False, default_factory=lambda: jnp.array(0))
+    # Enemy missiles fire at sub_y+4 → {73,97,121,145} (ALE recording; was 141 on lane 3).
+    ENEMY_MISSILE_Y: jnp.ndarray = struct.field(
+        pytree_node=False, default_factory=lambda: jnp.array([73, 97, 121, 145])
+    )
     DIVER_SPAWN_POSITIONS: jnp.ndarray = struct.field(pytree_node=False, default_factory=lambda: jnp.array([69, 93, 117, 141]))
+
+    # Off-screen spawn. Despawn is a timer after on→off (see
+    # ENEMY_OFFSCREEN_DESPAWN_FRAMES), not an X threshold — pre-entry spawns at
+    # ENEMY_SPAWN_X_* stay alive until they have been on-screen and left again.
+    #
+    # Symmetric L/R: the lane's *leading* (native) slot always sits
+    # ENEMY_SPAWN_EDGE_MARGIN past the entry edge, with other slots packed
+    # away from the screen. Same approach time both directions — direction
+    # flips no longer change the gap. (Absolute ALE bases -88/215 made the
+    # short side depend on which form bit was on.)
+    ENEMY_SPAWN_EDGE_MARGIN: jnp.ndarray = struct.field(
+        pytree_node=False, default_factory=lambda: jnp.array(56, dtype=jnp.int32)
+    )
+    # Convenience lead X for single-slot helpers (margin past 0 / 160).
+    ENEMY_SPAWN_X_FROM_LEFT: jnp.ndarray = struct.field(
+        pytree_node=False, default_factory=lambda: jnp.array(-56, dtype=jnp.int32)
+    )
+    ENEMY_SPAWN_X_FROM_RIGHT: jnp.ndarray = struct.field(
+        pytree_node=False, default_factory=lambda: jnp.array(216, dtype=jnp.int32)
+    )
+    # Legacy names (unused by movement).
+    ENEMY_DESPAWN_X_LEFT: jnp.ndarray = struct.field(
+        pytree_node=False, default_factory=lambda: jnp.array(0, dtype=jnp.int32)
+    )
+    ENEMY_DESPAWN_X_RIGHT: jnp.ndarray = struct.field(
+        pytree_node=False, default_factory=lambda: jnp.array(160, dtype=jnp.int32)
+    )
+    # Frames to keep a slot after it leaves [0,160]. With lead-symmetric spawn,
+    # T=88 matches ALE AFK shark-to-shark mean (~1339f); periods stay flat L/R.
+    ENEMY_OFFSCREEN_DESPAWN_FRAMES: jnp.ndarray = struct.field(
+        pytree_node=False, default_factory=lambda: jnp.array(88, dtype=jnp.int32)
+    )
+    # Collision only once enough of the sprite is on-screen. ALE recording: 0 kills at
+    # x<=2; earliest left-edge kills at kill_x>=4 after ~7-9 frames visible.
+    ENEMY_HITTABLE_X_MIN: jnp.ndarray = struct.field(
+        pytree_node=False, default_factory=lambda: jnp.array(4, dtype=jnp.int32)
+    )
+    ENEMY_HITTABLE_X_MAX: jnp.ndarray = struct.field(
+        pytree_node=False, default_factory=lambda: jnp.array(160, dtype=jnp.int32)
+    )
+    # Wave spacing: ALE in-lane gaps are always 16 (or 32 for 1-0-1). Never 0.
+    ENEMY_WAVE_SPACING: jnp.ndarray = struct.field(
+        pytree_node=False, default_factory=lambda: jnp.array(16, dtype=jnp.int32)
+    )
+    ENEMY_WAVE_SPACING_GAP: jnp.ndarray = struct.field(
+        pytree_node=False, default_factory=lambda: jnp.array(32, dtype=jnp.int32)
+    )
+
+    # Shark vertical bob from ALE ram[93] over a recorded cycle (dwell 4, 8 at peaks):
+    # offset displayed as ram[93]-4. Indexed by step_counter % 64.
+    SHARK_BOB_WAVE: jnp.ndarray = struct.field(
+        pytree_node=False,
+        default_factory=lambda: jnp.array(
+            [0, 0, 0, 0, 0, 0, 0, 0,
+             1, 1, 1, 1, 2, 2, 2, 2, 3, 3, 3, 3, 4, 4, 4, 4,
+             5, 5, 5, 5, 6, 6, 6, 6,
+             7, 7, 7, 7, 7, 7, 7, 7,
+             6, 6, 6, 6, 5, 5, 5, 5, 4, 4, 4, 4, 3, 3, 3, 3,
+             2, 2, 2, 2, 1, 1, 1, 1],
+            dtype=jnp.int32,
+        ),
+    )
 
     MISSILE_SPAWN_POSITIONS: jnp.ndarray = struct.field(pytree_node=False, default_factory=lambda: jnp.array([39, 126]))  # Right, Left
 
-    # First wave directions from original code
-    FIRST_WAVE_DIRS: jnp.ndarray = struct.field(pytree_node=False, default_factory=lambda: jnp.array([False, False, False, True]))
+    # First wave: ALE lane forms are fixed absolute slots (not direction-flipped).
+    # Bottom lane (ALE i=0 / JAX li=3) is always form=4 → slot 0; the other three
+    # are form=1 → slot 2. That permanent 32px gap is what makes the bottom lane
+    # look "offset" under pure survive.
+    FIRST_WAVE_DIRS: jnp.ndarray = struct.field(
+        pytree_node=False, default_factory=lambda: jnp.array([False, False, False, True])
+    )
+    # JAX lanes top→bottom (y 69,93,117,141). Slot masks match ALE forms 1/1/1/4.
+    LANE_SLOT_MASKS: jnp.ndarray = struct.field(
+        pytree_node=False,
+        default_factory=lambda: jnp.array(
+            [
+                [0, 0, 1],  # top    ALE i=3 form=1
+                [0, 0, 1],  #        ALE i=2 form=1
+                [0, 0, 1],  #        ALE i=1 form=1
+                [1, 0, 0],  # bottom ALE i=0 form=4
+            ],
+            dtype=jnp.int32,
+        ),
+    )
 
     # --- SCORING CONSTANTS ---
     # Enemy Scoring: Starts at 20, +10 per rescue, max 90
@@ -111,6 +230,73 @@ class SeaquestConstants(AutoDerivedConstants):
     SCORE_OXYGEN_STEP: jnp.ndarray = struct.field(pytree_node=False, default_factory=lambda: jnp.array(10))
     SCORE_OXYGEN_MAX: jnp.ndarray = struct.field(pytree_node=False, default_factory=lambda: jnp.array(90))
 
+    # --- SPAWN / DIVER CADENCE ---
+    # empty→spawn countdown:
+    #   reload = SPAWN_TIMER_RELOAD(+_AFTER_SURVIVE) + DIVER_SPAWN_TIMER_TRIGGER
+    #   fire escorts (+ divers on shark waves) when timer == TRIGGER.
+    # Kill-clear RELOAD tuned from seed45 policy meter (emulated frames):
+    #   Confirmed NOT shooting lag: hittable→clear TTK ALE≈31f / JAX≈33f.
+    #   ALE clear→next-hittable mean≈84 / med≈109; JAX@RELOAD=6 was ≈48 / 52.
+    #   Global kill-clear only (survive-off keeps AFTER_SURVIVE=6). Sweep:
+    #   6→~5920, 38→~4540, 44→~4360, 50→~3160, 63→~3040 (ALE seed45≈3680).
+    #   RELOAD=50 ≈ ALE farm gap without overshooting the old fast recycle.
+    SPAWN_TIMER_RELOAD: jnp.ndarray = struct.field(
+        pytree_node=False, default_factory=lambda: jnp.array(50, dtype=jnp.int32)
+    )
+    # Survive-off / idle lane recycle — independent of kill-clear RELOAD.
+    SPAWN_TIMER_RELOAD_AFTER_SURVIVE: jnp.ndarray = struct.field(
+        pytree_node=False, default_factory=lambda: jnp.array(6, dtype=jnp.int32)
+    )
+    # Kept for soft-reset / episode_frame bookkeeping; wave arming no longer
+    # schedules off this clock (fixed RELOAD above).
+    SURVIVE_WAVE_PERIOD: jnp.ndarray = struct.field(
+        pytree_node=False, default_factory=lambda: jnp.array(661, dtype=jnp.int32)
+    )
+    SURVIVE_WAVE_EPOCH: jnp.ndarray = struct.field(
+        pytree_node=False, default_factory=lambda: jnp.array(126, dtype=jnp.int32)
+    )
+    ENEMY_SPAWN_TIMER_RELOAD: jnp.ndarray = struct.field(
+        pytree_node=False, default_factory=lambda: jnp.array(50, dtype=jnp.int32)
+    )
+    DIVER_WAVE_SPAWN_TIMER_RELOAD: jnp.ndarray = struct.field(
+        pytree_node=False, default_factory=lambda: jnp.array(50, dtype=jnp.int32)
+    )
+    # Timer value at which diver+escort co-spawn. Opening timers
+    # (INITIAL_SPAWN_TIMER_BASE + FIRST_WAVE_LANE_DELAY) should land the first
+    # co-spawn with on-screen divers aligned to ALE.
+    DIVER_SPAWN_TIMER_TRIGGER: jnp.ndarray = struct.field(
+        pytree_node=False, default_factory=lambda: jnp.array(128, dtype=jnp.int32)
+    )
+    # Opening wave only *places* divers in the upper two lanes; all four stay
+    # armed and bottom lanes drop on a later shark co-spawn.
+    FIRST_WAVE_DIVER_LANES: jnp.ndarray = struct.field(
+        pytree_node=False,
+        default_factory=lambda: jnp.array([1, 1, 0, 0], dtype=jnp.int32),
+    )
+    # After death / successful surface: each still-armed lane (da==1) rolls this
+    # chance to co-spawn on the immediate next shark-trigger tick; losers wait
+    # for their lane's next regular clear→shark wave (and get diver_suppress_next).
+    DIVER_INSTANT_SPAWN_PROB: float = struct.field(pytree_node=False, default=0.5)
+    # Opening countdown from reset. Spawn when timer hits TRIGGER.
+    # Shared base for all lanes; per-lane first-only stagger is
+    # FIRST_WAVE_LANE_DELAY (not baked into spawn X).
+    INITIAL_SPAWN_TIMER_BASE: jnp.ndarray = struct.field(
+        pytree_node=False, default_factory=lambda: jnp.array(243, dtype=jnp.int32)
+    )
+    # Extra frames before each lane's *first* place only (reset / soft-reset).
+    # Emulates TIA not lighting all four enemy objects on the same beat —
+    # independent of L/R geometry. Bottom (JAX li=3) +60 matches the old
+    # INITIAL [277,…,337] / SURFACE_FREEZE [80,…,120] stagger.
+    FIRST_WAVE_LANE_DELAY: jnp.ndarray = struct.field(
+        pytree_node=False,
+        default_factory=lambda: jnp.array([0, 0, 0, 60], dtype=jnp.int32),
+    )
+    # Mid-game surface refill only — must not apply during opening oxygen fill.
+    SURFACE_FREEZE_SPAWN_TIMERS: jnp.ndarray = struct.field(
+        pytree_node=False,
+        default_factory=lambda: jnp.array([80, 80, 80, 120], dtype=jnp.int32),
+    )
+
     # Asset config baked into constants (immutable default) for asset overrides
     ASSET_CONFIG: tuple = struct.field(pytree_node=False, default_factory=lambda: _get_default_asset_config())
 
@@ -128,12 +314,25 @@ class SpawnState:
     spawn_timers: chex.Array  # Individual spawn timers per lane [4 lanes]
     diver_array: (
         chex.Array
-    )  # Track which divers are still in the spawning cycle [4 lanes]
+    )  # Per-lane dedicated diver: 1=armed, 0=collected, -1=swam off (→1 when empty).
+    # A collected lane (0) stays dark until *all four* are collected, then every
+    # lane rearms together and each drops in front of its next clean shark wave.
+    # After death/surface: armed lanes that won the instant-spawn coin flip.
+    diver_instant_pending: chex.Array  # (4,) bool/int — force next shark-tick place
+    # Remaining shark-diver skips per lane. Instant-roll losers (and death
+    # re-arms) set this so the next escort wave is shark-only for that lane.
+    diver_suppress_next: chex.Array  # (4,) int
     lane_directions: (
         chex.Array
     )  # Track lane directions for each wave [4 lanes] -> 0 = right, 1 = left
-
-
+    # Monotonic frame count for survive-wave scheduling. ``step_counter`` wraps
+    # at 1024 (anim/bob), so ALE's ~661f global wave beat cannot use it.
+    episode_frame: chex.Array
+    # Absolute episode_frame when the next survive-off wave should co-spawn.
+    next_survive_wave_at: chex.Array
+    # Per-slot off-screen despawn countdowns (12 sharks + 12 subs). 0 = idle /
+    # not counting; armed to ENEMY_OFFSCREEN_DESPAWN_FRAMES on on→off.
+    enemy_offscreen_timers: chex.Array
 
 # Game state container
 @struct.dataclass
@@ -200,10 +399,10 @@ def get_shark_color_index(difficulty: chex.Array) -> chex.Array:
     """
     Determine which shark color to use based on difficulty level.
     Color cycle: Green -> Yellow -> Pink -> Orange -> Green -> Yellow -> Green -> Orange -> back to start
-    
+
     Args:
         difficulty: Current difficulty level (0-7)
-        
+
     Returns:
         Color index: 0=Green, 1=Yellow, 2=Pink, 3=Orange
     """
@@ -225,22 +424,115 @@ class JaxSeaquest(JaxEnvironment[SeaquestState, SeaquestObservation, SeaquestInf
                 12, dtype=jnp.int32
             ),  # Track which enemies are still in the spawning cycle
             survived=jnp.zeros(12, dtype=jnp.int32),  # Track which enemies survived
-            prev_sub=jnp.zeros(
-                4, dtype=jnp.int32
-            ),  # Track previous entity type (0 if shark, 1 if sub) -> starts at 1 since the first wave is sharks
-            spawn_timers=jnp.array(
-                [277, 277, 277, 277 + 60], dtype=jnp.int32
-            ),  # All lanes start with same timer
-            diver_array=jnp.array([1, 1, 0, 0], dtype=jnp.int32),
+            prev_sub=jnp.full(
+                4, -1, dtype=jnp.int32
+            ),  # -1 = no prior wave (first spawn = sharks); then 0=shark / 1=sub
+            spawn_timers=self.initial_spawn_timers(),
+            diver_array=jnp.ones(4, dtype=jnp.int32),  # all lanes armed; opening places only top 2
+            diver_instant_pending=jnp.zeros(4, dtype=jnp.int32),
+            diver_suppress_next=jnp.zeros(4, dtype=jnp.int32),
             lane_directions=self.consts.FIRST_WAVE_DIRS.astype(jnp.int32),  # First wave directions
+            episode_frame=jnp.int32(0),
+            # First shark→sub flip on ALE's clock (126 + 662).
+            next_survive_wave_at=jnp.int32(788),
+            enemy_offscreen_timers=jnp.full(24, -1, dtype=jnp.int32),
         )
 
+    def initial_spawn_timers(self) -> chex.Array:
+        """Opening / soft-reset per-lane timers: shared base + first-wave delay knob."""
+        return (
+            self.consts.INITIAL_SPAWN_TIMER_BASE.astype(jnp.int32)
+            + self.consts.FIRST_WAVE_LANE_DELAY.astype(jnp.int32)
+        )
 
-    def soft_reset_spawn_state(self, spawn_state: SpawnState) -> SpawnState:
-        """Reset spawn_times"""
+    def soft_reset_spawn_state(
+        self,
+        spawn_state: SpawnState,
+        diver_positions: chex.Array | None = None,
+        *,
+        rearm_divers: bool = False,
+        rng: chex.PRNGKey | None = None,
+    ) -> SpawnState:
+        """Reset spawn bookkeeping after a life / rescue stage reset.
+
+        ``diver_array`` is the dedicated per-lane slot:
+          - death: preserve collected (0) / armed (1) / swam-off (-1). Do not
+            pass ``diver_positions`` — dismissing live divers as collected
+            would collapse remaining armed lanes into all-0 and falsely re-arm
+            the whole set (including already-bagged top lanes).
+          - successful surface: preserve collected (0); dismiss live world
+            divers to 0; if every lane is then collected, re-arm all four.
+
+        Each armed lane rolls ``DIVER_INSTANT_SPAWN_PROB`` (50%) to co-spawn with
+        the next escort wave. Losers get ``diver_suppress_next`` so they do not
+        also place on that same shark wave a few frames later.
+        """
+        da = spawn_state.diver_array
+        if diver_positions is not None:
+            da = jnp.where(diver_positions[:, 2] != 0, jnp.int32(0), da)
+        da = jnp.where(rearm_divers, jnp.ones_like(da), da)
+        # Full-collect / all-dismissed → rearm all four before the instant roll.
+        da = jnp.where(jnp.all(da == 0), jnp.ones_like(da), da)
+
+        timers = self.initial_spawn_timers()
+        pending = jnp.zeros(4, dtype=jnp.int32)
+        suppress = jnp.zeros(4, dtype=jnp.int32)
+
+        if rng is not None:
+            p = jnp.float32(self.consts.DIVER_INSTANT_SPAWN_PROB)
+            hits = jax.random.bernoulli(rng, p=p, shape=(4,))
+            pending = jnp.logical_and(da == 1, hits).astype(jnp.int32)
+            trigger_p1 = (
+                self.consts.DIVER_SPAWN_TIMER_TRIGGER.astype(jnp.int32) + jnp.int32(1)
+            )
+            timers = jnp.where(pending.astype(bool), trigger_p1, timers)
+            # Armed instant-roll losers skip the next shark-diver opportunity.
+            suppress = jnp.where(
+                jnp.logical_and(da == 1, jnp.logical_not(pending.astype(bool))),
+                jnp.int32(1),
+                jnp.int32(0),
+            )
+
+        prev_sub = jnp.where(
+            rearm_divers,
+            jnp.full_like(spawn_state.prev_sub, -1),
+            spawn_state.prev_sub,
+        )
+        lane_dirs = jnp.where(
+            rearm_divers,
+            self.consts.FIRST_WAVE_DIRS.astype(jnp.int32),
+            spawn_state.lane_directions,
+        )
+
         return spawn_state.replace(
-            spawn_timers=jnp.array([277, 277, 277, 277], dtype=jnp.int32)
+            spawn_timers=timers,
+            survived=jnp.zeros_like(spawn_state.survived),
+            diver_array=da,
+            diver_instant_pending=pending,
+            diver_suppress_next=suppress,
+            prev_sub=prev_sub,
+            lane_directions=lane_dirs,
+            next_survive_wave_at=spawn_state.episode_frame
+            + self.consts.SURVIVE_WAVE_PERIOD.astype(jnp.int32)
+            + jnp.int32(1),
         )
+
+    def spawn_timer_reload(
+        self, diver_array: chex.Array, *, after_survive: bool = False
+    ) -> chex.Array:
+        """Per-lane reload after kill-clear or survive-off.
+
+        Kill-clear uses ``SPAWN_TIMER_RELOAD + TRIGGER``; survive-off uses
+        ``SPAWN_TIMER_RELOAD_AFTER_SURVIVE + TRIGGER`` (kept short so AFK
+        spacing stays despawn/travel-driven).
+        """
+        trigger = self.consts.DIVER_SPAWN_TIMER_TRIGGER.astype(jnp.int32)
+        reload = jnp.where(
+            after_survive,
+            self.consts.SPAWN_TIMER_RELOAD_AFTER_SURVIVE.astype(jnp.int32),
+            self.consts.SPAWN_TIMER_RELOAD.astype(jnp.int32),
+        )
+        return jnp.broadcast_to(reload + trigger, diver_array.shape)
 
     @partial(jax.jit, static_argnums=(0,))
     def check_collision_single(self, pos1, size1, pos2, size2):
@@ -309,11 +601,12 @@ class JaxSeaquest(JaxEnvironment[SeaquestState, SeaquestObservation, SeaquestInf
         missile_pos: chex.Array,
         shark_positions: chex.Array,
         sub_positions: chex.Array,
+        diver_positions: chex.Array,
         score: chex.Array,
         successful_rescues: chex.Array,
         spawn_state: SpawnState,
         rng_key: chex.PRNGKey,
-    ) -> tuple[chex.Array, chex.Array, chex.Array, chex.Array, SpawnState, chex.PRNGKey]:
+    ) -> tuple[chex.Array, chex.Array, chex.Array, chex.Array, chex.Array, SpawnState, chex.PRNGKey]:
         """
         Check for collisions between player missile and enemies using a vectorized approach.
         """
@@ -328,9 +621,11 @@ class JaxSeaquest(JaxEnvironment[SeaquestState, SeaquestObservation, SeaquestInf
         ], axis=0)
 
         def check_single_enemy(enemy_pos, enemy_size):
-            return self.check_collision_single(
+            hit = self.check_collision_single(
                 missile_rect_pos, self.consts.MISSILE_SIZE, enemy_pos[:2], enemy_size
             )
+            # Off-screen entities (ALE-invisible / pre-entry) cannot be shot.
+            return jnp.logical_and(hit, self.enemy_is_hittable(enemy_pos))
 
         all_collision_mask = jax.vmap(check_single_enemy, in_axes=(0, 0))(all_enemies, enemy_sizes)
         all_collision_mask = jnp.logical_and(missile_active, all_collision_mask)
@@ -353,7 +648,7 @@ class JaxSeaquest(JaxEnvironment[SeaquestState, SeaquestObservation, SeaquestInf
         # --- 3. Update SpawnState Based on Collision Masks ---
         # The survived array is (12,), so we need to merge collision results from both
         # shark and sub slots.
-        is_sub_mask_slots = jnp.repeat(spawn_state.prev_sub.astype(bool), 3) # (4,) -> (12,)
+        is_sub_mask_slots = jnp.repeat(spawn_state.prev_sub == 1, 3) # (4,) -> (12,)
         final_collision_mask = jnp.where(is_sub_mask_slots, sub_collision_mask, shark_collision_mask)
         new_survived = jnp.where(final_collision_mask, 0, spawn_state.survived)
 
@@ -362,16 +657,51 @@ class JaxSeaquest(JaxEnvironment[SeaquestState, SeaquestObservation, SeaquestInf
 
         # Merge the 8-lane collision results into a 4-lane mask
         shark_lanes_hit, sub_lanes_hit = lane_had_collision_8[:4], lane_had_collision_8[4:]
-        lane_had_collision_4 = jnp.where(spawn_state.prev_sub.astype(bool), sub_lanes_hit, shark_lanes_hit) # Shape (4,)
+        lane_had_collision_4 = jnp.where(spawn_state.prev_sub == 1, sub_lanes_hit, shark_lanes_hit) # Shape (4,)
 
-        # Update Spawn Timers for the 4 physical lanes
-        new_spawn_timers = jnp.where(lane_had_collision_4, 200, spawn_state.spawn_timers)
+        # Next-wave heading / timer reload when the lane is fully cleared (last kill),
+        # not on partial hits. Diver heading is not independent: it always snaps to
+        # that same next-escort direction (ALE). The old 25% "reverse" RNG was wrong.
+        sharks_remain = jnp.any(new_shark_positions.reshape(4, 3, 3)[:, :, 2] != 0, axis=1)
+        subs_remain = jnp.any(new_sub_positions.reshape(4, 3, 3)[:, :, 2] != 0, axis=1)
+        enemies_remain = jnp.logical_or(sharks_remain, subs_remain)
+        lane_fully_cleared = jnp.logical_and(lane_had_collision_4, jnp.logical_not(enemies_remain))
 
-        # Update Lane Directions for the 4 physical lanes
-        rng_key, dir_rng_key = jax.random.split(rng_key)
-        random_directions = jax.random.bernoulli(dir_rng_key, 0.5, (4,)).astype(jnp.int32)
+        # Per-lane reload only — do NOT wipe sibling lanes. Same shared
+        # SPAWN_TIMER_RELOAD + TRIGGER counter as survive-off.
+        kill_reload = self.spawn_timer_reload(spawn_state.diver_array)
+        new_spawn_timers = jnp.where(
+            lane_fully_cleared,
+            kill_reload,
+            spawn_state.spawn_timers,
+        )
+
+        # Kill-clear must wipe the whole lane's survived flags. Otherwise a
+        # trailing formation member that was falsely marked "survived" while
+        # still parking off-screen would force the next wave to be a submarine.
+        new_survived = jnp.where(
+            jnp.repeat(lane_fully_cleared, 3),
+            jnp.int32(0),
+            new_survived,
+        )
+
+        # Kill-clear: 50/50 re-roll next-wave heading per cleared lane. (We used
+        # to keep the old dir when L/R approach times differed — that looked like
+        # a timer bug. Lead-symmetric spawn makes both sides the same length.)
+        rng_key, dir_rng = jax.random.split(rng_key)
+        random_directions = jax.random.bernoulli(dir_rng, 0.5, (4,)).astype(jnp.int32)
         new_lane_directions = jnp.where(
-            lane_had_collision_4, random_directions, spawn_state.lane_directions
+            lane_fully_cleared,
+            random_directions,
+            spawn_state.lane_directions,
+        )
+
+        # Snap active divers to the current escort heading after the roll.
+        diver_active = diver_positions[:, 2] != 0
+        snap_diver = jnp.logical_and(lane_fully_cleared, diver_active)
+        matched_diver_dirs = jnp.where(new_lane_directions == 1, jnp.int32(-1), jnp.int32(1))
+        new_diver_positions = diver_positions.at[:, 2].set(
+            jnp.where(snap_diver, matched_diver_dirs, diver_positions[:, 2])
         )
 
         new_spawn_state = spawn_state.replace(
@@ -381,7 +711,7 @@ class JaxSeaquest(JaxEnvironment[SeaquestState, SeaquestObservation, SeaquestInf
         )
 
         return (
-            new_missile_pos, new_shark_positions, new_sub_positions,
+            new_missile_pos, new_shark_positions, new_sub_positions, new_diver_positions,
             new_score, new_spawn_state, rng_key,
         )
 
@@ -404,24 +734,37 @@ class JaxSeaquest(JaxEnvironment[SeaquestState, SeaquestObservation, SeaquestInf
         # the missile is a 8x1 rectangle
         # the surface submarine is 8x11 as well
 
+        # Damage hitbox: horizontal inset only so grazing side overlaps with
+        # bobbing sharks do not count (ALE TIA); vertical extent stays full.
+        inset_x = self.consts.PLAYER_COLLISION_INSET_X.astype(jnp.int32)
+        player_pos = jnp.array([player_x + inset_x, player_y])
+        player_size = jnp.array(
+            [self.consts.PLAYER_SIZE[0] - 2 * inset_x, self.consts.PLAYER_SIZE[1]]
+        )
+
         # check if the player has collided with any of the submarines
+        # (off-screen / pre-entry enemies cannot collide — same gate as missile hits)
+        hittable_subs = jax.vmap(self.enemy_is_hittable)(submarine_list)
+        sub_pos_gated = jnp.where(hittable_subs[:, None], submarine_list, jnp.zeros_like(submarine_list))
         submarine_collisions = jnp.any(
             self.check_collision_batch(
-                jnp.array([player_x, player_y]), self.consts.PLAYER_SIZE, submarine_list, self.consts.ENEMY_SUB_SIZE
+                player_pos, player_size, sub_pos_gated, self.consts.ENEMY_SUB_SIZE
             )
         )
 
         # check if the player has collided with any of the sharks
+        hittable_sharks = jax.vmap(self.enemy_is_hittable)(shark_list)
+        shark_pos_gated = jnp.where(hittable_sharks[:, None], shark_list, jnp.zeros_like(shark_list))
         shark_collisions = jnp.any(
             self.check_collision_batch(
-                jnp.array([player_x, player_y]), self.consts.PLAYER_SIZE, shark_list, self.consts.SHARK_SIZE
+                player_pos, player_size, shark_pos_gated, self.consts.SHARK_SIZE
             )
         )
 
         # check if the player collided with the surface submarine
         surface_collision = self.check_collision_single(
-            jnp.array([player_x, player_y]),
-            self.consts.PLAYER_SIZE,
+            player_pos,
+            player_size,
             surface_sub_pos,
             self.consts.ENEMY_SUB_SIZE
         )
@@ -429,8 +772,8 @@ class JaxSeaquest(JaxEnvironment[SeaquestState, SeaquestObservation, SeaquestInf
         # check if the player has collided with any of the enemy projectiles
         missile_collisions = jnp.any(
             self.check_collision_batch(
-                jnp.array([player_x, player_y]),
-                self.consts.PLAYER_SIZE,
+                player_pos,
+                player_size,
                 enemy_projectile_list,
                 self.consts.MISSILE_SIZE
             )
@@ -464,15 +807,28 @@ class JaxSeaquest(JaxEnvironment[SeaquestState, SeaquestObservation, SeaquestInf
 
     @partial(jax.jit, static_argnums=(0,))
     def get_spawn_position(self, moving_left: chex.Array, slot: chex.Array) -> chex.Array:
-        """Get spawn position based on movement direction and slot number"""
+        """Get spawn position based on movement direction and slot number.
+
+        Spawns at the lead-edge margin (ENEMY_SPAWN_X_FROM_LEFT/RIGHT) so
+        entities are not missile-hittable until they enter the visible band.
+        """
         base_y = jnp.array(self.consts.SPAWN_POSITIONS_Y[slot])
         x_pos = jnp.where(
             moving_left,
-            jnp.array(165, dtype=jnp.int32),  # Start right if moving left
-            jnp.array(0, dtype=jnp.int32),
-        )  # Start left if moving right
+            self.consts.ENEMY_SPAWN_X_FROM_RIGHT.astype(jnp.int32),
+            self.consts.ENEMY_SPAWN_X_FROM_LEFT.astype(jnp.int32),
+        )
         direction = jnp.where(moving_left, -1, 1)  # -1 for left, 1 for right
         return jnp.array([x_pos, base_y, direction], dtype=jnp.int32)
+
+    def enemy_is_hittable(self, enemy_pos: chex.Array) -> chex.Array:
+        """True if enemy is active and far enough on-screen to take missile hits."""
+        active = enemy_pos[2] != 0
+        onscreen = jnp.logical_and(
+            enemy_pos[0] >= self.consts.ENEMY_HITTABLE_X_MIN,
+            enemy_pos[0] < self.consts.ENEMY_HITTABLE_X_MAX,
+        )
+        return jnp.logical_and(active, onscreen)
 
     @partial(jax.jit, static_argnums=(0,))
     def is_slot_empty(self, pos: chex.Array) -> chex.Array:
@@ -530,11 +886,12 @@ class JaxSeaquest(JaxEnvironment[SeaquestState, SeaquestObservation, SeaquestInf
         2: Two enemies with gap
         3: Three enemies in a row
         """
-        # Basic pattern arrays for different formations
+        # Basic pattern arrays for different formations (absolute slot bits:
+        # index 0 = left, 1 = middle, 2 = right — same as ALE form layout).
         PATTERNS = jnp.array(
             [
-                [0, 0, 1],  # wave 0: Single enemy
-                [0, 1, 1],  # wave 1: Two adjacent
+                [0, 0, 1],  # wave 0: Single enemy (top-lane native; bottom uses mask)
+                [1, 1, 0],  # wave 1: Two adjacent — left + middle (ALE)
                 [1, 0, 1],  # wave 2: Two with gap
                 [1, 1, 1],  # wave 3: Three in row
             ]
@@ -554,7 +911,7 @@ class JaxSeaquest(JaxEnvironment[SeaquestState, SeaquestObservation, SeaquestInf
         diver_positions: chex.Array,
         step_counter: chex.Array,
         rng: chex.PRNGKey = None,
-    ) -> Tuple[SpawnState, chex.Array, chex.Array, chex.PRNGKey]:
+    ) -> Tuple[SpawnState, chex.Array, chex.Array, chex.Array, chex.PRNGKey]:
         """Update enemy spawns using pattern-based system matching original game.
         Args:
             spawn_state: Current spawn state
@@ -565,16 +922,13 @@ class JaxSeaquest(JaxEnvironment[SeaquestState, SeaquestObservation, SeaquestInf
             rng: Optional random key for direction randomization
 
         Returns:
-            Tuple of updated spawn state, shark positions, sub positions, and updated RNG key
+            Tuple of updated spawn state, shark/sub/diver positions, and RNG key
         """
 
 
-        new_spawn_timers = jnp.where(
-            spawn_state.spawn_timers > 0,
-            spawn_state.spawn_timers - 1,
-            spawn_state.spawn_timers,
-        )
-        new_state = spawn_state.replace(spawn_timers=new_spawn_timers)
+        # Timers are decremented once in spawn_step (shared with diver spawn).
+        new_state = spawn_state
+
 
         # --- START of new vectorized calculation ---
         # 1. Vectorized check for empty lanes across all 4 lanes
@@ -586,10 +940,16 @@ class JaxSeaquest(JaxEnvironment[SeaquestState, SeaquestObservation, SeaquestInf
         to_be_spawned_lanes = spawn_state.to_be_spawned.reshape(4, 3)
         any_to_be_spawned = jnp.any(to_be_spawned_lanes != 0, axis=1)  # Shape (4,)
 
-        # 3. Combine conditions to create a mask of all lanes that need an update
-        all_lanes_need_update = jnp.logical_or(all_lanes_empty, any_to_be_spawned) # Shape (4,)
-        # --- END of new vectorized calculation ---
-
+        # 3. Lanes that need an update: empty, trickle-spawning, OR timer hit
+        # (overwrite stragglers still mid-crossing — skipping them left mixed
+        # prev_sub / orphaned enemies on screen).
+        timers_ready = (
+            spawn_state.spawn_timers == self.consts.DIVER_SPAWN_TIMER_TRIGGER
+        )
+        all_lanes_need_update = jnp.logical_or(
+            jnp.logical_or(all_lanes_empty, any_to_be_spawned),
+            timers_ready,
+        )
         # The scan_lanes function is now much simpler
         def scan_lanes(carry, lane_idx):
             curr_state, curr_shark_positions, curr_sub_positions, curr_diver_positions, curr_rng = carry
@@ -613,90 +973,93 @@ class JaxSeaquest(JaxEnvironment[SeaquestState, SeaquestObservation, SeaquestInf
             # Split RNG key for this lane
             rng, lane_rng = jax.random.split(rng)
 
-            # Get survived status for this lane (3 slots)
-            lane_survived = jax.lax.dynamic_slice(spawn_state.survived, (i * 3,), (3,))
-
-            # Update the difficulty patterns for this lane
-            left_over = jnp.any(lane_survived)
+            # Formation: ALE uses fixed absolute slot bits per lane (bottom
+            # form=4 = slot 0, others form=1 = slot 2 at diff-0). Do NOT mirror
+            # on direction — that erased the permanent bottom-lane 32px offset.
             clipped_difficulty = spawn_state.difficulty % 8
-            # Update spawn state
-            lane_specific_pattern = jnp.where(
-                jnp.logical_not(left_over),  # Only update if all destroyed
+            density = jnp.where(
+                clipped_difficulty < 2,
+                0,
                 jnp.where(
-                    clipped_difficulty < 2,
-                    0,
-                    jnp.where(
-                        clipped_difficulty < 4,
-                        1,
-                        jnp.where(
-                            clipped_difficulty < 6,
-                            2,
-                            jnp.where(clipped_difficulty < 8, 3, 0),
-                        ),
-                    ),
+                    clipped_difficulty < 4,
+                    1,
+                    jnp.where(clipped_difficulty < 6, 2, 3),
                 ),
-                spawn_state.lane_dependent_pattern[i],
+            )
+            lane_mask = self.consts.LANE_SLOT_MASKS[i]
+            # density 0: lane's native single. Higher: shared ALE formation bits.
+            # Do NOT OR/maximum with lane_mask — that turned bottom ([1,0,0]) +
+            # two-enemy ([1,1,0]) into three ([1,1,1]) at the 2-enemy difficulty.
+            formation = self.get_pattern_for_difficulty(density, False)
+            current_pattern = jnp.where(density == 0, lane_mask, formation)
+            lane_specific_pattern = density
+
+            # Escort heading comes from lane_directions (chosen when the previous
+            # wave cleared). Divers follow that heading — they do not drive it.
+            moving_left = spawn_state.lane_directions[i] == 1
+
+            # Subs only after *this lane's* shark wave survived. Kill-clear wipes
+            # that lane's survived flags so it respawns sharks while siblings that
+            # swam off can still schedule submarines (ALE top-snipe behaviour).
+            lane_had_survivor = jnp.any(
+                spawn_state.survived.reshape(4, 3) != 0, axis=1
+            )[i]
+            is_sub = jnp.logical_and(
+                lane_had_survivor, spawn_state.prev_sub[i] == 0
             )
 
-            # Check if there's an active diver in this lane
-            active_diver = diver_positions[i][2] != 0
-            diver_direction = diver_positions[i][2]
-
-            # If there's an active diver, use its direction, otherwise randomize
-            moving_left = jnp.where(
-                active_diver,
-                diver_direction == -1,  # Use diver's direction if active
-                spawn_state.lane_directions[i] == 1  # Otherwise use current lane direction
+            # Symmetric lead-centric formation: native slot (lane mask) sits
+            # ENEMY_SPAWN_EDGE_MARGIN past the entry edge; other slots pack
+            # away from the screen. Same approach both directions.
+            dir_sign = jnp.where(moving_left, jnp.int32(-1), jnp.int32(1))
+            margin = self.consts.ENEMY_SPAWN_EDGE_MARGIN.astype(jnp.int32)
+            lead_x = jnp.where(
+                moving_left,
+                jnp.int32(160) + margin,
+                jnp.int32(0) - margin,
             )
-
-            # get the spawn pattern for this lane
-            # Check if this slot had something survive last time (if yes, we have to overwrite the current_pattern)
-            current_pattern = jnp.where(
-                left_over,
-                lane_survived,
-                self.get_pattern_for_difficulty(lane_specific_pattern, moving_left),
+            lead_slot = jnp.argmax(lane_mask).astype(jnp.int32)
+            away = -dir_sign
+            slot_idx = jnp.arange(3, dtype=jnp.int32)
+            slot_xs = lead_x + (slot_idx - lead_slot) * (
+                self.consts.ENEMY_WAVE_SPACING.astype(jnp.int32) * away
             )
+            slot_active = current_pattern != 0
 
-            # make sure that in the current pattern all entries are positive (i.e. abs() on all values)
-            current_pattern = jnp.abs(current_pattern)
-
-            # in case we are going left, flip the pattern
-            current_pattern = jnp.where(
-                moving_left, -jnp.flip(current_pattern), current_pattern
+            base_y = self.consts.SPAWN_POSITIONS_Y[i]
+            lane_positions = jnp.stack(
+                [slot_xs, jnp.full(3, base_y, dtype=jnp.int32), jnp.full(3, dir_sign, dtype=jnp.int32)],
+                axis=1,
             )
+            lane_positions = jnp.where(slot_active[:, None], lane_positions, jnp.zeros((3, 3), dtype=jnp.int32))
 
-            # check if this should be a submarine or a shark
-            is_sub = jnp.logical_and(left_over, jnp.logical_not(spawn_state.prev_sub[i]))
-
-            # set the positions for the first enemy in the wave (dependent on the direction this is either the first or the last slot)
-            first_slot = jnp.where(moving_left, 0, 2)
-
-            base_pos = self.get_spawn_position(moving_left, jnp.array(i))
-            # spawn the first enemy in the wave
+            indices = jnp.array([i * 3, i * 3 + 1, i * 3 + 2])
+            # Full lane replace: clear the opposite type so a period-based
+            # mid-crossing swap cannot leave stale sharks/subs behind.
+            cleared = jnp.zeros((3, 3), dtype=jnp.int32)
             new_shark_positions = jnp.where(
                 is_sub,
-                shark_positions,
-                shark_positions.at[(i * 3 + first_slot)].set(base_pos),
+                shark_positions.at[indices].set(cleared),
+                shark_positions.at[indices].set(lane_positions),
             )
-
             new_sub_positions = jnp.where(
-                is_sub, sub_positions.at[(i * 3 + first_slot)].set(base_pos), sub_positions
+                is_sub,
+                sub_positions.at[indices].set(lane_positions),
+                sub_positions.at[indices].set(cleared),
             )
 
             # wipe the survived status for this lane (since we are starting a new wave)
-            indices = jnp.array([i * 3, i * 3 + 1, i * 3 + 2])
             new_survived_full = spawn_state.survived.at[indices].set(
                 jnp.zeros(3, dtype=jnp.int32)
             )
 
-            # Set moving_left to the opposite of moving_left when determining which slot to clear in to_be_spawned
-            new_to_be_spawned = current_pattern.at[jnp.where(moving_left, 0, 2)].set(0)
-
-            # Update the full to_be_spawned array for this lane
+            # Formation is fully placed — nothing left to trickle-spawn.
             new_full_to_be_spawned = spawn_state.to_be_spawned.at[indices].set(
-                new_to_be_spawned
+                jnp.zeros(3, dtype=jnp.int32)
             )
 
+            # Divers co-spawn only with sharks (spawn_divers). Sub waves are
+            # gated in process_lane so they never start while a diver is live.
             new_spawn_state = SpawnState(
                 difficulty=spawn_state.difficulty,
                 lane_dependent_pattern=spawn_state.lane_dependent_pattern.at[i].set(
@@ -704,10 +1067,21 @@ class JaxSeaquest(JaxEnvironment[SeaquestState, SeaquestObservation, SeaquestInf
                 ),
                 to_be_spawned=new_full_to_be_spawned,
                 survived=new_survived_full,
-                prev_sub=spawn_state.prev_sub.at[i].set(is_sub),
-                spawn_timers=spawn_state.spawn_timers.at[i].set(200),
+                prev_sub=spawn_state.prev_sub.at[i].set(is_sub.astype(jnp.int32)),
+                # Wave already placed at the diver-trigger tick — park timer at 0
+                # until the next clear reloads it.
+                spawn_timers=spawn_state.spawn_timers.at[i].set(jnp.int32(0)),
                 diver_array=spawn_state.diver_array,
+                diver_instant_pending=spawn_state.diver_instant_pending,
+                diver_suppress_next=spawn_state.diver_suppress_next,
                 lane_directions=spawn_state.lane_directions,
+                episode_frame=spawn_state.episode_frame,
+                next_survive_wave_at=spawn_state.next_survive_wave_at,
+                enemy_offscreen_timers=(
+                    spawn_state.enemy_offscreen_timers.at[indices].set(
+                        jnp.full(3, -1, dtype=jnp.int32)
+                    ).at[indices + 12].set(jnp.full(3, -1, dtype=jnp.int32))
+                ),
             )
 
             return new_spawn_state, new_shark_positions, new_sub_positions, diver_positions, rng
@@ -762,51 +1136,58 @@ class JaxSeaquest(JaxEnvironment[SeaquestState, SeaquestObservation, SeaquestInf
             reference_shark_pos = shark_positions[base_idx + reference_idx]
             reference_sub_pos = sub_positions[base_idx + reference_idx]
 
-            # Use whichever position is non-zero (active)
+            # Active = nonzero direction. Do NOT use x!=0: spawn-from-left uses x=-8/0,
+            # and the old `reference_x == 0 → force spawn` stacked the whole wave on top
+            # of itself (JAX play log: 10k+ in-lane gaps < 8px; ALE: 0).
+            reference_active = jnp.logical_or(
+                reference_shark_pos[2] != 0, reference_sub_pos[2] != 0
+            )
             reference_x = jnp.where(
-                reference_shark_pos[0] != 0, reference_shark_pos[0], reference_sub_pos[0]
+                reference_shark_pos[2] != 0, reference_shark_pos[0], reference_sub_pos[0]
             )
 
-            edge_case = reference_x == 0
             # Edge Case: third option exists for the pattern 1 0 1, then check the next entity
             edge_case_reference_idx = jnp.where(moving_left, spawn_idx - 2, spawn_idx + 2)
 
             edge_case_reference_idx = edge_case_reference_idx.astype(jnp.int32)
 
-            reference_x = jnp.where(
-                edge_case,
-                jnp.where(
-                    shark_positions[base_idx + edge_case_reference_idx][0] != 0,
-                    shark_positions[base_idx + edge_case_reference_idx][0],
-                    sub_positions[base_idx + edge_case_reference_idx][0],
-                ),
-                reference_x,
-            )
+            edge_shark = shark_positions[base_idx + edge_case_reference_idx]
+            edge_sub = sub_positions[base_idx + edge_case_reference_idx]
+            edge_active = jnp.logical_or(edge_shark[2] != 0, edge_sub[2] != 0)
+            edge_x = jnp.where(edge_shark[2] != 0, edge_shark[0], edge_sub[0])
+
+            # Gap pattern (1 0 1): reference slot empty but the far entity is active.
+            use_gap_reference = jnp.logical_and(jnp.logical_not(reference_active), edge_active)
+            spacing_ref_x = jnp.where(use_gap_reference, edge_x, reference_x)
+            spacing_ref_active = jnp.logical_or(reference_active, use_gap_reference)
 
             # Get base spawn position for this lane
             base_spawn_pos = self.get_spawn_position(moving_left, jnp.array(i))
 
-            # check if the base spawn position x is 16 / 32 pixels away from the reference x position (depending on the edge case pattern)
-            # if yes, spawn the entity, if no, do nothing
-            offset = jnp.where(edge_case, 32, 16)
-            should_spawn = jnp.abs(base_spawn_pos[0] - reference_x) >= offset
-
-            # in case reference_x is still 0 (happens in case the player destroyed the first entity in the wave), we just instantly spawn the entity
-            should_spawn = jnp.where(reference_x == 0, True, should_spawn)
+            # ALE in-lane gaps are 16px (32px for 1-0-1). Spawn next member at the edge
+            # only once the reference has moved far enough.
+            offset = jnp.where(
+                use_gap_reference,
+                self.consts.ENEMY_WAVE_SPACING_GAP,
+                self.consts.ENEMY_WAVE_SPACING,
+            )
+            far_enough = jnp.abs(base_spawn_pos[0] - spacing_ref_x) >= offset
+            # If the leading entity was destroyed (no active reference), spawn immediately.
+            should_spawn = jnp.where(spacing_ref_active, far_enough, True)
 
             spawn_pos = jnp.where(should_spawn, base_spawn_pos, jnp.zeros(3))
 
             # Update positions based on enemy type
             new_shark_positions = shark_positions.at[base_idx + spawn_idx].set(
                 jnp.where(
-                    jnp.logical_not(spawn_state.prev_sub[i]),
+                    spawn_state.prev_sub[i] != 1,
                     spawn_pos,
                     shark_positions[base_idx + spawn_idx],
                 )
             )
             new_sub_positions = sub_positions.at[base_idx + spawn_idx].set(
                 jnp.where(
-                    spawn_state.prev_sub[i], spawn_pos, sub_positions[base_idx + spawn_idx]
+                    spawn_state.prev_sub[i] == 1, spawn_pos, sub_positions[base_idx + spawn_idx]
                 )
             )
 
@@ -828,10 +1209,27 @@ class JaxSeaquest(JaxEnvironment[SeaquestState, SeaquestObservation, SeaquestInf
                 prev_sub=spawn_state.prev_sub,
                 spawn_timers=spawn_state.spawn_timers,
                 diver_array=spawn_state.diver_array,
+                diver_instant_pending=spawn_state.diver_instant_pending,
+                diver_suppress_next=spawn_state.diver_suppress_next,
                 lane_directions=spawn_state.lane_directions,
+                episode_frame=spawn_state.episode_frame,
+                next_survive_wave_at=spawn_state.next_survive_wave_at,
+                enemy_offscreen_timers=spawn_state.enemy_offscreen_timers,
             )
 
             return new_spawn_state, new_shark_positions, new_sub_positions, diver_positions, rng
+
+        # Per-lane: hold this lane's sub spawn while *its* diver is still live.
+        # (A global any-diver gate let a late opposite-side L3 diver stretch
+        # L0/L1/L2 gaps by hundreds of frames after a direction flip.)
+        survived_lanes = jnp.any(
+            spawn_state.survived.reshape(4, 3) != 0, axis=1
+        )
+        lane_wants_sub = jnp.logical_and(
+            survived_lanes, spawn_state.prev_sub == 0
+        )
+        lane_diver_live = diver_positions[:, 2] != 0
+        hold_sub_wave = jnp.logical_and(lane_wants_sub, lane_diver_live)
 
         # Modified process_lane to handle RNG
         def process_lane(i, carry):
@@ -841,14 +1239,14 @@ class JaxSeaquest(JaxEnvironment[SeaquestState, SeaquestObservation, SeaquestInf
             # determine if we need to initialize a new pattern or keep spawning for the current one
             # do this by checking in the relevant part of the to_be_spawned array if there are still 1s
             relevant_to_be_spawned = jax.lax.dynamic_slice(
-                spawn_state.to_be_spawned, (base_idx,), (3,)
+                loc_spawn_state.to_be_spawned, (base_idx,), (3,)
             )
 
             # if there are still 1s in the relevant part of the to_be_spawned array, keep spawning
             keep_spawning = jnp.any(relevant_to_be_spawned)
 
-            # check the lane spawn timer
-            lane_timer = spawn_state.spawn_timers[i]
+            # check the lane spawn timer (use decremented timers from carry)
+            lane_timer = loc_spawn_state.spawn_timers[i]
 
             base_idx = i * 3
             # Get the sharks and subs for the current lane `i`
@@ -860,15 +1258,36 @@ class JaxSeaquest(JaxEnvironment[SeaquestState, SeaquestObservation, SeaquestInf
             subs_active = lane_subs[:, 2] != 0
             lane_empty = jnp.all(~sharks_active & ~subs_active)
 
-            # if the lane timer is unequal to 0, continue_spawn_cycle may still be called but initialize_new_spawn_cycle should not be called
-            allow_new_initialization = jnp.logical_and(lane_timer == 0, lane_empty)
+            # Co-spawn at TRIGGER; overwrite stragglers. If this lane wants a
+            # sub wave and any diver is still live, pin timer at TRIGGER+1 so
+            # the next tick re-arms at TRIGGER (decrement would miss the window).
+            at_trigger = lane_timer == self.consts.DIVER_SPAWN_TIMER_TRIGGER
+            hold_this = hold_sub_wave[i]
+            allow_new_initialization = jnp.logical_and(
+                at_trigger, jnp.logical_not(hold_this)
+            )
+
+            def hold_timer_for_diver(x):
+                spawn_state, shark_positions, sub_positions, diver_positions, rng = x
+                pinned = spawn_state.replace(
+                    spawn_timers=spawn_state.spawn_timers.at[i].set(
+                        self.consts.DIVER_SPAWN_TIMER_TRIGGER.astype(jnp.int32)
+                        + jnp.int32(1)
+                    )
+                )
+                return pinned, shark_positions, sub_positions, diver_positions, rng
 
             def handle_no_spawning(x):
                 spawn_state, shark_positions, sub_positions, diver_positions, rng = x
                 return jax.lax.cond(
                     allow_new_initialization,
                     lambda y: initialize_new_spawn_cycle(i, y),
-                    lambda y: (y[0], y[1], y[2], y[3], y[4]),  # Return unchanged state
+                    lambda y: jax.lax.cond(
+                        jnp.logical_and(at_trigger, hold_this),
+                        hold_timer_for_diver,
+                        lambda z: z,
+                        y,
+                    ),
                     (spawn_state, shark_positions, sub_positions, diver_positions, rng),
                 )
 
@@ -881,30 +1300,6 @@ class JaxSeaquest(JaxEnvironment[SeaquestState, SeaquestObservation, SeaquestInf
 
             return new_spawn_state, new_shark_positions, new_sub_positions, new_diver_positions, new_rng
 
-        # Modify lane_needs_update to work with the rest of the function
-        def lane_needs_update(i, spawn_state, shark_positions, sub_positions):
-            base_idx = i * 3  # Base index for this lane's slots
-
-            # get how many entities in this lane are inactive
-            lane_empty = jnp.all(
-                jnp.array(
-                    [
-                        jnp.logical_and(
-                            self.is_slot_empty(shark_positions[base_idx + j]),
-                            self.is_slot_empty(sub_positions[base_idx + j]),
-                        )
-                        for j in range(3)
-                    ]
-                )
-            )
-
-            # check if the to_be_spawned array has any 1s in the relevant part
-            relevant_to_be_spawned = jax.lax.dynamic_slice(
-                spawn_state.to_be_spawned, (base_idx,), (3,)
-            )
-
-            return jnp.logical_or(lane_empty, jnp.any(relevant_to_be_spawned))
-
         # Replace the manual loop with lax.scan
         lane_indices = jnp.arange(4)
         (final_state, final_shark_positions, final_sub_positions, final_diver_positions, final_rng), _ = jax.lax.scan(
@@ -913,7 +1308,7 @@ class JaxSeaquest(JaxEnvironment[SeaquestState, SeaquestObservation, SeaquestInf
             lane_indices
         )
 
-        return final_state, final_shark_positions, final_sub_positions, final_rng
+        return final_state, final_shark_positions, final_sub_positions, final_diver_positions, final_rng
 
     @partial(jax.jit, static_argnums=(0,))
     def step_enemy_movement(
@@ -925,19 +1320,18 @@ class JaxSeaquest(JaxEnvironment[SeaquestState, SeaquestObservation, SeaquestInf
         rng: chex.PRNGKey,
     ) -> Tuple[chex.Array, chex.Array, SpawnState, chex.PRNGKey]:
         """Update enemy positions based on their patterns"""
-        # Split RNG key for direction randomization
-        rng, direction_rng = jax.random.split(rng)
+        # Keep rng in the signature/return for call-site compatibility.
+        direction_rng = rng  # unused; survive-off no longer re-rolls direction
 
         def get_shark_offset(step_counter):
-            """Calculates the vertical sinusoidal-like offset for sharks."""
-            phase = step_counter // 4
-            cycle_position = phase % 32
-            raw_offset = jnp.where(
-                cycle_position < 16,
-                cycle_position // 2,
-                7 - (cycle_position - 16) // 2,
-            )
-            return raw_offset - 4
+            """Vertical bob from ALE ram[93] waveform (recorded 64-frame cycle).
+
+            Phase is global (shared ``step_counter``): with correct lane bases,
+            concurrent ALE sharks have residual-std 0 and lane-lane resid corr ≈ 1.
+            """
+            wave = self.consts.SHARK_BOB_WAVE
+            phase = self.consts.SHARK_BOB_PHASE_OFFSET.astype(jnp.int32)
+            return wave[(step_counter + phase) % wave.shape[0]] - 4
 
         def calculate_movement_speed(step_counter, difficulty):
             """
@@ -950,16 +1344,19 @@ class JaxSeaquest(JaxEnvironment[SeaquestState, SeaquestObservation, SeaquestInf
             # --- Speed for difficulties 0-9 ---
             diff_lt_10 = safe_difficulty < 10
             cycle_pos = step_counter % 12
-            # Movement probabilities for difficulties 0-9
+            # Diff 0: ALE surface-noop move_frac ≈ 0.374 on residues t%8 ∈ {2,4,7}
+            # (exactly 3/8). Older (t%3==0) at 0.333 made crossings ~12% slow and
+            # compounded the late wave-2 gap.
+            step8 = step_counter % 8
+            move_375 = jnp.logical_or(step8 == 2, jnp.logical_or(step8 == 4, step8 == 7))
             should_move_patterns = jnp.array([
-                (cycle_pos % 3) == 0,  # 33%
+                move_375,             # 37.5% (ALE opening)
                 (cycle_pos % 2) == 0,  # 50%
                 (cycle_pos % 3) != 2,  # 67%
                 (cycle_pos % 4) != 3,  # 75%
                 (cycle_pos % 6) != 5,  # 83%
                 cycle_pos != 11,      # 92%
             ])
-            # Indices to select the correct pattern based on difficulty
             indices = jnp.array([0, 1, 1, 2, 2, 3, 3, 4, 4, 5])
             should_move = should_move_patterns[indices[safe_difficulty]]
             speed_for_diff_0_9 = jnp.where(should_move, 1, 0)
@@ -988,45 +1385,86 @@ class JaxSeaquest(JaxEnvironment[SeaquestState, SeaquestObservation, SeaquestInf
             # Select speed based on difficulty bracket
             return jnp.where(diff_lt_10, speed_for_diff_0_9, speed_for_diff_10_plus)
 
-        def move_single_enemy(pos, is_shark, difficulty, slot_idx, step_counter):
-            """Moves a single enemy. This function will be vmapped."""
+        def move_single_enemy(pos, timer, is_shark, slot_idx, movement_speed, shark_bob):
+            """Move one enemy; arm/decrement off-screen despawn timer.
+
+            Pre-entry spawns sit past the edge with timer=-1 (not counting).
+            Only an on→off transition arms ``ENEMY_OFFSCREEN_DESPAWN_FRAMES``.
+            """
             is_active = jnp.logical_not(self.is_slot_empty(pos))
+            not_counting = jnp.int32(-1)
+            hold = self.consts.ENEMY_OFFSCREEN_DESPAWN_FRAMES.astype(jnp.int32)
 
-            movement_speed = calculate_movement_speed(step_counter, difficulty)
-            velocity_x = pos[2] * movement_speed # pos[2] is direction (-1 or 1)
-
-            # Use modulo 4 to map 8 virtual lanes to 4 physical Y-positions
+            velocity_x = pos[2] * movement_speed
             lane_idx = (slot_idx // 3) % 4
             base_y = self.consts.SPAWN_POSITIONS_Y[lane_idx]
             y_offset = jnp.where(
                 is_shark,
-                get_shark_offset(step_counter),
-                -self.consts.SUBMARINE_Y_OFFSET
+                shark_bob,
+                -self.consts.SUBMARINE_Y_OFFSET,
             )
             y_position = base_y + y_offset
-
-            # Ensure all calculations are done with integer arithmetic
             new_x = pos[0] + velocity_x
             new_pos = jnp.array([new_x, y_position, pos[2]], dtype=pos.dtype)
             new_pos = jnp.where(is_active, new_pos, pos)
 
-            out_of_bounds = jnp.logical_or(new_pos[0] <= -8, new_pos[0] >= 168)
-            final_pos = jnp.where(out_of_bounds, jnp.zeros_like(pos), new_pos)
+            was_on = jnp.logical_and(
+                is_active,
+                jnp.logical_and(pos[0] >= 0, pos[0] <= 160),
+            )
+            now_off = jnp.logical_and(
+                is_active,
+                jnp.logical_or(new_pos[0] < 0, new_pos[0] > 160),
+            )
 
-            return final_pos, out_of_bounds
+            new_timer = jnp.where(is_active, timer, not_counting)
+            new_timer = jnp.where(
+                jnp.logical_and(is_active, jnp.logical_not(now_off)),
+                not_counting,
+                new_timer,
+            )
+            new_timer = jnp.where(jnp.logical_and(was_on, now_off), hold, new_timer)
+            # Decrement on subsequent off-screen frames only (not the arm frame).
+            new_timer = jnp.where(
+                jnp.logical_and(
+                    now_off,
+                    jnp.logical_and(new_timer > 0, jnp.logical_not(was_on)),
+                ),
+                new_timer - jnp.int32(1),
+                new_timer,
+            )
+
+            despawn = jnp.logical_and(
+                now_off, jnp.logical_and(is_active, new_timer == 0)
+            )
+            final_pos = jnp.where(despawn, jnp.zeros_like(pos), new_pos)
+            new_timer = jnp.where(despawn, not_counting, new_timer)
+            return final_pos, despawn, new_timer
+
+        # Speed + shark bob depend only on (step, difficulty) — compute once,
+        # not 24× inside the vmap (same values for every slot).
+        movement_speed = calculate_movement_speed(step_counter, spawn_state.difficulty)
+        shark_bob = get_shark_offset(step_counter)
 
         # 1. Combine sharks and subs into a single array for vectorized processing
-        # Ensure both arrays have the same dtype before concatenation
         shark_positions_int = shark_positions.astype(jnp.int32)
         sub_positions_int = sub_positions.astype(jnp.int32)
         all_positions = jnp.concatenate([shark_positions_int, sub_positions_int], axis=0)
-        is_shark_array = jnp.concatenate([jnp.ones(12, dtype=bool), jnp.zeros(12, dtype=bool)])
+        is_shark_array = jnp.concatenate(
+            [jnp.ones(12, dtype=bool), jnp.zeros(12, dtype=bool)]
+        )
         all_slot_indices = jnp.arange(24)
+        all_timers = spawn_state.enemy_offscreen_timers.astype(jnp.int32)
 
-        # 2. Apply movement to all 24 enemies in parallel using vmap
-        vmap_move = jax.vmap(move_single_enemy, in_axes=(0, 0, None, 0, None))
-        new_all_positions, enemies_survived_mask = vmap_move(
-            all_positions, is_shark_array, spawn_state.difficulty, all_slot_indices, step_counter
+        # 2. Apply movement + off-screen timers to all 24 slots in parallel
+        vmap_move = jax.vmap(move_single_enemy, in_axes=(0, 0, 0, 0, None, None))
+        new_all_positions, enemies_survived_mask, new_offscreen_timers = vmap_move(
+            all_positions,
+            all_timers,
+            is_shark_array,
+            all_slot_indices,
+            movement_speed,
+            shark_bob,
         )
 
         # 3. Handle lane-based logic by padding the 4-lane state to an 8-lane structure
@@ -1034,7 +1472,6 @@ class JaxSeaquest(JaxEnvironment[SeaquestState, SeaquestObservation, SeaquestInf
 
         # Pad the original 4-lane state for comparison purposes
         old_survived_padded = jnp.pad(spawn_state.survived, (0, 12))
-        lane_directions_padded = jnp.pad(spawn_state.lane_directions, (0, 4))
 
         # Perform logic in the temporary 8-lane structure
         num_lanes = 8 # 4 for sharks, 4 for subs
@@ -1045,18 +1482,13 @@ class JaxSeaquest(JaxEnvironment[SeaquestState, SeaquestObservation, SeaquestInf
             jnp.logical_and(survived_mask_lanes, old_survived_lanes == 0), axis=1
         )
 
-        random_directions = jax.random.bernoulli(direction_rng, 0.5, (num_lanes,)).astype(spawn_state.survived.dtype) * 2 - 1
-        temp_lane_directions = jnp.where(
-            any_newly_survived_in_lane,
-            random_directions,
-            lane_directions_padded
-        )
-
         all_pos_lanes = all_positions.reshape(num_lanes, 3, 3)
         dir0 = all_pos_lanes[:, 0, 2]
         dir1 = all_pos_lanes[:, 1, 2]
         dir2 = all_pos_lanes[:, 2, 2]
-        lane_base_direction = jnp.where(dir0 != 0, dir0, jnp.where(dir1 != 0, dir1, jnp.where(dir2 != 0, dir2, 1)))
+        lane_base_direction = jnp.where(
+            dir0 != 0, dir0, jnp.where(dir1 != 0, dir1, jnp.where(dir2 != 0, dir2, 1))
+        )
 
         survived_direction_per_slot = jnp.repeat(lane_base_direction, 3, axis=0)
         temp_survived = jnp.where(
@@ -1064,60 +1496,79 @@ class JaxSeaquest(JaxEnvironment[SeaquestState, SeaquestObservation, SeaquestInf
         )
 
         temp_survived_lanes = temp_survived.reshape(num_lanes, 3)
-        lanes_to_flip = (lane_base_direction == -1)
+        lanes_to_flip = lane_base_direction == -1
         flipped_survived = jnp.flip(temp_survived_lanes, axis=1)
         temp_survived_lanes = jnp.where(
-            lanes_to_flip[:, None], # Expand dims for broadcasting
+            lanes_to_flip[:, None],
             flipped_survived,
-            temp_survived_lanes
+            temp_survived_lanes,
         )
 
-        # 4. Merge the 8-lane results back into the 4-lane state structure
-        # `spawn_state.prev_sub` (shape 4,) tells us if a lane is sharks (0) or subs (1)
-        is_sub_mask = spawn_state.prev_sub[:, None].astype(bool) # Shape: (4, 1)
-
-        # Merge `survived` results
+        # Merge 8-lane results back into 4-lane state (prev_sub: -1/0/1).
+        is_sub_mask = (spawn_state.prev_sub == 1)[:, None]
         shark_survived_res = temp_survived_lanes[:4]
         sub_survived_res = temp_survived_lanes[4:]
         final_survived_lanes = jnp.where(is_sub_mask, sub_survived_res, shark_survived_res)
-        new_survived = final_survived_lanes.flatten() # Final shape: (12,)
+        new_survived = final_survived_lanes.flatten()
 
-        # Merge `lane_directions`
-        shark_dir_res, sub_dir_res = temp_lane_directions[:4], temp_lane_directions[4:]
-        new_lane_directions = jnp.where(spawn_state.prev_sub.astype(bool), sub_dir_res, shark_dir_res) # Final shape: (4,)
-
-        # Merge updates for `diver_array` and `spawn_timers`
         any_newly_survived_sharks = any_newly_survived_in_lane[:4]
         any_newly_survived_subs = any_newly_survived_in_lane[4:]
-        any_newly_survived_final = jnp.where(spawn_state.prev_sub.astype(bool), any_newly_survived_subs, any_newly_survived_sharks)
+        any_newly_survived_final = jnp.where(
+            spawn_state.prev_sub == 1, any_newly_survived_subs, any_newly_survived_sharks
+        )
 
-        new_diver_array = jnp.where(
-            jnp.logical_and(any_newly_survived_final, spawn_state.diver_array == -1),
-            1,
-            spawn_state.diver_array
+        # Per-lane survive-clear only. Lanes are independent: each arms its own
+        # reload when *it* empties by swim-off. AFK sync is emergent (same start
+        # + same cross time), not forced by arming siblings together — that was
+        # what stole a kill-lane's shark cycle into the others' sub wave.
+        sharks_still = jnp.any(new_all_positions[:12].reshape(4, 3, 3)[:, :, 2] != 0, axis=1)
+        subs_still = jnp.any(new_all_positions[12:].reshape(4, 3, 3)[:, :, 2] != 0, axis=1)
+        still_live = jnp.where(spawn_state.prev_sub == 1, subs_still, sharks_still)
+        lane_cleared_by_survive = jnp.logical_and(
+            any_newly_survived_final, jnp.logical_not(still_live)
+        )
+
+        survive_reload = self.spawn_timer_reload(
+            spawn_state.diver_array, after_survive=True
+        )
+        arm_lane = jnp.logical_and(
+            spawn_state.spawn_timers == 0, lane_cleared_by_survive
         )
         new_spawn_timers = jnp.where(
-            any_newly_survived_final,
-            200,
-            spawn_state.spawn_timers
+            arm_lane,
+            survive_reload,
+            spawn_state.spawn_timers,
         )
 
-        # 5. Update state with merged results and split positions back into sharks and subs
+        # Flip heading after a *sub* wave survives off — not after sharks.
+        # ALE keeps the same approach side for shark→sub (and often the next
+        # shark); flipping on shark-clear made JAX sub enter opposite to ALE,
+        # swapping long/short gaps and desyncing AFK within a few waves.
+        flip_lane = jnp.logical_and(
+            lane_cleared_by_survive, spawn_state.prev_sub == 1
+        )
+        new_lane_directions = jnp.where(
+            flip_lane,
+            1 - spawn_state.lane_directions,
+            spawn_state.lane_directions,
+        )
+
+        # Survived flags already come from per-slot swim-off above — no
+        # whole-wave ones-fill (that forced empty kill-lanes onto subs).
+        new_survived = final_survived_lanes.flatten()
+
         new_spawn_state = spawn_state.replace(
             survived=new_survived,
             lane_directions=new_lane_directions,
-            diver_array=new_diver_array,
-            spawn_timers=new_spawn_timers
+            spawn_timers=new_spawn_timers,
+            enemy_offscreen_timers=new_offscreen_timers,
         )
 
         new_shark_positions, new_sub_positions = jnp.split(new_all_positions, 2, axis=0)
-
-        # Ensure the returned positions have the same dtype as the input positions
         new_shark_positions = new_shark_positions.astype(shark_positions.dtype)
         new_sub_positions = new_sub_positions.astype(sub_positions.dtype)
 
         return new_shark_positions, new_sub_positions, new_spawn_state, rng
-    
 
     @partial(jax.jit, static_argnums=(0,))
     def spawn_divers(
@@ -1133,14 +1584,19 @@ class JaxSeaquest(JaxEnvironment[SeaquestState, SeaquestObservation, SeaquestInf
         """
         # --- 1. Vectorized Pre-computation and Checks (for all 4 lanes at once) ---
 
-        # Condition: Only process lanes where the spawn timer is at the trigger value.
-        timers_ready_mask = spawn_state.spawn_timers == 60  # Shape: (4,)
+        # Divers only place on the shark co-spawn trigger (same tick as escorts).
+        # Death/surface "instant" rolls set diver_instant_pending; spawn_step /
+        # surface-unfreeze snap those lanes onto TRIGGER so they co-spawn with
+        # the next wave — never alone ahead of escorts.
+        instant_pending = spawn_state.diver_instant_pending.astype(bool)
+        timers_ready_mask = (
+            spawn_state.spawn_timers == self.consts.DIVER_SPAWN_TIMER_TRIGGER
+        )
 
         # Condition: A diver must not already exist in the lane.
         diver_exists_mask = diver_positions[:, 2] != 0  # Shape: (4,)
 
         # Condition: The enemy lane must be empty.
-        # This replaces the slow list comprehension with vectorized operations.
         sharks_active_per_lane = jnp.any(shark_positions.reshape(4, 3, 3)[:, :, 2] != 0, axis=1)
         subs_active_per_lane = jnp.any(sub_positions.reshape(4, 3, 3)[:, :, 2] != 0, axis=1)
         lanes_are_empty_mask = jnp.logical_not(
@@ -1150,31 +1606,58 @@ class JaxSeaquest(JaxEnvironment[SeaquestState, SeaquestObservation, SeaquestInf
         # Condition: The lane must be marked as available for spawning (value of 1).
         lanes_ready_to_spawn_mask = spawn_state.diver_array == 1  # Shape: (4,)
 
-        # Condition: Do not spawn a diver if the next enemy in that lane is a submarine.
-        prev_was_not_sub = jnp.logical_not(spawn_state.prev_sub)
-        something_survived = jnp.any(spawn_state.survived.reshape(4, 3) != 0, axis=1)
-        next_is_sub_mask = jnp.logical_and(prev_was_not_sub, something_survived)
-        # Override: if the previous enemy was a sub, the next cannot be a sub.
-        next_is_sub_mask = jnp.where(spawn_state.prev_sub, False, next_is_sub_mask)
+        # Opening / first shark wave per lane: only upper two lanes place divers.
+        # Use per-lane prev_sub < 0 — a global "all lanes still opening" check
+        # failed when FIRST_WAVE_LANE_DELAY held the bottom lane back (siblings
+        # already had prev_sub=0, so bottom got a diver on its delayed first place).
+        is_lane_first_escort = spawn_state.prev_sub < 0
+        opening_lane_mask = self.consts.FIRST_WAVE_DIVER_LANES.astype(bool)
+        lane_place_mask = jnp.where(
+            is_lane_first_escort, opening_lane_mask, jnp.ones(4, dtype=bool)
+        )
+        lane_place_mask = jnp.logical_or(lane_place_mask, instant_pending)
 
-        # --- 2. Combine All Conditions to Get Final Spawn Mask ---
+        # Condition: Do not spawn a diver if *this lane's* next escort is a sub.
+        survived_lanes = jnp.any(
+            spawn_state.survived.reshape(4, 3) != 0, axis=1
+        )
+        next_is_sub_mask = jnp.logical_and(
+            survived_lanes, spawn_state.prev_sub == 0
+        )
 
-        # A diver should spawn only if ALL conditions for its lane are met.
-        should_spawn_mask = jnp.logical_and.reduce(
+        # --- 2. Final spawn mask ---
+        # Instant-roll losers carry diver_suppress_next > 0 and skip this
+        # shark-diver opportunity (consumed below even if they did not place).
+        suppress_mask = spawn_state.diver_suppress_next > 0
+        eligible_mask = jnp.logical_and.reduce(
             jnp.array([
                 timers_ready_mask,
                 jnp.logical_not(diver_exists_mask),
-                lanes_are_empty_mask,
                 lanes_ready_to_spawn_mask,
+                lane_place_mask,
                 jnp.logical_not(next_is_sub_mask),
             ])
-        ) # Shape: (4,)
+        )
+        should_spawn_mask = jnp.logical_and(
+            eligible_mask, jnp.logical_not(suppress_mask)
+        )
+        new_suppress = jnp.where(
+            eligible_mask,
+            jnp.maximum(spawn_state.diver_suppress_next - jnp.int32(1), jnp.int32(0)),
+            spawn_state.diver_suppress_next,
+        )
 
         # --- 3. Calculate New Positions and State ---
 
-        # Calculate spawn positions for all lanes based on their direction.
+        # Opening: ALE OC shows divers at x=1 / x=159. We place at 0 / 160 so the
+        # same-frame diver-move tick (diff-0 schedule) advances them onto 1 / 159
+        # and stays lockstep with ALE; placing at 1/159 then moving overshoots.
         moving_left_mask = spawn_state.lane_directions == 1
-        x_positions = jnp.where(moving_left_mask, 168, 0)
+        x_positions = jnp.where(
+            moving_left_mask,
+            jnp.int32(160),
+            jnp.int32(0),
+        )
         directions = jnp.where(moving_left_mask, -1, 1)
 
         # Create the potential new diver data for all 4 lanes.
@@ -1190,22 +1673,42 @@ class JaxSeaquest(JaxEnvironment[SeaquestState, SeaquestObservation, SeaquestInf
             diver_positions
         )
 
-        # Update the diver_array: If a lane was marked with -1 (diver swam off-screen)
-        # and the lane is now empty, mark it as ready for a new spawn cycle (value 1).
-        spawn_next_cycle_mask = jnp.logical_and(spawn_state.diver_array == -1, lanes_are_empty_mask)
+        # Update the diver_array: swam-off (-1) re-arms when the *diver slot*
+        # is empty — not when the escort lane is empty. Continuous shark farming
+        # otherwise leaves da stuck at -1 forever; collected top lanes (0) then
+        # never see rearm_all, so divers vanish for the rest of the dive.
+        spawn_next_cycle_mask = jnp.logical_and(
+            spawn_state.diver_array == -1,
+            jnp.logical_not(diver_exists_mask),
+        )
         new_diver_array = jnp.where(
             spawn_next_cycle_mask,
             1,
             spawn_state.diver_array
         )
 
-        return new_diver_positions, spawn_state.replace(diver_array=new_diver_array)
+        # Consume instant-pending on the reserved co-spawn tick (whether or not
+        # a diver actually placed — e.g. blocked by next-is-sub), and whenever
+        # we successfully place. Drop pending if the lane is no longer armed.
+        new_pending = jnp.where(
+            jnp.logical_or(should_spawn_mask, timers_ready_mask),
+            jnp.int32(0),
+            spawn_state.diver_instant_pending,
+        )
+        new_pending = jnp.where(new_diver_array == 1, new_pending, jnp.int32(0))
+
+        return new_diver_positions, spawn_state.replace(
+            diver_array=new_diver_array,
+            diver_instant_pending=new_pending,
+            diver_suppress_next=new_suppress,
+        )
 
     @partial(jax.jit, static_argnums=(0,))
     def step_diver_movement(
         self,
         diver_positions: chex.Array,
         shark_positions: chex.Array,
+        sub_positions: chex.Array,
         state_player_x: chex.Array,
         state_player_y: chex.Array,
         state_divers_collected: chex.Array,
@@ -1217,6 +1720,53 @@ class JaxSeaquest(JaxEnvironment[SeaquestState, SeaquestObservation, SeaquestInf
         Returns updated diver positions, number of collected divers, updated spawn state, and updated RNG key.
         """
         new_diver_array = spawn_state.diver_array
+
+        def calculate_enemy_movement_speed(step_counter, difficulty):
+            """Identical schedule to ``step_enemy_movement`` (escorts drag divers)."""
+            safe_difficulty = jnp.maximum(0, difficulty % 256)
+            diff_lt_10 = safe_difficulty < 10
+            cycle_pos = step_counter % 12
+            # Diff 0 must use the same 3/8 schedule as sharks — the old
+            # (cycle_pos%3)==0 path left divers at 1/3 while sharks ran at
+            # 3/8, so escorts walked through divers.
+            step8 = step_counter % 8
+            move_375 = jnp.logical_or(
+                step8 == 2, jnp.logical_or(step8 == 4, step8 == 7)
+            )
+            should_move_patterns = jnp.array(
+                [
+                    move_375,  # 37.5% (ALE opening / shark lockstep)
+                    (cycle_pos % 2) == 0,  # 50%
+                    (cycle_pos % 3) != 2,  # 67%
+                    (cycle_pos % 4) != 3,  # 75%
+                    (cycle_pos % 6) != 5,  # 83%
+                    cycle_pos != 11,  # 92%
+                ]
+            )
+            indices = jnp.array([0, 1, 1, 2, 2, 3, 3, 4, 4, 5])
+            should_move = should_move_patterns[indices[jnp.minimum(safe_difficulty, 9)]]
+            speed_for_diff_0_9 = jnp.where(should_move, 1, 0)
+
+            diff_above_threshold = jnp.maximum(0, safe_difficulty - 10)
+            base_speed = 1 + (diff_above_threshold // 16)
+            position_in_tier = diff_above_threshold % 16
+            higher_speed_patterns = jnp.array(
+                [
+                    (step_counter % 16) == 0,
+                    (step_counter % 8) == 0,
+                    (step_counter % 4) == 0,
+                    (step_counter % 2) == 0,
+                    (step_counter % 4) != 0,
+                    (step_counter % 8) != 0,
+                    (step_counter % 16) != 0,
+                ]
+            )
+            tier_indices = jnp.array([0, 1, 1, 1, 2, 2, 2, 3, 3, 3, 4, 4, 4, 5, 5, 6])
+            use_higher_speed = higher_speed_patterns[tier_indices[position_in_tier]]
+            speed_for_diff_10_plus = jnp.where(
+                use_higher_speed, base_speed + 1, base_speed
+            )
+            return jnp.where(diff_lt_10, speed_for_diff_0_9, speed_for_diff_10_plus)
 
         def calculate_diver_movement(step_counter, difficulty):
             """Calculate diver movement based on difficulty level.
@@ -1248,192 +1798,111 @@ class JaxSeaquest(JaxEnvironment[SeaquestState, SeaquestObservation, SeaquestInf
             return jnp.where(is_high_difficulty, high_diff_speed, low_diff_speed)
 
         def determine_low_difficulty_movement(step_counter, difficulty):
-            """Determine if the diver should move for difficulties 0-27."""
-            # Create boolean masks for each difficulty bracket
-            diff_0_1 = jnp.logical_and(difficulty >= 0, difficulty <= 1)
-            diff_2_3 = jnp.logical_and(difficulty >= 2, difficulty <= 3)
-            diff_4_5 = jnp.logical_and(difficulty >= 4, difficulty <= 5)
-            diff_6_7 = jnp.logical_and(difficulty >= 6, difficulty <= 7)
-            diff_8_9 = jnp.logical_and(difficulty >= 8, difficulty <= 9)
-            diff_10_11 = jnp.logical_and(difficulty >= 10, difficulty <= 11)
-            diff_12_13 = jnp.logical_and(difficulty >= 12, difficulty <= 13)
-            diff_14_15 = jnp.logical_and(difficulty >= 14, difficulty <= 15)
-            diff_16_17 = jnp.logical_and(difficulty >= 16, difficulty <= 17)
-            diff_18_19 = jnp.logical_and(difficulty >= 18, difficulty <= 19)
-            diff_20_21 = jnp.logical_and(difficulty >= 20, difficulty <= 21)
-            diff_22_23 = jnp.logical_and(difficulty >= 22, difficulty <= 23)
-            diff_24_25 = jnp.logical_and(difficulty >= 24, difficulty <= 25)
-            diff_26_27 = jnp.logical_and(difficulty >= 26, difficulty <= 27)
+            """Determine if the diver should move for difficulties 0-27.
 
-            # Movement patterns for each bracket based on paste.txt
-            # Difficulty 0-1: Move every 5th frame (20% movement)
-            move_0_1 = (step_counter % 5) == 0
-
-            # Difficulty 2-3: Move every 4th frame (25% movement)
-            move_2_3 = (step_counter % 4) == 0
-
-            # Difficulty 4-5: Move every 3rd frame (33.3% movement)
-            move_4_5 = (step_counter % 3) == 0
-
-            # Difficulty 6-7: Move in pattern [1,0,0,1,0,1,0,0] (37.5% movement)
+            Brackets are pairs (0-1, 2-3, …); index with difficulty//2 instead of
+            a 14-way jnp.select (same result, far cheaper in XLA).
+            """
             cycle_6_7 = step_counter % 8
             move_6_7 = jnp.logical_or(
                 cycle_6_7 == 0, jnp.logical_or(cycle_6_7 == 3, cycle_6_7 == 5)
             )
-
-            # Difficulty 8-9: Move in pattern [1,0,1,0,1,0,0,1,0,1] (50% movement)
             cycle_8_9 = step_counter % 10
-            move_8_9 = jnp.logical_or(
-                jnp.logical_or(cycle_8_9 == 0, cycle_8_9 == 2),
-                jnp.logical_or(cycle_8_9 == 4, cycle_8_9 == 7),
+            move_8_9 = (
+                (cycle_8_9 == 0)
+                | (cycle_8_9 == 2)
+                | (cycle_8_9 == 4)
+                | (cycle_8_9 == 7)
+                | (cycle_8_9 == 9)
             )
-            move_8_9 = jnp.logical_or(move_8_9, cycle_8_9 == 9)
-
-            # Difficulty 10-11: Move every other frame (50% movement)
-            move_10_11 = (step_counter % 2) == 0
-
-            # Difficulty 12-13: Complex pattern with ~60% movement
             cycle_12_13 = step_counter % 8
-            move_12_13 = jnp.logical_or(
-                jnp.logical_or(cycle_12_13 == 0, cycle_12_13 == 2),
-                jnp.logical_or(cycle_12_13 == 4, cycle_12_13 == 6),
+            move_12_13 = (
+                (cycle_12_13 == 0)
+                | (cycle_12_13 == 2)
+                | (cycle_12_13 == 4)
+                | (cycle_12_13 == 6)
+                | (cycle_12_13 == 7)
             )
-            move_12_13 = jnp.logical_or(move_12_13, cycle_12_13 == 7)
-
-            # Difficulty 14-15: Complex pattern with ~65% movement
             cycle_14_15 = step_counter % 7
-            move_14_15 = jnp.logical_or(
-                jnp.logical_or(cycle_14_15 == 0, cycle_14_15 == 1),
-                jnp.logical_or(cycle_14_15 == 3, cycle_14_15 == 5),
+            move_14_15 = (
+                (cycle_14_15 == 0)
+                | (cycle_14_15 == 1)
+                | (cycle_14_15 == 3)
+                | (cycle_14_15 == 5)
+                | (cycle_14_15 == 6)
             )
-            move_14_15 = jnp.logical_or(move_14_15, cycle_14_15 == 6)
-
-            # Difficulty 16-17: Complex pattern with ~70% movement
             cycle_16_17 = step_counter % 10
-            move_16_17 = jnp.logical_or(
-                jnp.logical_or(cycle_16_17 == 0, cycle_16_17 == 1),
-                jnp.logical_or(cycle_16_17 == 3, cycle_16_17 == 4),
+            move_16_17 = (
+                (cycle_16_17 == 0)
+                | (cycle_16_17 == 1)
+                | (cycle_16_17 == 3)
+                | (cycle_16_17 == 4)
+                | (cycle_16_17 == 6)
+                | (cycle_16_17 == 8)
+                | (cycle_16_17 == 9)
             )
-            move_16_17 = jnp.logical_or(
-                move_16_17, jnp.logical_or(cycle_16_17 == 6, cycle_16_17 == 8)
-            )
-            move_16_17 = jnp.logical_or(move_16_17, cycle_16_17 == 9)
-
-            # Difficulty 18-19: Move 3 out of 4 frames (75% movement)
-            move_18_19 = (step_counter % 4) != 3
-
-            # Difficulty 20-21: Move 4 out of 5 frames (80% movement)
-            move_20_21 = (step_counter % 5) != 4
-
-            # Difficulty 22-23: Move 7 out of 8 frames (87.5% movement)
-            move_22_23 = (step_counter % 8) != 7
-
-            # Difficulty 24-25: Move 15 out of 16 frames (93.75% movement)
-            move_24_25 = (step_counter % 16) != 15
-
-            # Difficulty 26-27: Always move (100% movement)
-            move_26_27 = True
-
-            # Combine all patterns using jnp.select which is cleaner for many conditions
-            # Create condition array - only the first True condition will be used
-            conditions = jnp.array(
+            moves = jnp.array(
                 [
-                    diff_0_1,
-                    diff_2_3,
-                    diff_4_5,
-                    diff_6_7,
-                    diff_8_9,
-                    diff_10_11,
-                    diff_12_13,
-                    diff_14_15,
-                    diff_16_17,
-                    diff_18_19,
-                    diff_20_21,
-                    diff_22_23,
-                    diff_24_25,
-                    diff_26_27,
+                    # Diff 0-1: ALE opening divers advance on a 5/5/6 cadence
+                    # (3 moves / 16 frames). Residues locked on seaquest_play01
+                    # (move when pre-increment step%16 ∈ {4,9,14}). Old (%5==0)
+                    # was ~2f early. Opening spawn uses x=0/160 so the co-timed
+                    # first move lands on ALE's x=1/159 the same frame.
+                    jnp.logical_or(
+                        (step_counter % 16) == 4,
+                        jnp.logical_or(
+                            (step_counter % 16) == 9,
+                            (step_counter % 16) == 14,
+                        ),
+                    ),
+                    (step_counter % 4) == 0,  # 2-3
+                    (step_counter % 3) == 0,  # 4-5
+                    move_6_7,  # 6-7
+                    move_8_9,  # 8-9
+                    (step_counter % 2) == 0,  # 10-11
+                    move_12_13,  # 12-13
+                    move_14_15,  # 14-15
+                    move_16_17,  # 16-17
+                    (step_counter % 4) != 3,  # 18-19
+                    (step_counter % 5) != 4,  # 20-21
+                    (step_counter % 8) != 7,  # 22-23
+                    (step_counter % 16) != 15,  # 24-25
+                    True,  # 26-27
                 ]
             )
-
-            # Create corresponding values array
-            values = jnp.array(
-                [
-                    move_0_1,
-                    move_2_3,
-                    move_4_5,
-                    move_6_7,
-                    move_8_9,
-                    move_10_11,
-                    move_12_13,
-                    move_14_15,
-                    move_16_17,
-                    move_18_19,
-                    move_20_21,
-                    move_22_23,
-                    move_24_25,
-                    move_26_27,
-                ]
-            )
-
-            # Select the appropriate pattern based on which condition is True
-            should_move = jnp.select(conditions, values, default=False)
-
-            return should_move
+            return moves[jnp.minimum(difficulty // 2, 13)]
 
         def determine_high_difficulty_speed(step_counter, difficulty):
             """Determine the speed (1 or 2+) for difficulties 28+."""
-            # Adjust difficulty to start from 0 for easier tier calculations
             diff_above_27 = difficulty - 28
-
-            # Each 16 difficulty levels form a tier (just like in shark/submarine algorithm)
             tier = diff_above_27 // 16
             position_in_tier = diff_above_27 % 16
-
-            # Base speed for each tier (increases by 1 for each tier)
             base_speed = tier + 1
             higher_speed = tier + 2
-
-            # Position brackets within tier (matches the pattern observed in paste.txt)
-            pos_0 = position_in_tier == 0
-            pos_1_3 = jnp.logical_and(position_in_tier >= 1, position_in_tier <= 3)
-            pos_4_6 = jnp.logical_and(position_in_tier >= 4, position_in_tier <= 6)
-            pos_7_9 = jnp.logical_and(position_in_tier >= 7, position_in_tier <= 9)
-            pos_10_12 = jnp.logical_and(position_in_tier >= 10, position_in_tier <= 12)
-            pos_13_14 = jnp.logical_and(position_in_tier >= 13, position_in_tier <= 14)
-            pos_15 = position_in_tier == 15
-
-            # Determine higher speed frequency based on position in tier
-            # These frequencies match the observed patterns in paste.txt
-            use_higher_speed_pos_0 = (step_counter % 16) == 15  # 1 in 16 frames (6.25%)
-            use_higher_speed_pos_1_3 = (step_counter % 8) == 7  # 1 in 8 frames (12.5%)
-            use_higher_speed_pos_4_6 = (step_counter % 4) == 3  # 1 in 4 frames (25%)
-            use_higher_speed_pos_7_9 = (step_counter % 2) == 1  # 1 in 2 frames (50%)
-            use_higher_speed_pos_10_12 = (step_counter % 4) != 0  # 3 in 4 frames (75%)
-            use_higher_speed_pos_13_14 = (step_counter % 8) != 0  # 7 in 8 frames (87.5%)
-            use_higher_speed_pos_15 = (step_counter % 16) != 0  # 15 in 16 frames (93.75%)
-
-            # Select the appropriate higher speed frequency based on position
-            # Use jnp.select for cleaner code with multiple conditions
-            position_conditions = jnp.array(
-                [pos_0, pos_1_3, pos_4_6, pos_7_9, pos_10_12, pos_13_14, pos_15]
-            )
-
-            speed_values = jnp.array(
+            # Same tier-position → frequency table as enemy movement (index, not select).
+            higher_speed_patterns = jnp.array(
                 [
-                    use_higher_speed_pos_0,
-                    use_higher_speed_pos_1_3,
-                    use_higher_speed_pos_4_6,
-                    use_higher_speed_pos_7_9,
-                    use_higher_speed_pos_10_12,
-                    use_higher_speed_pos_13_14,
-                    use_higher_speed_pos_15,
+                    (step_counter % 16) == 15,
+                    (step_counter % 8) == 7,
+                    (step_counter % 4) == 3,
+                    (step_counter % 2) == 1,
+                    (step_counter % 4) != 0,
+                    (step_counter % 8) != 0,
+                    (step_counter % 16) != 0,
                 ]
             )
-
-            use_higher_speed = jnp.select(position_conditions, speed_values, default=False)
-
-            # Calculate final speed: higher_speed or base_speed
+            # pos 0→0; 1-3→1; 4-6→2; 7-9→3; 10-12→4; 13-14→5; 15→6
+            tier_indices = jnp.array(
+                [0, 1, 1, 1, 2, 2, 2, 3, 3, 3, 4, 4, 4, 5, 5, 6]
+            )
+            use_higher_speed = higher_speed_patterns[tier_indices[position_in_tier]]
             return jnp.where(use_higher_speed, higher_speed, base_speed)
+
+        # Speeds depend only on (step, difficulty) — hoist out of the per-diver loop.
+        diver_speed = calculate_diver_movement(step_counter, spawn_state.difficulty)
+        escort_speed = calculate_enemy_movement_speed(
+            step_counter, spawn_state.difficulty
+        )
 
         def move_single_diver(i, carry):
             # Unpack carry state - (positions, collected_count, diver_array)
@@ -1458,58 +1927,74 @@ class JaxSeaquest(JaxEnvironment[SeaquestState, SeaquestObservation, SeaquestInf
             can_collect = state_divers_collected < 6
             should_collect = jnp.logical_and(player_collision, can_collect)
 
-            # Get the three sharks in the lane
+            # Escorts in the same lane (sharks only — divers never share with subs).
             all_shark_lane_pos = jax.lax.dynamic_slice(shark_positions, (i * 3, 0), (3, 3))
 
-            # Get shark in the same lane for collision check
-            shark_lane_pos = self.get_front_entity(i, all_shark_lane_pos)
-            shark_collision = jnp.logical_and(
+            # Escort spacing: ALE locks ~5px. Soft-attach within 6px (≤1px nudge);
+            # outside that band divers keep their normal solo schedule.
+            all_escorts = all_shark_lane_pos
+            escort_alive = all_escorts[:, 2] != 0
+            dists = jnp.where(
+                escort_alive,
+                jnp.abs(all_escorts[:, 0] - diver_pos[0]),
+                jnp.int32(10_000),
+            )
+            nearest_idx = jnp.argmin(dists)
+            escort = all_escorts[nearest_idx]
+            escort_active = escort_alive[nearest_idx]
+            horiz_gap = jnp.abs(escort[0] - diver_pos[0])
+            escort_gap_target = jnp.int32(5)
+            escort_lock = jnp.logical_and(
                 is_active,
-                self.check_collision_single(
-                    jnp.array([shark_lane_pos[0], shark_lane_pos[1]]),
-                    self.consts.SHARK_SIZE,
-                    jnp.array([diver_pos[0], diver_pos[1]]),
-                    self.consts.DIVER_SIZE,
+                jnp.logical_and(escort_active, horiz_gap <= jnp.int32(6)),
+            )
+
+            # Heading: follow live escort when locked; otherwise match the
+            # planned next-wave direction (lane_directions). Divers are not
+            # independently random — they track current/next escort heading.
+            planned_dir = jnp.where(
+                spawn_state.lane_directions[i] == 1, jnp.int32(-1), jnp.int32(1)
+            )
+            any_escort = jnp.any(escort_alive)
+            move_dir = jnp.where(
+                escort_lock,
+                escort[2],
+                jnp.where(
+                    jnp.logical_and(is_active, jnp.logical_not(any_escort)),
+                    planned_dir,
+                    diver_pos[2],
                 ),
             )
 
-            # check in which direction the shark is moving and copy the direction to the diver
-            direction_of_shark = jnp.where(
-                shark_lane_pos[2] == 0, diver_pos[2], shark_lane_pos[2]
-            )
-
-            # Calculate movement based on difficulty
-            movement_speed = calculate_diver_movement(step_counter, spawn_state.difficulty)
+            movement_speed = jnp.where(escort_lock, escort_speed, diver_speed)
             should_move = movement_speed > 0
 
-            # Calculate movement direction (with speed factor)
-            # If colliding with shark, use shark's direction/speed
-            # Otherwise use diver's direction with appropriate speed factor
-            movement_x = jnp.where(
-                shark_collision,
-                shark_lane_pos[2],  # Use shark's direction/speed
-                diver_pos[2] * movement_speed,  # Apply difficulty-based speed
-            )
+            movement_x = move_dir * movement_speed
 
-            # Calculate new position
+            attached_x = escort[0] + move_dir * escort_gap_target
             new_x = jnp.where(
-                shark_collision,
-                diver_pos[0] + movement_x,  # Move with shark
+                escort_lock,
+                attached_x,
                 jnp.where(
                     should_move,
-                    diver_pos[0] + movement_x,  # Move with calculated speed
-                    diver_pos[0],  # Stay still
+                    diver_pos[0] + movement_x,
+                    diver_pos[0],
                 ),
             )
 
-            # Check bounds
-            out_of_bounds = jnp.logical_or(new_x <= -8, new_x >= 170)
+            # Divers despawn past the visible edges. Allow x=0 and x=160 for one
+            # frame so left-entry / right-entry co-spawns (placed at 0 / 160) are
+            # not wiped before the first move tick advances them to 1 / 159.
+            out_of_bounds = jnp.logical_or(
+                new_x < self.consts.X_BORDERS[0],
+                new_x > self.consts.X_BORDERS[1],
+            )
 
             # Create new position array - handle collection and bounds
             new_pos = jnp.where(
                 jnp.logical_or(~is_active, jnp.logical_or(out_of_bounds, should_collect)),
                 jnp.zeros(3),  # Reset if out of bounds or collected
-                jnp.array([new_x, self.consts.DIVER_SPAWN_POSITIONS[i], direction_of_shark]),
+                jnp.array([new_x, self.consts.DIVER_SPAWN_POSITIONS[i], move_dir]),
             )
 
             # Update collection count if collected
@@ -1534,18 +2019,33 @@ class JaxSeaquest(JaxEnvironment[SeaquestState, SeaquestObservation, SeaquestInf
             0, diver_positions.shape[0], move_single_diver, initial_carry
         )
 
-        # Handle case where all divers are collected - set all lanes to -1
-        # Apply the reset only if all divers have been collected
+        # Cycle complete only when every lane was *collected* (da==0). A swim-off
+        # (-1→1 when the diver slot is empty) must NOT re-open previously
+        # collected lanes — each lane stays dark until the full set is bagged.
+        rearm_all = jnp.all(final_diver_array == 0)
         reset_array = jnp.where(
-            jnp.all(final_diver_array == 0),
-            jnp.array([-1, -1, -1, -1], dtype=jnp.int32),  # Randomized reset array
-            final_diver_array,  # Otherwise keep current state
+            rearm_all,
+            jnp.ones(4, dtype=jnp.int32),
+            final_diver_array,
+        )
+        # After a full-collect rearm, skip one shark-diver opportunity so the
+        # next wave is not an immediate 4-diver dump (surface soft_reset also
+        # rolls instant + suppress; this covers mid-dive rearm).
+        new_suppress = jnp.where(
+            rearm_all,
+            jnp.ones(4, dtype=jnp.int32),
+            spawn_state.diver_suppress_next,
         )
 
-        # Create updated spawn state
-        updated_spawn_state = spawn_state.replace(diver_array=reset_array)
-
-        return final_positions, final_collected, updated_spawn_state, rng
+        return (
+            final_positions,
+            final_collected,
+            spawn_state.replace(
+                diver_array=reset_array,
+                diver_suppress_next=new_suppress,
+            ),
+            rng,
+        )
 
     @partial(jax.jit, static_argnums=(0,))
     def spawn_step(
@@ -1565,29 +2065,39 @@ class JaxSeaquest(JaxEnvironment[SeaquestState, SeaquestObservation, SeaquestInf
             )
         )
 
-        # Update spawns using updated spawn state
-        new_spawn_state, new_shark_positions, new_sub_positions, new_key = (
-            self.update_enemy_spawns(
-                spawn_state_after_movement,
-                new_shark_positions,
-                new_sub_positions,
-                diver_positions,
-                state.step_counter,
-                new_key,
-            )
+        # Shared countdown: divers + escorts both fire at DIVER_SPAWN_TIMER_TRIGGER.
+        decremented_timers = jnp.where(
+            spawn_state_after_movement.spawn_timers > 0,
+            spawn_state_after_movement.spawn_timers - 1,
+            spawn_state_after_movement.spawn_timers,
+        )
+        spawn_state_ticked = spawn_state_after_movement.replace(
+            spawn_timers=decremented_timers,
+            episode_frame=spawn_state_after_movement.episode_frame + jnp.int32(1),
         )
 
-        # Spawn new divers with updated tracking
-        new_diver_positions, final_spawn_state = self.spawn_divers(
-            new_spawn_state,
+        # Divers first (lane still empty), then escorts same tick (far off-screen).
+        new_diver_positions, spawn_state_after_divers = self.spawn_divers(
+            spawn_state_ticked,
             diver_positions,
             new_shark_positions,
             new_sub_positions,
             state.step_counter,
         )
 
+        new_spawn_state, new_shark_positions, new_sub_positions, new_diver_positions, new_key = (
+            self.update_enemy_spawns(
+                spawn_state_after_divers,
+                new_shark_positions,
+                new_sub_positions,
+                new_diver_positions,
+                state.step_counter,
+                new_key,
+            )
+        )
+
         return (
-            final_spawn_state,
+            new_spawn_state,
             new_shark_positions,
             new_sub_positions,
             new_diver_positions,
@@ -1775,14 +2285,14 @@ class JaxSeaquest(JaxEnvironment[SeaquestState, SeaquestObservation, SeaquestInf
         missile_exists = state.player_missile_position[2] != 0
 
         # if the player shot and there is no missile in frame, then we can shoot a missile
-        # the missile y is the current player y position + 7
-        # the missile x is either player x + 3 if facing left or player x + 13 if facing right
+        # Missile y = player_y + PLAYER_MISSILE_Y_OFFSET; x depends on facing.
+        y_off = self.consts.PLAYER_MISSILE_Y_OFFSET.astype(jnp.int32)
         new_missile = jnp.where(
             jnp.logical_and(fire, jnp.logical_not(missile_exists)),
             jnp.where(
                 state.player_direction == -1,
-                jnp.array([curr_player_x + 3, curr_player_y + 7, -1]),
-                jnp.array([curr_player_x + 13, curr_player_y + 7, 1]),
+                jnp.array([curr_player_x + 3, curr_player_y + y_off, -1]),
+                jnp.array([curr_player_x + 13, curr_player_y + y_off, 1]),
             ),
             state.player_missile_position,
         )
@@ -1791,7 +2301,7 @@ class JaxSeaquest(JaxEnvironment[SeaquestState, SeaquestObservation, SeaquestInf
         new_missile = jnp.where(
             missile_exists,
             jnp.array(
-                [new_missile[0] + new_missile[2] * 5, curr_player_y + 7, new_missile[2]]
+                [new_missile[0] + new_missile[2] * 5, curr_player_y + y_off, new_missile[2]]
             ),
             new_missile,
         )
@@ -1833,9 +2343,20 @@ class JaxSeaquest(JaxEnvironment[SeaquestState, SeaquestObservation, SeaquestInf
         )
 
         # Calculate new divers count before other logic
+        # Mid-surface with 1–5 divers: deposit one immediately. Full bag (6):
+        # keep all six for the score-freeze animation (ALE pays oxygen then all
+        # six diver bonuses; decrementing here dropped one +50 payout).
         new_divers_collected = jnp.where(
             jnp.logical_and(just_surfaced, has_divers),
-            jnp.where(in_init_state, state.divers_collected, state.divers_collected - 1),
+            jnp.where(
+                in_init_state,
+                state.divers_collected,
+                jnp.where(
+                    has_all_divers,
+                    state.divers_collected,
+                    state.divers_collected - 1,
+                ),
+            ),
             state.divers_collected,
         )
 
@@ -2021,7 +2542,7 @@ class JaxSeaquest(JaxEnvironment[SeaquestState, SeaquestObservation, SeaquestInf
     @partial(jax.jit, static_argnums=(0,))
     def calculate_kill_points(self, successful_rescues: chex.Array) -> chex.Array:
         """
-        Calculate the points awarded for killing a shark or submarine. 
+        Calculate the points awarded for killing a shark or submarine.
         Scales based on successful rescues using defined constants.
         """
         bonus = self.consts.SCORE_ENEMY_STEP * successful_rescues
@@ -2072,9 +2593,9 @@ class JaxSeaquest(JaxEnvironment[SeaquestState, SeaquestObservation, SeaquestInf
         h = int(self.consts.SCREEN_HEIGHT)
         w = int(self.consts.SCREEN_WIDTH)
         screen_size = (h, w)
-        
+
         single_obj = spaces.get_object_space(n=None, screen_size=screen_size)
-        
+
         return spaces.Dict({
             "player": single_obj,
             "divers": spaces.get_object_space(n=self.consts.MAX_DIVERS, screen_size=screen_size),
@@ -2082,13 +2603,13 @@ class JaxSeaquest(JaxEnvironment[SeaquestState, SeaquestObservation, SeaquestInf
             "enemies": spaces.get_object_space(n=25, screen_size=screen_size),
             # Projectiles: 1 Player + 4 Enemy = 5
             "projectiles": spaces.get_object_space(n=5, screen_size=screen_size),
-            
+
             "oxygen_level": spaces.Box(low=0, high=255, shape=(), dtype=jnp.int32),
             "player_score": spaces.Box(low=0, high=999999, shape=(), dtype=jnp.int32),
             "lives": spaces.Box(low=0, high=99, shape=(), dtype=jnp.int32),
             "collected_divers": spaces.Box(low=0, high=6, shape=(), dtype=jnp.int32),
         })
-    
+
     def image_space(self) -> spaces.Box:
         """Returns the image space for Seaquest.
         The image is a RGB image with shape (210, 160, 3).
@@ -2104,7 +2625,7 @@ class JaxSeaquest(JaxEnvironment[SeaquestState, SeaquestObservation, SeaquestInf
     def _get_observation(self, state: SeaquestState) -> SeaquestObservation:
         c = self.consts
         w, h = int(c.SCREEN_WIDTH), int(c.SCREEN_HEIGHT)
-        
+
         # --- Helper for orientation ---
         def get_orientation(direction):
             # 1 -> 90.0 (Right), -1 -> 270.0 (Left), 0 -> 0.0 (Inactive/None)
@@ -2125,8 +2646,13 @@ class JaxSeaquest(JaxEnvironment[SeaquestState, SeaquestObservation, SeaquestInf
         )
 
         # --- Divers ---
+        # Clip x into the playfield for consumers that expect screen coords, but
+        # mark off-screen divers inactive so heuristics / skills ignore them.
         d_pos = state.diver_positions
-        d_active = (d_pos[:, 2] != 0).astype(jnp.int32)
+        d_alive = d_pos[:, 2] != 0
+        d_w = jnp.int32(c.DIVER_SIZE[0])
+        d_onscreen = jnp.logical_and(d_pos[:, 0] < w, (d_pos[:, 0] + d_w) > 0)
+        d_active = jnp.logical_and(d_alive, d_onscreen).astype(jnp.int32)
         divers = ObjectObservation.create(
             x=jnp.clip(d_pos[:, 0].astype(jnp.int32), 0, w),
             y=jnp.clip(d_pos[:, 1].astype(jnp.int32), 0, h),
@@ -2143,26 +2669,33 @@ class JaxSeaquest(JaxEnvironment[SeaquestState, SeaquestObservation, SeaquestInf
         sharks_vid = jnp.full((12,), shark_color_idx, dtype=jnp.int32)
         sharks_w = jnp.full((12,), c.SHARK_SIZE[0], dtype=jnp.int32)
         sharks_h = jnp.full((12,), c.SHARK_SIZE[1], dtype=jnp.int32)
-        
+
         # 2. Submarines (12) - ID 4
         subs_pos = state.sub_positions
         subs_vid = jnp.full((12,), 4, dtype=jnp.int32)
         subs_w = jnp.full((12,), c.ENEMY_SUB_SIZE[0], dtype=jnp.int32)
         subs_h = jnp.full((12,), c.ENEMY_SUB_SIZE[1], dtype=jnp.int32)
-        
+
         # 3. Surface Submarine (1) - ID 5
         surf_pos = state.surface_sub_position[None, :]
         surf_vid = jnp.array([5], dtype=jnp.int32)
         surf_w = jnp.array([c.ENEMY_SUB_SIZE[0]], dtype=jnp.int32)
         surf_h = jnp.array([c.ENEMY_SUB_SIZE[1]], dtype=jnp.int32)
-        
+
         # Concatenate all enemies
         e_pos = jnp.concatenate([sharks_pos, subs_pos, surf_pos])
         e_vid = jnp.concatenate([sharks_vid, subs_vid, surf_vid])
         e_w = jnp.concatenate([sharks_w, subs_w, surf_w])
         e_h = jnp.concatenate([sharks_h, subs_h, surf_h])
-        e_active = (e_pos[:, 2] != 0).astype(jnp.int32)
-        
+        e_alive = e_pos[:, 2] != 0
+        # Same gate as enemy_is_hittable: alive off-screen stays in state, but
+        # observation.active=0 so clipped x cannot fake an on-screen target.
+        e_onscreen = jnp.logical_and(
+            e_pos[:, 0] >= c.ENEMY_HITTABLE_X_MIN,
+            e_pos[:, 0] < c.ENEMY_HITTABLE_X_MAX,
+        )
+        e_active = jnp.logical_and(e_alive, e_onscreen).astype(jnp.int32)
+
         enemies = ObjectObservation.create(
             x=jnp.clip(e_pos[:, 0].astype(jnp.int32), 0, w),
             y=jnp.clip(e_pos[:, 1].astype(jnp.int32), 0, h),
@@ -2177,16 +2710,18 @@ class JaxSeaquest(JaxEnvironment[SeaquestState, SeaquestObservation, SeaquestInf
         # 1. Player Missile (1) - ID 0
         pm_pos = state.player_missile_position[None, :]
         pm_vid = jnp.array([0], dtype=jnp.int32)
-        
+
         # 2. Enemy Missiles (4) - ID 1
         em_pos = state.enemy_missile_positions
         em_vid = jnp.full((4,), 1, dtype=jnp.int32)
-        
+
         # Concatenate projectiles
         p_pos = jnp.concatenate([pm_pos, em_pos])
         p_vid = jnp.concatenate([pm_vid, em_vid])
-        p_active = (p_pos[:, 2] != 0).astype(jnp.int32)
-        
+        p_alive = p_pos[:, 2] != 0
+        p_onscreen = jnp.logical_and(p_pos[:, 0] < w, (p_pos[:, 0] + c.MISSILE_SIZE[0]) > 0)
+        p_active = jnp.logical_and(p_alive, p_onscreen).astype(jnp.int32)
+
         projectiles = ObjectObservation.create(
             x=jnp.clip(p_pos[:, 0].astype(jnp.int32), 0, w),
             y=jnp.clip(p_pos[:, 1].astype(jnp.int32), 0, h),
@@ -2309,12 +2844,17 @@ class JaxSeaquest(JaxEnvironment[SeaquestState, SeaquestObservation, SeaquestInf
                 def handle_stage_reset():
                     # If the player still has lives left, perform the original stage reset.
                     # This preserves the mechanic of resetting the level after losing a life.
+                    # Keep per-lane collected bits — ALE does not re-arm bagged
+                    # diver lanes on oxygen / collision death.
                     return reset_state.replace(
                         lives=state.lives - 1,
                         score=state.score,
                         successful_rescues=state.successful_rescues,
                         divers_collected=jnp.maximum(state.divers_collected - 1, 0),
-                        spawn_state=self.soft_reset_spawn_state(state.spawn_state),
+                        spawn_state=self.soft_reset_spawn_state(
+                            state.spawn_state,
+                            rng=jax.random.fold_in(state.rng_key, state.step_counter),
+                        ),
                     )
 
                 # Use the new nested conditional to choose the correct outcome.
@@ -2334,13 +2874,13 @@ class JaxSeaquest(JaxEnvironment[SeaquestState, SeaquestObservation, SeaquestInf
         def handle_score_freeze():
             # Calculate points logic based on the rescues prior to the recent increment
             rescues_for_calc = state.successful_rescues - 1
-            
+
             diver_bonus_val = self.consts.SCORE_DIVER_STEP * rescues_for_calc
             points_per_diver = jnp.minimum(
                 self.consts.SCORE_DIVER_BASE + diver_bonus_val,
                 self.consts.SCORE_DIVER_MAX,
             )
-            
+
             oxygen_bonus_val = self.consts.SCORE_OXYGEN_STEP * rescues_for_calc
             points_per_oxygen_unit = jnp.minimum(
                 self.consts.SCORE_OXYGEN_BASE + oxygen_bonus_val,
@@ -2367,7 +2907,7 @@ class JaxSeaquest(JaxEnvironment[SeaquestState, SeaquestObservation, SeaquestInf
             drain_this_tick = jnp.logical_and(is_oxygen_phase, state.death_counter % 2 == 0)
             has_oxygen = state.oxygen > 0
             actually_drain = jnp.logical_and(drain_this_tick, has_oxygen)
-            
+
             new_ox = jnp.where(
                 actually_drain,
                 state.oxygen - 1,
@@ -2382,7 +2922,7 @@ class JaxSeaquest(JaxEnvironment[SeaquestState, SeaquestObservation, SeaquestInf
 
             new_divers_collected = jnp.where(
                 actually_free,
-                state.divers_collected - 1,
+                jnp.maximum(state.divers_collected - 1, jnp.int32(0)),
                 state.divers_collected
             )
             diver_points = jnp.where(actually_free, points_per_diver, 0)
@@ -2400,7 +2940,10 @@ class JaxSeaquest(JaxEnvironment[SeaquestState, SeaquestObservation, SeaquestInf
                     lives=state.lives,
                     successful_rescues=state.successful_rescues,
                     divers_collected=jnp.array(0),
-                    spawn_state=self.soft_reset_spawn_state(state.spawn_state),
+                    spawn_state=self.soft_reset_spawn_state(
+                        state.spawn_state,
+                        rng=jax.random.fold_in(state.rng_key, state.step_counter),
+                    ),
                     surface_sub_position=state.surface_sub_position,
                     oxygen=jnp.array(0),  # This triggers the oxygen refill mechanism
                 ),
@@ -2425,13 +2968,35 @@ class JaxSeaquest(JaxEnvironment[SeaquestState, SeaquestObservation, SeaquestInf
             needs_oxygen = state.oxygen < 64
             should_block = jnp.logical_and(at_surface, needs_oxygen)
 
-            # while player is frozen, keep resetting the spawn counter
+            # Mid-game surface refill: hold spawn timers at SURFACE_FREEZE values.
+            # Opening oxygen fill (just_surfaced == -1) must keep counting INITIAL timers
+            # so the first wave lands near ALE frame ~260 instead of ~205.
+            # After freeze: snap death/surface instant-pending lanes onto the
+            # co-spawn trigger so they place *with* escorts, not alone early.
+            in_init = state.just_surfaced == -1
+            should_freeze_spawns = jnp.logical_and(should_block, jnp.logical_not(in_init))
+            trigger_p1 = (
+                self.consts.DIVER_SPAWN_TIMER_TRIGGER.astype(jnp.int32) + jnp.int32(1)
+            )
+
+            def _freeze_timers():
+                return state.spawn_state.replace(
+                    spawn_timers=jnp.array(
+                        self.consts.SURFACE_FREEZE_SPAWN_TIMERS, dtype=jnp.int32
+                    )
+                )
+
+            def _snap_instant_pending():
+                ss = state.spawn_state
+                pending = ss.diver_instant_pending.astype(bool)
+                return ss.replace(
+                    spawn_timers=jnp.where(pending, trigger_p1, ss.spawn_timers)
+                )
+
             new_spawn_state = jax.lax.cond(
-                should_block,
-                lambda: state.spawn_state.replace(
-                    spawn_timers=jnp.array([80, 80, 80, 120], dtype=jnp.int32)
-                ),
-                lambda: state.spawn_state,
+                should_freeze_spawns,
+                _freeze_timers,
+                _snap_instant_pending,
             )
 
             state_updated = state.replace(spawn_state=new_spawn_state)
@@ -2480,6 +3045,7 @@ class JaxSeaquest(JaxEnvironment[SeaquestState, SeaquestObservation, SeaquestInf
                 player_missile_position,
                 new_shark_positions,
                 new_sub_positions,
+                new_diver_positions_after_kills,
                 new_score,
                 updated_spawn_state,
                 new_rng_key,
@@ -2487,6 +3053,7 @@ class JaxSeaquest(JaxEnvironment[SeaquestState, SeaquestObservation, SeaquestInf
                 player_missile_position,
                 state_updated.shark_positions,
                 state_updated.sub_positions,
+                state.diver_positions,
                 state_updated.score,
                 state_updated.successful_rescues,
                 new_spawn_state,
@@ -2505,7 +3072,7 @@ class JaxSeaquest(JaxEnvironment[SeaquestState, SeaquestObservation, SeaquestInf
                 updated_spawn_state,
                 new_shark_positions,
                 new_sub_positions,
-                state.diver_positions,
+                new_diver_positions_after_kills,
                 new_rng_key,
             )
 
@@ -2513,6 +3080,7 @@ class JaxSeaquest(JaxEnvironment[SeaquestState, SeaquestObservation, SeaquestInf
                 self.step_diver_movement(
                     new_diver_positions,
                     new_shark_positions,
+                    new_sub_positions,
                     player_x,
                     player_y,
                     state_updated.divers_collected,
@@ -2542,7 +3110,7 @@ class JaxSeaquest(JaxEnvironment[SeaquestState, SeaquestObservation, SeaquestInf
                 new_sub_positions,
                 new_shark_positions,
                 new_surface_sub_pos,
-                state_updated.enemy_missile_positions,
+                new_enemy_missile_positions,
                 new_score,
                 state_updated.successful_rescues,
             )
@@ -2551,14 +3119,25 @@ class JaxSeaquest(JaxEnvironment[SeaquestState, SeaquestObservation, SeaquestInf
                 jnp.array([oxygen_depleted, player_collision, lose_life_surfacing])
             )
 
-            # Start death animation but keep divers intact during animation
+            # Start death animation; dismiss world divers (ALE clears them on
+            # death) so they cannot keep swimming as phantoms through the anim.
+            # Preserve diver_array collected bits — do not pass positions into
+            # soft_reset (live→0 would all-zero then re-arm already-bagged lanes).
             death_animation_state = state_updated.replace(
                 score=state.score + collision_points,
                 death_counter=jnp.array(90),
-                spawn_state=self.soft_reset_spawn_state(state_updated.spawn_state),
+                diver_positions=jnp.zeros_like(state_updated.diver_positions),
+                spawn_state=self.soft_reset_spawn_state(
+                    state_updated.spawn_state,
+                    rng=jax.random.fold_in(
+                        state_updated.rng_key, state_updated.step_counter
+                    ),
+                ),
             )
-            
-            # Create the scoring state
+
+            # Create the scoring state. Dismiss any uncollected world divers so
+            # their stale arm bit cannot place a diver on the wrong lane after
+            # the freeze (ALE keeps collected lanes at 0 across the surface).
             scoring_state = state_updated.replace(
                 player_x=player_x,
                 player_y=player_y,
@@ -2566,9 +3145,15 @@ class JaxSeaquest(JaxEnvironment[SeaquestState, SeaquestObservation, SeaquestInf
                 lives=state_updated.lives,
                 score=state_updated.score,
                 successful_rescues=state_updated.successful_rescues + 1,
-                spawn_state=self.soft_reset_spawn_state(state_updated.spawn_state).replace(
+                diver_positions=jnp.zeros_like(state_updated.diver_positions),
+                spawn_state=self.soft_reset_spawn_state(
+                    state_updated.spawn_state,
+                    state_updated.diver_positions,
+                    rng=jax.random.fold_in(
+                        state_updated.rng_key, state_updated.step_counter + 1
+                    ),
+                ).replace(
                     difficulty=state_updated.spawn_state.difficulty + 1,
-                    survived=state_updated.spawn_state.survived.astype(jnp.int32)
                 ),
                 death_counter=jnp.array(-(96 + state_updated.oxygen * 2)),
             )
@@ -2670,7 +3255,7 @@ class SeaquestRenderer(JAXGameRenderer):
     def __init__(self, consts: SeaquestConstants = None, config: render_utils.RendererConfig = None):
         self.consts = consts or SeaquestConstants()
         super().__init__(self.consts)
-        
+
         # Use injected config if provided, else default
         if config is None:
             self.config = render_utils.RendererConfig(
@@ -2684,14 +3269,14 @@ class SeaquestRenderer(JAXGameRenderer):
 
         # 1. Start from (possibly modded) asset config provided via constants
         final_asset_config = list(self.consts.ASSET_CONFIG)
-        
+
         # 2. Create procedural assets using modded constants
         procedural_sprites = self._create_procedural_sprites()
-        
+
         # 3. Append procedural assets
         for name, data in procedural_sprites.items():
             final_asset_config.append({'name': name, 'type': 'procedural', 'data': data})
-        
+
         sprite_path = os.path.join(render_utils.get_base_sprite_dir(), "seaquest")
 
         # 4. Load all assets, create palette, and generate ID masks
@@ -2702,25 +3287,63 @@ class SeaquestRenderer(JAXGameRenderer):
             self.COLOR_TO_ID,
             self.FLIP_OFFSETS
         ) = self.jr.load_and_setup_assets(final_asset_config, sprite_path)
-        
+
+        # Load packed surface-wave background frames (bg/1.npy + bg/2.npy).
+        # Done once at init — render only indexes.
+        # Live ALE from reset: hold frame 0 for 6 frames, then advance every 8
+        # (t=0..5 → 0, t=6..13 → 1, t=14..21 → 2, ...).
+        self.SURFACE_WAVE_FIRST_HOLD = 6
+        self.SURFACE_WAVE_HOLD = 8
+        # Horizon + surface strip re-blitted after the player for ALE-style occlusion.
+        # ALE at player_y=46: yellow shows on rows 46-52; rows 53-56 fully cover the
+        # hull (two dark-blue wave lines, black waterline, one deep-blue row).
+        self.SURFACE_OCCLUSION_Y0 = 53
+        self.SURFACE_OCCLUSION_Y1 = 57
+        self.BACKGROUND_FRAMES = self._load_surface_wave_backgrounds(sprite_path)
+        # Keep BACKGROUND / BACKGROUND_ALT aliases for mods that still reference them.
+        self.BACKGROUND = self.BACKGROUND_FRAMES[0]
+        alt_i = 1 if self.BACKGROUND_FRAMES.shape[0] > 1 else 0
+        self.BACKGROUND_ALT = self.BACKGROUND_FRAMES[alt_i]
+
         # Pre-compute oxygen bar color ID (convert JAX array to numpy, then tuple for dict lookup)
         oxygen_color_rgb = np.asarray(self.consts.OXYGEN_BAR_COLOR[:3])
         self.OXYGEN_COLOR_ID = self.COLOR_TO_ID.get(tuple(oxygen_color_rgb), 0)
         oxygen_bar_bg_color_rgb = np.asarray(self.consts.OXYGEN_BAR_BG_COLOR[:3])
         self.OXYGEN_BAR_BG_COLOR_ID = self.COLOR_TO_ID.get(tuple(oxygen_bar_bg_color_rgb), 0)
+        # Flash-off fill is black (ALE leaves the drained segment black, not red).
+        self.OXYGEN_FLASH_OFF_COLOR_ID = self.COLOR_TO_ID.get((0, 0, 0), 0)
 
         self.SHARK_COLOR_MAP = self._precompute_shark_color_map()
+
+    def _load_surface_wave_backgrounds(self, sprite_path: str) -> jnp.ndarray:
+        """Stack packed background color-ID rasters for surface-wave flicker.
+
+        Uses the base background from asset loading (``bg/1.npy``) plus an
+        optional second packed frame at ``bg/2.npy``.
+        """
+        frames = [np.asarray(self.BACKGROUND)]
+        bg2_path = os.path.join(sprite_path, "bg", "2.npy")
+        if os.path.exists(bg2_path):
+            bg2_rgba = self.jr.loadFrame(bg2_path)
+            frames.append(
+                np.asarray(self.jr._create_background_raster(bg2_rgba, self.COLOR_TO_ID))
+            )
+        return jnp.asarray(np.stack(frames, axis=0))
+
     def _create_procedural_sprites(self) -> dict:
         """Creates 1x1 pixel sprites to ensure colors are in the palette."""
         procedural_sprites = {}
         for i, color in enumerate(self.consts.SHARK_DIFFICULTY_COLORS):
             rgba = jnp.array(list(color) + [255], dtype=jnp.uint8).reshape(1, 1, 4)
             procedural_sprites[f'shark_color_{i}'] = rgba
-        
+
         rgba_oxy = jnp.array(list(self.consts.OXYGEN_BAR_COLOR[:3]) + [255], dtype=jnp.uint8).reshape(1, 1, 4)
         procedural_sprites['oxygen_bar_color'] = rgba_oxy
         rgba_oxy_bg = jnp.array(list(self.consts.OXYGEN_BAR_BG_COLOR[:3]) + [255], dtype=jnp.uint8).reshape(1, 1, 4)
         procedural_sprites['oxygen_bar_bg_color'] = rgba_oxy_bg
+        procedural_sprites['oxygen_flash_off_color'] = jnp.array(
+            [0, 0, 0, 255], dtype=jnp.uint8
+        ).reshape(1, 1, 4)
         return procedural_sprites
 
     def _precompute_shark_color_map(self) -> jnp.ndarray:
@@ -2728,12 +3351,12 @@ class SeaquestRenderer(JAXGameRenderer):
         color_cycle_indices = jnp.array([0, 1, 2, 3, 0, 1, 0, 3])
         cycle_rgb_colors = self.consts.SHARK_DIFFICULTY_COLORS[color_cycle_indices]
         return jnp.array([self.COLOR_TO_ID[tuple(rgb)] for rgb in np.array(cycle_rgb_colors)])
-    
+
     # --- Sequential Rendering for Batched Objects ---
     def render_object_sequentially(self, current_raster, pos, shape_masks, flip_offsets, anim_idx):
         """Helper to render a single object with a pre-calculated animation index."""
         is_active = pos[2] != 0
-        
+
         return jax.lax.cond(
             is_active,
             lambda r: self.jr.render_at_clipped(r, pos[0], pos[1], shape_masks[anim_idx],
@@ -2742,7 +3365,7 @@ class SeaquestRenderer(JAXGameRenderer):
             lambda r: r,
             current_raster
         )
-    
+
     # --- Render Divers ---
     # Original cycle: Frame 0 for 16 steps, Frame 1 for 4 steps. Total = 20 steps.
     def _draw_divers(self, raster, state):
@@ -2766,21 +3389,42 @@ class SeaquestRenderer(JAXGameRenderer):
 
     @partial(jax.jit, static_argnames=['self'])
     def render(self, state: SeaquestState) -> jnp.ndarray:
-        raster = self.BACKGROUND
-        
+        # Cycle pre-baked surface-wave backgrounds.
+        # Live ALE from reset: first band holds SURFACE_WAVE_FIRST_HOLD frames,
+        # then advances every SURFACE_WAVE_HOLD (indices at t=0,6,14,22,...).
+        n_bg = self.BACKGROUND_FRAMES.shape[0]
+        hold = jnp.int32(self.SURFACE_WAVE_HOLD)
+        first_hold = jnp.int32(self.SURFACE_WAVE_FIRST_HOLD)
+        t = state.step_counter.astype(jnp.int32)
+        bg_idx = jnp.where(
+            t < first_hold,
+            jnp.int32(0),
+            jnp.int32(1) + (t - first_hold) // hold,
+        ) % n_bg
+        raster = self.BACKGROUND_FRAMES[bg_idx]
+
         # Use the raw step_counter for precise animation control
         step_counter = state.step_counter
 
         # --- Player & Player Torpedo ---
-        # Original cycle: 3 frames, each shown for 4 steps. Total = 12 steps.
-        player_anim_idx = (step_counter % 12) // 4
+        # 3 frames × 4 steps. Live ALE from reset changes at t=2,6,10,14,...
+        # i.e. ((step+2)%12)//4 (first period is only 2 frames on frame 0).
+        player_anim_idx = ((step_counter + 2) % 12) // 4
         raster = self.jr.render_at(
             raster, state.player_x, state.player_y,
             self.SHAPE_MASKS['player_sub'][player_anim_idx],
             flip_horizontal=state.player_direction == self.consts.FACE_LEFT,
             flip_offset=self.FLIP_OFFSETS['player_sub']
         )
-        
+
+        # Re-blit the 4 waterline occlusion rows (53-56) so the player hull is
+        # partially covered while the conning tower (46-52) stays visible.
+        # Colors come from the active packed bg frame (wave flicker).
+        y0 = self.SURFACE_OCCLUSION_Y0
+        y1 = self.SURFACE_OCCLUSION_Y1
+        surface_strip = self.BACKGROUND_FRAMES[bg_idx, y0:y1, :]
+        raster = raster.at[y0:y1, :].set(surface_strip)
+
         torp = state.player_missile_position
         raster = jax.lax.cond(
             torp[2] != 0,
@@ -2791,7 +3435,11 @@ class SeaquestRenderer(JAXGameRenderer):
         )
 
         raster = self._draw_divers(raster, state)
-        
+
+        # Surface sub is drawn with enemy subs above; re-apply occlusion so it
+        # clips under the waterline the same way as the player.
+        raster = raster.at[y0:y1, :].set(surface_strip)
+
         # --- Render Enemy Torpedoes ---
         # No animation, so index is always 0
         raster = jax.lax.fori_loop(
@@ -2805,7 +3453,7 @@ class SeaquestRenderer(JAXGameRenderer):
         shark_anim_idx = jax.lax.select((step_counter % 24) < 16, 0, 1)
         difficulty_idx = state.spawn_state.difficulty % 8
         shark_color_id = self.SHARK_COLOR_MAP[difficulty_idx]
-        
+
         base_shark_masks = self.SHAPE_MASKS['shark_base']
         recolored_shark_masks = jnp.where(base_shark_masks != self.jr.TRANSPARENT_ID, shark_color_id, base_shark_masks)
         raster = jax.lax.fori_loop(
@@ -2813,7 +3461,7 @@ class SeaquestRenderer(JAXGameRenderer):
             lambda i, r: self.render_object_sequentially(r, state.shark_positions[i], recolored_shark_masks, self.FLIP_OFFSETS['shark_base'], shark_anim_idx),
             raster
         )
-        
+
         # --- UI Elements (Unchanged) ---
         max_score_digits = 6
         score_digits = self.jr.int_to_digits(state.score, max_digits=max_score_digits)
@@ -2833,18 +3481,45 @@ class SeaquestRenderer(JAXGameRenderer):
             spacing=8,
             max_digits_to_render=max_score_digits,
         )
-        
+
         raster = self.jr.render_indicator(raster, 58, 22, state.lives, self.SHAPE_MASKS['life_indicator'], spacing=8, max_value=3)
-        
+
         # Collected divers blink when there are 6 of them
         visible_divers = jax.lax.select(
             jnp.logical_and(state.divers_collected == 6, (state.step_counter % 16) < 8),
             0,
             state.divers_collected
         )
-        raster = self.jr.render_indicator(raster, 49, 178, visible_divers, self.SHAPE_MASKS['diver_indicator'], spacing=10, max_value=6)
+        # ALE OC CollectedDiver at x=58,66,74,... (pitch 8); y=178.
+        raster = self.jr.render_indicator(
+            raster, 58, 178, visible_divers, self.SHAPE_MASKS['diver_indicator'],
+            spacing=8, max_value=6,
+        )
 
-        raster = self.jr.render_bar(raster, 49, 170, state.oxygen, 64, 63, 5, self.OXYGEN_COLOR_ID, self.OXYGEN_BAR_BG_COLOR_ID)
+        # Low-oxygen warning: white fill blinks to black (ALE ≤16 O₂, 16f off then
+        # 16f on). Suppress while refilling (surface / opening fill) — ALE does
+        # not flash during oxygen refill.
+        flash_period = self.consts.OXYGEN_FLASH_PERIOD.astype(jnp.int32)
+        at_surface = state.player_y <= jnp.int32(46)
+        in_init_fill = state.just_surfaced == -1
+        refilling = jnp.logical_or(
+            jnp.logical_and(at_surface, state.oxygen < 64),
+            jnp.logical_and(in_init_fill, state.oxygen < 64),
+        )
+        # Black for the first half of the 32-frame period (aligned with drain ticks).
+        flash_off = jnp.logical_and(
+            jnp.logical_and(
+                state.oxygen <= self.consts.OXYGEN_FLASH_THRESHOLD,
+                jnp.logical_not(refilling),
+            ),
+            (state.step_counter % flash_period) < (flash_period // 2),
+        )
+        oxy_fill_id = jax.lax.select(
+            flash_off, self.OXYGEN_FLASH_OFF_COLOR_ID, self.OXYGEN_COLOR_ID
+        )
+        raster = self.jr.render_bar(
+            raster, 49, 170, state.oxygen, 64, 63, 5, oxy_fill_id, self.OXYGEN_BAR_BG_COLOR_ID
+        )
 
         raster = self.jr.draw_rects(
             raster,
@@ -2852,5 +3527,5 @@ class SeaquestRenderer(JAXGameRenderer):
             sizes=jnp.array([[8, self.config.game_dimensions[0]]]),
             color_id=self.BACKGROUND[0, 0]
         )
-        
+
         return self.jr.render_from_palette(raster, self.PALETTE)

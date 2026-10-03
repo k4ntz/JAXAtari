@@ -586,6 +586,7 @@ class BeamriderObservation(struct.PyTreeNode):
     torpedoes_left: chex.Array
     white_ufo_left: chex.Array
     lives: chex.Array
+    score: chex.Array
     sector: chex.Array
     shooting_delay: chex.Array
     bullet_type: chex.Array
@@ -1087,6 +1088,7 @@ class JaxBeamrider(JaxEnvironment[BeamriderState, BeamriderObservation, Beamride
             torpedoes_left=level.torpedoes_left,
             white_ufo_left=level.white_ufo_left,
             lives=state.lives,
+            score=state.score,
             sector=state.sector,
             shooting_delay=level.shooting_delay,
             bullet_type=level.bullet_type,
@@ -4770,6 +4772,7 @@ class JaxBeamrider(JaxEnvironment[BeamriderState, BeamriderObservation, Beamride
             "torpedoes_left": spaces.Box(low=0.0, high=3.0, shape=(), dtype=jnp.float32),
             "white_ufo_left": spaces.Box(low=0.0, high=100.0, shape=(), dtype=jnp.float32),
             "lives": spaces.Box(low=0.0, high=255.0, shape=(), dtype=jnp.float32),
+            "score": spaces.Box(low=0.0, high=1e7, shape=(), dtype=jnp.float32),
             "sector": spaces.Box(low=1.0, high=15.0, shape=(), dtype=jnp.float32),
             "shooting_delay": spaces.Box(low=0.0, high=255.0, shape=(), dtype=jnp.float32),
             "bullet_type": spaces.Box(low=0.0, high=2.0, shape=(), dtype=jnp.float32),

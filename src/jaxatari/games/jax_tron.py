@@ -320,6 +320,7 @@ class TronObservation:
     doors: ObjectObservation    # n=max_doors
     wave_index: Array
     score: Array
+    lives: Array
 
 
 @struct.dataclass
@@ -2709,7 +2710,8 @@ class JaxTron(JaxEnvironment[TronState, TronObservation, TronInfo, TronConstants
             player=player,
             enemies=enemies,
             discs=discs,
-            doors=doors
+            doors=doors,
+            lives=state.player.lives[0].astype(jnp.int32),
         )
 
     def observation_space(self) -> spaces.Dict:
@@ -2727,7 +2729,7 @@ class JaxTron(JaxEnvironment[TronState, TronObservation, TronInfo, TronConstants
             "doors": spaces.get_object_space(n=c.max_doors, screen_size=screen_size),
             "wave_index": spaces.Box(low=0, high=c.num_waves - 1, shape=(), dtype=jnp.int32),
             "score": spaces.Box(low=0, high=10**6 - 1, shape=(), dtype=jnp.int32),
-
+            "lives": spaces.Box(low=0, high=c.player_lives, shape=(), dtype=jnp.int32),
         })
 
     @partial(jit, static_argnums=(0,))

@@ -199,6 +199,8 @@ class AsterixObservation(struct.PyTreeNode):
     player: ObjectObservation
     enemies: ObjectObservation
     collectibles: ObjectObservation
+    score: chex.Array
+    lives: chex.Array
 
 
 class AsterixInfo(struct.PyTreeNode):
@@ -727,8 +729,13 @@ class JaxAsterix(JaxEnvironment[AsterixState, AsterixObservation, AsterixInfo, A
             active=state.collectibles.alive.astype(jnp.bool_),
             visual_id=state.collectibles.type_index.astype(jnp.int32),
         )
-
-        return AsterixObservation(player=player, enemies=enemy, collectibles=collectible)
+        return AsterixObservation(
+            player=player,
+            enemies=enemy,
+            collectibles=collectible,
+            score=state.score.astype(jnp.int32),
+            lives=state.lives.astype(jnp.int32),
+        )
 
 
     @partial(jax.jit, static_argnums=(0,))
@@ -756,6 +763,8 @@ class JaxAsterix(JaxEnvironment[AsterixState, AsterixObservation, AsterixInfo, A
         # - collectibles: array of shape (8, 4)
         return spaces.Dict({
             "player": spaces.get_object_space(n=None, screen_size=(self.consts.screen_height, self.consts.screen_width)),
+            "score": spaces.Box(low=0, high=jnp.iinfo(jnp.int32).max, shape=(), dtype=jnp.int32),
+            "lives": spaces.Box(low=0, high=10, shape=(), dtype=jnp.int32),
             "enemies": spaces.get_object_space(n=8, screen_size=(self.consts.screen_height, self.consts.screen_width)),
             "collectibles": spaces.get_object_space(n=8, screen_size=(self.consts.screen_height, self.consts.screen_width)),
         })

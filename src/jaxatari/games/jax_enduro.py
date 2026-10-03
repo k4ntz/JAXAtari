@@ -1727,6 +1727,12 @@ class JaxEnduro(JaxEnvironment[EnduroGameState, EnduroObservation, EnduroInfo, E
     def render(self, state: EnduroGameState) -> jnp.ndarray:        return self.renderer.render(state)
 
     def _get_observation(self, state: EnduroGameState) -> EnduroObservation:
+        # TODO(obs-parity): paper-claim freeze. Proposed ObjectObservation build:
+        #   player = ObjectObservation.create(x=player_x, y=player_y, w=car_width_0, h=car_height_0,
+        #                                   visual_id=PLAYER_COLOR_INDEX)
+        #   enemies = ObjectObservation.create(x=opp[:,0], y=opp[:,1], w=car_widths, h=car_heights,
+        #                                     active=(opp[:,0]>-1), visual_id=opp[:,2])
+        #   + cars_to_pass, day, level, level_passed, road_left_dist, road_right_dist
         offset_int = jnp.clip(
             jnp.floor(state.track_top_x_curve_offset).astype(jnp.int32),
             -self.consts.curve_offset_base,
