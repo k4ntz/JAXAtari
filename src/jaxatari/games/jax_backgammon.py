@@ -1474,7 +1474,7 @@ class BackgammonRenderer(JAXGameRenderer):
         self.jr = render_utils.JaxRenderingUtils(self.config)
         
         # Load assets from theme folder
-        base_sprite_path = f"{os.path.dirname(os.path.abspath(__file__))}/sprites/backgammon"
+        base_sprite_path = os.path.join(render_utils.get_base_sprite_dir(), "backgammon")
         sprite_path = f"{base_sprite_path}/themes/{self.theme}"
         
         # Fallback to base folder if theme folder doesn't exist

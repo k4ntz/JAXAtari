@@ -1628,7 +1628,7 @@ class VideoChessRenderer(JAXGameRenderer):
             self.config = config
         self.jr = render_utils.JaxRenderingUtils(self.config)
 
-        sprite_path = f"{os.path.dirname(os.path.abspath(__file__))}/sprites/videochess"
+        sprite_path = os.path.join(render_utils.get_base_sprite_dir(), "videochess")
 
         asset_config = list(self.consts.ASSET_CONFIG)
 

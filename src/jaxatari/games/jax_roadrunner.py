@@ -3338,7 +3338,7 @@ class RoadRunnerRenderer(JAXGameRenderer):
             road_sprite, road_no_stripes_sprite, life_sprite, offramp_road_sprite,
             offramp_bridge_sprite,
         )
-        sprite_path = f"{os.path.dirname(os.path.abspath(__file__))}/sprites/roadrunner"
+        sprite_path = os.path.join(render_utils.get_base_sprite_dir(), "roadrunner")
 
         (
             self.PALETTE,

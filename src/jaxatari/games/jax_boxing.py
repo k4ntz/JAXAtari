@@ -823,19 +823,12 @@ class BoxingRenderer(JAXGameRenderer):
         self.config = config or render_utils.RendererConfig(game_dimensions=(210, 160), channels=3)
         self.jr = render_utils.JaxRenderingUtils(self.config)
         
-        installed_path = os.path.join(render_utils.get_base_sprite_dir(), "boxing")
-        if os.path.exists(installed_path):
-            sprite_path = installed_path
-        else:
-            sprite_path = f"{os.path.dirname(os.path.abspath(__file__))}/sprites/boxing"
+        sprite_path = os.path.join(render_utils.get_base_sprite_dir(), "boxing")
         (self.PALETTE, self.SHAPE_MASKS, self.BACKGROUND, self.COLOR_TO_ID, _) = self.jr.load_and_setup_assets(list(self.consts.ASSET_CONFIG), sprite_path)
         
-        # Custom debug colors appended to palette
-        self.DEBUG_RED_ID = self.PALETTE.shape[0]
-        self.DEBUG_GREEN_ID = self.DEBUG_RED_ID + 1
-        red_rgb = jnp.array([[255, 0, 0]], dtype=self.PALETTE.dtype)
-        green_rgb = jnp.array([[0, 255, 0]], dtype=self.PALETTE.dtype)
-        self.PALETTE = jnp.concatenate([self.PALETTE, red_rgb, green_rgb], axis=0)
+        # Custom debug colors appended to palette (handles RGB and grayscale)
+        self.PALETTE, self.DEBUG_RED_ID = self.jr.add_palette_color(self.PALETTE, (255, 0, 0))
+        self.PALETTE, self.DEBUG_GREEN_ID = self.jr.add_palette_color(self.PALETTE, (0, 255, 0))
         
         self.white_masks = {
             "body": self.SHAPE_MASKS["white_main_body"],
@@ -1046,8 +1039,12 @@ class BoxingRenderer(JAXGameRenderer):
             
             is_hitbox_1 = jnp.expand_dims(hitbox_mask == 1, axis=-1)
             is_hitbox_2 = jnp.expand_dims(hitbox_mask == 2, axis=-1)
-            
-            red_color = jnp.array([255, 0, 0], dtype=jnp.float32)
+
+            # Match overlay channel count (RGB vs grayscale native downscaling)
+            if self.config.channels == 1:
+                red_color = jnp.array([0.299 * 255.0], dtype=jnp.float32)
+            else:
+                red_color = jnp.array([255.0, 0.0, 0.0], dtype=jnp.float32)
             # Highly transparent (25% opacity) for normal punch detection zone and gloves
             blended_1 = (img.astype(jnp.float32) * 0.75 + red_color * 0.25).astype(jnp.uint8)
             # Less transparent (70% opacity) for jab detection zone

@@ -971,7 +971,7 @@ class KaboomRenderer(JAXGameRenderer):
 
         self.jr = render_utils.JaxRenderingUtils(self.config)
 
-        sprite_path = f"{os.path.dirname(os.path.abspath(__file__))}/sprites/kaboom"
+        sprite_path = os.path.join(render_utils.get_base_sprite_dir(), "kaboom")
 
         # 2. Load all assets, create palette, and generate ID masks
         (

@@ -512,7 +512,7 @@ class BasicMathRenderer(JAXGameRenderer):
 
         final_asset_config.append({'name': 'background', 'type': 'background', 'data': wall_sprite},)
 
-        sprite_path = f"{os.path.dirname(os.path.abspath(__file__))}/sprites/basicmath"
+        sprite_path = os.path.join(render_utils.get_base_sprite_dir(), "basicmath")
         (
             self.PALETTE,
             self.SHAPE_MASKS,

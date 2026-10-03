@@ -1664,9 +1664,7 @@ class YarsRevengeRenderer(JAXGameRenderer):
         self.scaled_width = round(self.consts.WIDTH * self.config.width_scaling)
 
         asset_config = self._get_asset_config()
-        sprite_path = (
-            f"{os.path.dirname(os.path.abspath(__file__))}/sprites/yarsrevenge"
-        )
+        sprite_path = os.path.join(render_utils.get_base_sprite_dir(), "yarsrevenge")
 
         # Load all sprites
         (

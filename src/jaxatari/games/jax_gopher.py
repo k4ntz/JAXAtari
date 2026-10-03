@@ -1243,7 +1243,7 @@ class GopherRenderer(JAXGameRenderer):
         )
         self.jr = render_utils.JaxRenderingUtils(self.config)
         final_asset_config = list(self.consts.ASSET_CONFIG)
-        sprite_path = f"{os.path.dirname(os.path.abspath(__file__))}/sprites/gopher"
+        sprite_path = os.path.join(render_utils.get_base_sprite_dir(), "gopher")
         (self.PALETTE, self.SHAPE_MASKS, self.BACKGROUND, self.COLOR_TO_ID, self.FLIP_OFFSETS) = self.jr.load_and_setup_assets(final_asset_config, sprite_path)
         # Solid dug-tile color (tunnel / hole sprites are flat fills).
         self.DUG_COLOR_ID = int(self.COLOR_TO_ID[(223, 183, 85)])

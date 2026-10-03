@@ -1860,7 +1860,7 @@ class WizardOfWorRenderer(JAXGameRenderer):
 
         self.jr = render_utils.JaxRenderingUtils(self.config)
 
-        sprite_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "sprites", "wizardofwor")
+        sprite_path = os.path.join(render_utils.get_base_sprite_dir(), "wizardofwor")
         final_asset_config = self._asset_config_with_ale_colors(
             list(self.consts.ASSET_CONFIG), sprite_path
         )

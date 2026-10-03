@@ -1307,7 +1307,7 @@ class JourneyEscapeRenderer(JAXGameRenderer):
         self.jr = render_utils.JaxRenderingUtils(self.config)
 
         asset_config = list(self.consts.ASSET_CONFIG)
-        sprite_path = f"{os.path.dirname(os.path.abspath(__file__))}/sprites/journey_escape"
+        sprite_path = os.path.join(render_utils.get_base_sprite_dir(), "journey_escape")
 
         COLOR_BLACK = (0, 0, 0)
         COLOR_BLUE = (24, 26, 167)

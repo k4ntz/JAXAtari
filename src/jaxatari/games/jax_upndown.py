@@ -2462,7 +2462,7 @@ class UpNDownRenderer(JAXGameRenderer):
         
         # Build asset config locally (matches other games' pattern)
         asset_config, level_background_files = self._get_asset_config(background, top_block, bottom_block, temp_pointer, blackout_square)
-        sprite_path = f"{os.path.dirname(os.path.abspath(__file__))}/sprites/up_n_down/"
+        sprite_path = os.path.join(render_utils.get_base_sprite_dir(), "up_n_down")
 
         (
             self.PALETTE,
@@ -2658,7 +2658,7 @@ class UpNDownRenderer(JAXGameRenderer):
 
     def _get_group_sprite_sizes(self, relative_files: list[str]) -> Tuple[list[int], int]:
         """Returns sprite heights and total height for a configured file group."""
-        sprite_root = f"{os.path.dirname(os.path.abspath(__file__))}/sprites/up_n_down"
+        sprite_root = os.path.join(render_utils.get_base_sprite_dir(), "up_n_down")
         sizes = []
         for relative_file in relative_files:
             sprite = jnp.load(f"{sprite_root}/{relative_file}")
@@ -2668,8 +2668,8 @@ class UpNDownRenderer(JAXGameRenderer):
 
     def _get_asset_config(self, backgroundSprite: jnp.ndarray, topBlockSprite: jnp.ndarray, bottomBlockSprite: jnp.ndarray, tempPointer: jnp.ndarray, blackoutSquare: jnp.ndarray) -> tuple[list, list[list[str]]]:
         """Return asset manifest and ordered road files (renderer-local like other games)."""
-        road_dir = f"{os.path.dirname(os.path.abspath(__file__))}/sprites/up_n_down/roads"
-        background_dir = f"{os.path.dirname(os.path.abspath(__file__))}/sprites/up_n_down/background"
+        road_dir = os.path.join(render_utils.get_base_sprite_dir(), "up_n_down", "roads")
+        background_dir = os.path.join(render_utils.get_base_sprite_dir(), "up_n_down", "background")
         road_files = sorted(
             file for file in os.listdir(road_dir)
             if file.endswith(".npy")

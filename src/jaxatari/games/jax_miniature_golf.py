@@ -15,7 +15,7 @@ from jaxatari.environment import JaxEnvironment, JAXAtariAction as Action, Objec
 from jaxatari.modification import AutoDerivedConstants
 
 
-_SPRITE_DIR = f"{os.path.dirname(os.path.abspath(__file__))}/sprites/miniature_golf"
+_SPRITE_DIR = os.path.join(render_utils.get_base_sprite_dir(), "miniature_golf")
 _WALL_RGB = np.array([210, 210, 64], dtype=np.int32)
 
 HOLE_X: Tuple[int, int, int, int, int, int, int, int, int] = (8, 83, 83, 82, 148, 148, 153, 29, 19)
@@ -1017,7 +1017,7 @@ class MiniatureGolfRenderer(JAXGameRenderer):
         self.jr = render_utils.JaxRenderingUtils(self.config)
 
         # 2. Update asset config to include both walls
-        sprite_path = f"{os.path.dirname(os.path.abspath(__file__))}/sprites/miniature_golf"
+        sprite_path = os.path.join(render_utils.get_base_sprite_dir(), "miniature_golf")
 
         # 3. Make a single call to the setup function
         (

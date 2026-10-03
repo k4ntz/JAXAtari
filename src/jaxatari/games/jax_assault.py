@@ -1008,7 +1008,7 @@ class AssaultRenderer(JAXGameRenderer):
             'data': player_projectile_sideways
         })
         
-        local_sprite_path = os.path.join(os.path.dirname(__file__), "sprites", "assault")
+        local_sprite_path = os.path.join(render_utils.get_base_sprite_dir(), "assault")
         
         (
             self.PALETTE,

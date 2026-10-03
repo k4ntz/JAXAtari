@@ -6,21 +6,11 @@ from functools import partial
 import numpy as np
 from typing import Dict, Any, List, Optional, Tuple, NamedTuple, Union
 from jax.scipy.ndimage import map_coordinates
-from platformdirs import user_data_dir
-
-def get_base_sprite_dir() -> str:
-    """Returns the base directory for JAXAtari sprites: ~/.local/share/jaxatari/sprites"""
-    return os.path.join(user_data_dir("jaxatari"), "sprites")
-
-
-def get_base_state_dir() -> str:
-    """Returns the base directory for JAXAtari game states: ~/.local/share/jaxatari/states"""
-    return os.path.join(user_data_dir("jaxatari"), "states")
-
-
-def get_game_state_dir(game_name: str) -> str:
-    """Returns the directory for a specific game's downloadable states."""
-    return os.path.join(get_base_state_dir(), game_name)
+from jaxatari.paths import (  # noqa: F401 — re-exported for existing callers
+    get_base_sprite_dir,
+    get_base_state_dir,
+    get_game_state_dir,
+)
 
 class RendererConfig(struct.PyTreeNode):
     """Configuration for the rendering pipeline."""

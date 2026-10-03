@@ -2906,7 +2906,7 @@ class OthelloRenderer(JAXGameRenderer):
         self.jr = render_utils.JaxRenderingUtils(self.config)
 
         # Use local sprite path
-        sprite_path = os.path.join(os.path.dirname(__file__), "sprites", "othello")
+        sprite_path = os.path.join(render_utils.get_base_sprite_dir(), "othello")
 
         # Load and setup assets
         (
