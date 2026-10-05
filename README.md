@@ -1,4 +1,4 @@
-# JAXtari: GPU-Accelerated Object-Centric Atari Environments
+# JAXtari: High-Throughput and Easy-to-Modify Arcade Learning Environment
 
 Quentin Delfosse*, Raban Emunds*, Paul Seitz*, Sebastian Wette*, Jannis Blüml*, Daniel Kirn, Dominik Mandok, Kristian Kersting —  
 [AI/ML Lab, TU Darmstadt](https://www.aiml.informatik.tu-darmstadt.de/)
