@@ -1,13 +1,12 @@
-# JAXAtari: GPU-Accelerated Object-Centric Atari Environments
+# JAXtari: GPU-Accelerated Object-Centric Atari Environments
 
-[License](LICENSE)
-
-Quentin Delfosse, Raban Emunds, Paul Seitz, Jannis Blüml, Sebastian Wette, Dominik Mandok —  
+Quentin Delfosse*, Raban Emunds*, Paul Seitz*, Sebastian Wette*, Jannis Blüml*, Daniel Kirn, Dominik Mandok, Kristian Kersting —  
 [AI/ML Lab, TU Darmstadt](https://www.aiml.informatik.tu-darmstadt.de/)
 
-[Features](#features) • [Installation](#installation) • [Quick Start](#quick-start) • [Wrappers](#wrapper-reference) • [Environments](#available-environments) • [Contributing](#contributing) • [Citation](#citation)
+[Citation](#citation) • [Features](#features) • [Installation](#installation) • [Quick Start](#quick-start) • [Wrappers](#wrapper-reference) • [Environments](#available-environments) • [Contributing](#contributing) • [License](LICENSE)
 
-**JAXAtari** is a GPU-accelerated, object-centric Atari environment framework powered by [JAX](https://github.com/google/jax). Inspired by [OCAtari](https://github.com/k4ntz/OC_Atari), it enables training agents with 100M steps in under 1 hour (pixel-based observations) or under 15 minutes (object-centric observation) through JIT compilation, vectorization, and full GPU parallelization — while exposing structured, object-centric observations alongside standard pixel inputs. Similar to [HackAtari](https://github.com/k4ntz/HackAtari), it also supports game modifications for testing agent generalization.
+
+**JAXtari** is a GPU-accelerated, object-centric Atari environment framework powered by [JAX](https://github.com/google/jax). Inspired by [OCAtari](https://github.com/k4ntz/OC_Atari), it enables training agents with 100M steps in under 1 hour (pixel-based observations) or under 15 minutes (object-centric observation) through JIT compilation, vectorization, and full GPU parallelization — while exposing structured, object-centric observations alongside standard pixel inputs. Similar to [HackAtari](https://github.com/k4ntz/HackAtari), it also supports game modifications for testing agent generalization.
 
 ---
 
@@ -114,7 +113,7 @@ print(jaxatari.list_available_games())
 
 ### Game modifications
 
-JAXAtari ships with pre-built modifications for testing generalization:
+JAXtari ships with pre-built modifications for testing generalization:
 
 ```python
 import jaxatari
@@ -193,7 +192,7 @@ _, (rewards, terminations, truncations, infos) = jax.lax.scan(
 
 ### Gymnasium compatibility *(WIP)*
 
-> **Note:** This wrapper is currently work in progress and supports interoperability with CPU-based Gymnasium pipelines (e.g. stable-baselines3). It currently only exposes pixel observations and does not accept JAXAtari wrappers. For JAX-native training use the wrapper stack above instead.
+> **Note:** This wrapper is currently work in progress and supports interoperability with CPU-based Gymnasium pipelines (e.g. stable-baselines3). It currently only exposes pixel observations and does not accept JAXtari wrappers. For JAX-native training use the wrapper stack above instead.
 
 ```python
 from jaxatari.gym_wrapper import GymnasiumJaxAtariWrapper
@@ -256,34 +255,6 @@ base env  →  [MultiRewardWrapper]  →  AtariWrapper  →  <obs wrapper>  → 
 | `LogWrapper`                   | Tracks episode returns and lengths.                                                                                                    |
 | `MultiRewardWrapper`           | Computes multiple reward functions at every step. Apply before `AtariWrapper`.                                                         |
 | `MultiRewardLogWrapper`        | Tracks multiple reward components separately. Use with `MultiRewardWrapper`.                                                           |
-
-
----
-
-## Available Environments
-
-A full status overview with quality ratings is in [games_covered.md](games_covered.md). Featured environments:
-
-
-| Environment | Mods available |
-| ----------- | -------------- |
-| Pong        | 9              |
-| Beamrider   | 8              |
-| Phoenix     | 11             |
-| Tennis      | 13             |
-| Skiing      | 20             |
-| Montezuma   | 15             |
-| Seaquest    | 7              |
-| Kangaroo    | 42             |
-| Freeway     | 13             |
-| Venture     | 9              |
-| Qbert       | 16             |
-| Frostbite   | 14             |
-| Bankheist   | 14             |
-| Ms. PacMan  | 12             |
-| Gravitar    | 15             |
-| Enduro      | 12             |
-
 
 ---
 
@@ -354,8 +325,8 @@ Feel free to share new mods or environments by opening a PR!
 
 ```bibtex
 @misc{jaxatari2026,
-  author = {Delfosse, Quentin and Emunds, Raban and Seitz, Paul and Wette, Sebastian and Bl{\"u}ml, Jannis and Kersting, Kristian},
-  title = {JAXAtari: A High-Performance Framework for Reasoning agents},
+  author = {Delfosse, Quentin and Emunds, Raban and Seitz, Paul and Wette, Sebastian and Kirn, Daniel and Mandok, Dominik and Bl{\"u}ml, Jannis and Kersting, Kristian},
+  title = {JAXtari: High-Throughput and Easy-to-Modify Arcade Learning Environment},
   year = {2026},
   publisher = {GitHub},
   journal = {GitHub repository},
