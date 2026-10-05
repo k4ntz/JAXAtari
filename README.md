@@ -1,11 +1,10 @@
 # JAXAtari: GPU-Accelerated Object-Centric Atari Environments
 
-[License](LICENSE)
-
-Quentin Delfosse, Raban Emunds, Paul Seitz, Jannis Blüml, Sebastian Wette, Dominik Mandok —  
+Quentin Delfosse*, Raban Emunds*, Paul Seitz*, Sebastian Wette*, Jannis Blüml*, Daniel Kirn, Dominik Mandok, Kristian Kersting —  
 [AI/ML Lab, TU Darmstadt](https://www.aiml.informatik.tu-darmstadt.de/)
 
-[Features](#features) • [Installation](#installation) • [Quick Start](#quick-start) • [Wrappers](#wrapper-reference) • [Environments](#available-environments) • [Contributing](#contributing) • [Citation](#citation)
+[Citation](#citation) • [Features](#features) • [Installation](#installation) • [Quick Start](#quick-start) • [Wrappers](#wrapper-reference) • [Environments](#available-environments) • [Contributing](#contributing) • [License](LICENSE)
+
 
 **JAXAtari** is a GPU-accelerated, object-centric Atari environment framework powered by [JAX](https://github.com/google/jax). Inspired by [OCAtari](https://github.com/k4ntz/OC_Atari), it enables training agents with 100M steps in under 1 hour (pixel-based observations) or under 15 minutes (object-centric observation) through JIT compilation, vectorization, and full GPU parallelization — while exposing structured, object-centric observations alongside standard pixel inputs. Similar to [HackAtari](https://github.com/k4ntz/HackAtari), it also supports game modifications for testing agent generalization.
 
@@ -354,8 +353,8 @@ Feel free to share new mods or environments by opening a PR!
 
 ```bibtex
 @misc{jaxatari2026,
-  author = {Delfosse, Quentin and Emunds, Raban and Seitz, Paul and Wette, Sebastian and Bl{\"u}ml, Jannis and Kersting, Kristian},
-  title = {JAXAtari: A High-Performance Framework for Reasoning agents},
+  author = {Delfosse, Quentin and Emunds, Raban and Seitz, Paul and Wette, Sebastian and Kirn, Daniel and Mandok, Dominik and Bl{\"u}ml, Jannis and Kersting, Kristian},
+  title = {JAXtari: High-Throughput and Easy-to-Modify Arcade Learning Environment},
   year = {2026},
   publisher = {GitHub},
   journal = {GitHub repository},
