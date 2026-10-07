@@ -97,6 +97,7 @@ GAME_MODULES = {
     "miniaturegolf": "jaxatari.games.jax_miniature_golf",
     "yarsrevenge": "jaxatari.games.jax_yarsrevenge",
     "crazyclimber": "jaxatari.games.jax_crazy_climber",
+    "icehockey": "jaxatari.games.jax_icehockey",
     # Add new games here
 }
 
@@ -152,7 +153,8 @@ MOD_MODULES = {
     "yarsrevenge": "jaxatari.games.mods.yarsrevenge_mods.YarsRevengeEnvMod",
     "boxing": "jaxatari.games.mods.boxing_mods.BoxingEnvMod",
     "amidar": "jaxatari.games.mods.amidar_mods.AmidarEnvMod",
-    "timepilot": "jaxatari.games.mods.timepilot_mods.TimePilotEnvMod",
+    "timepilot": "jaxatari.games.mods.timepilot_mods.TimePilotEnvMod"
+    "icehockey": "jaxatari.games.mods.icehockey_mods.IceHockeyEnvMod",
 }
 
 
