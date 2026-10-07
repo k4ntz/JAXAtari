@@ -2279,7 +2279,9 @@ class JaxUpNDown(JaxEnvironment[UpNDownState, UpNDownObservation, UpNDownInfo, U
             height=state.enemy_cars.position.height.astype(jnp.int32),
             active=enemy_visible.astype(jnp.int32),
             visual_id=state.enemy_cars.type.astype(jnp.int32),
-            state=state.enemy_cars.speed.astype(jnp.int32),
+            # Speed is signed in state; direction is already encoded in orientation.
+            # Observation `state` uses [0, 255], so expose magnitude only.
+            state=jnp.abs(state.enemy_cars.speed).astype(jnp.int32),
             orientation=enemy_orientation,
         )
 

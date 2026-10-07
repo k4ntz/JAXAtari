@@ -444,20 +444,21 @@ class CozyStartMod(JaxtariPostStepModPlugin):
         is_cozy = new_state.step_count < 500
         wake_up_step = new_state.step_count == 500
 
-        return jax.lax.cond(
-            is_cozy,
-            lambda: self._cage_ghosts(new_state),
-            lambda: jax.lax.cond(
-                wake_up_step,
-                lambda: self._release_ghosts(new_state),  # Reset them on exactly step 500
-                lambda: new_state  # Let the engine run normally after 500
-            )
-        )
+        # Single cond tree with identical branch pytrees (nested conds can diverge
+        # when release/cage mutate ghost field dtypes differently).
+        def branch(_):
+            caged = self._cage_ghosts(new_state)
+            released = self._release_ghosts(new_state)
+            after_cozy = jax.lax.cond(wake_up_step, lambda: released, lambda: new_state)
+            return jax.lax.cond(is_cozy, lambda: caged, lambda: after_cozy)
+
+        return branch(None)
 
     def _cage_ghosts(self, state):
         ghosts = state.ghosts
-        new_modes = jnp.full_like(ghosts.modes, GhostMode.ENJAILED.value)
-        new_positions = jnp.full_like(ghosts.positions, self._jail_position(ghosts.positions.dtype))
+        new_modes = jnp.full_like(ghosts.modes, jnp.asarray(GhostMode.ENJAILED.value, dtype=ghosts.modes.dtype))
+        jail_pos = jnp.asarray(self._env.consts.JAIL_POSITION, dtype=ghosts.positions.dtype)
+        new_positions = jnp.broadcast_to(jail_pos, ghosts.positions.shape)
         new_timers = jnp.full_like(ghosts.timers, 9999)
         new_ghosts = ghosts._replace(modes=new_modes, positions=new_positions, timers=new_timers)
         return state.replace(ghosts=new_ghosts)
@@ -467,16 +468,26 @@ class CozyStartMod(JaxtariPostStepModPlugin):
         ghosts = state.ghosts
         consts = self._env.consts
 
-        # Array order: [Blinky, Pinky, Inky, Sue]
-        new_modes = jnp.array([GhostMode.RANDOM, GhostMode.ENJAILED, GhostMode.ENJAILED, GhostMode.ENJAILED],
-                              dtype=jnp.uint8)
-        new_positions = consts.INITIAL_GHOSTS_POSITIONS
-        new_timers = jnp.array([
-            consts.SCATTER_DURATION,
-            consts.PINKY_RELEASE_TIME,
-            consts.INKY_RELEASE_TIME,
-            consts.SUE_RELEASE_TIME
-        ], dtype=jnp.float16)
+        # Array order: [Blinky, Pinky, Inky, Sue] — match existing ghost field dtypes.
+        new_modes = jnp.array(
+            [
+                GhostMode.RANDOM.value,
+                GhostMode.ENJAILED.value,
+                GhostMode.ENJAILED.value,
+                GhostMode.ENJAILED.value,
+            ],
+            dtype=ghosts.modes.dtype,
+        )
+        new_positions = jnp.asarray(consts.INITIAL_GHOSTS_POSITIONS, dtype=ghosts.positions.dtype)
+        new_timers = jnp.array(
+            [
+                consts.SCATTER_DURATION,
+                consts.PINKY_RELEASE_TIME,
+                consts.INKY_RELEASE_TIME,
+                consts.SUE_RELEASE_TIME,
+            ],
+            dtype=ghosts.timers.dtype,
+        )
 
         new_ghosts = ghosts._replace(
             modes=new_modes,
@@ -484,9 +495,6 @@ class CozyStartMod(JaxtariPostStepModPlugin):
             timers=new_timers
         )
         return state.replace(ghosts=new_ghosts)
-
-    def _jail_position(self, dtype):
-        return jnp.array(self._env.consts.JAIL_POSITION, dtype=dtype)
 
 # More Difficult Modifications
 class InvisibleDotsMod(JaxtariInternalModPlugin):
@@ -503,15 +511,19 @@ class GhostMagnetismMod(JaxtariPostStepModPlugin):
 
     @partial(jax.jit, static_argnums=(0,))
     def run(self, prev_state, new_state):
-        # Determine which maze we are in to get the total required pellets
-        maze_idx = jax.lax.switch(
-            jnp.digitize(new_state.level.id, jnp.array([2, 4, 6, 8]), right=True).astype(jnp.int32),
-            (lambda: 0, lambda: 1, lambda: 2, lambda: 3, lambda: 3)
-        )
-        total_pellets = self._env.consts.PELLETS_TO_COLLECT[maze_idx]
+        # Determine which maze we are in to get the total required pellets.
+        # Use jnp.take so maze_idx can stay a traced integer under JIT.
+        maze_idx = jnp.digitize(
+            new_state.level.id, jnp.array([2, 4, 6, 8]), right=True
+        ).astype(jnp.int32)
+        pellets_table = jnp.asarray(self._env.consts.PELLETS_TO_COLLECT)
+        maze_idx = jnp.clip(maze_idx, 0, pellets_table.shape[0] - 1)
+        total_pellets = pellets_table[maze_idx]
 
         # Check if collected pellets > 70%
-        magnetism_active = new_state.level.collected_pellets >= (total_pellets * 0.7).astype(jnp.uint8)
+        magnetism_active = new_state.level.collected_pellets >= (total_pellets * 0.7).astype(
+            new_state.level.collected_pellets.dtype
+        )
 
         return jax.lax.cond(
             magnetism_active,

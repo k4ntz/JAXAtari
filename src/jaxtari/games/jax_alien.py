@@ -1594,7 +1594,8 @@ class JaxAlien(JaxEnvironment[AlienState, AlienObservation, AlienInfo, AlienCons
             eggs=eggs_obj,
             kill_items=kill_items_obj,
             score_items=score_items_obj,
-            score=state.level.score.astype(jnp.int32),
+            # Observation space expects a scalar score (shape=()), not (1,).
+            score=jnp.reshape(state.level.score.astype(jnp.int32), ()),
             #collision_map=BACKGROUND_COLLISION_MAP,
         )
 

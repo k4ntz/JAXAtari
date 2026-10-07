@@ -509,6 +509,9 @@ class JaxWizardOfWor(JaxEnvironment[WizardOfWorState, WizardOfWorObservation, Wi
 
     def _get_info(self, state: WizardOfWorState, all_rewards: chex.Array = None) -> WizardOfWorInfo:
         """Returns additional information about the game state."""
+        # Wrappers stack/reduce `all_rewards`; None breaks PixelObsWrapper.reduce_info.
+        if all_rewards is None:
+            all_rewards = jnp.zeros(1, dtype=jnp.float32)
         return WizardOfWorInfo(all_rewards=all_rewards)
 
     @partial(jax.jit, static_argnums=(0,))
@@ -1858,7 +1861,20 @@ class WizardOfWorRenderer(JAXGameRenderer):
         else:
             self.config = config
 
+        # Rendering utils (coordinate grids) follow the public config, including native
+        # downscaling. Asset load/ALE assembly must happen at full 210x160 first — the
+        # authored sprites are half-height and get `_scale_mask`'d into ALE pixels, then
+        # padded onto the full window. Applying loader downscale before that step leaves
+        # BACKGROUND at 210x160 while jr grids are 84x84.
         self.jr = render_utils.JaxRenderingUtils(self.config)
+        load_config = self.config
+        if self.config.downscale is not None:
+            load_config = render_utils.RendererConfig(
+                game_dimensions=self.config.game_dimensions,
+                channels=self.config.channels,
+                downscale=None,
+            )
+        load_jr = render_utils.JaxRenderingUtils(load_config)
 
         sprite_path = os.path.join(render_utils.get_base_sprite_dir(), "wizardofwor")
         final_asset_config = self._asset_config_with_ale_colors(
@@ -1871,7 +1887,8 @@ class WizardOfWorRenderer(JAXGameRenderer):
             self.BACKGROUND,
             self.COLOR_TO_ID,
             self.FLIP_OFFSETS
-        ) = self.jr.load_and_setup_assets(final_asset_config, sprite_path)
+        ) = load_jr.load_and_setup_assets(final_asset_config, sprite_path)
+        self.jr.TRANSPARENT_ID = load_jr.TRANSPARENT_ID
 
         # Upscale authored (half-height) assets to ALE pixel scale.
         # Score digits stay 1:1 — ALE keeps them single-line (~7px), not double-height.
@@ -1908,6 +1925,14 @@ class WizardOfWorRenderer(JAXGameRenderer):
         # Non-uniform scale turns the authored radar into a near-square; clear it and
         # redraw at ALE proportions in _render_radar / baked into BACKGROUND below.
         self.BACKGROUND = self._clear_and_bake_radar_box(self.BACKGROUND)
+
+        # Native downscaling: shrink the assembled ALE background to the render grid.
+        # Sprite masks stay at ALE size; render_at_* scales draw coordinates onto the grid.
+        if self.config.downscale is not None:
+            th, tw = int(self.config.downscale[0]), int(self.config.downscale[1])
+            self.BACKGROUND = jax.image.resize(
+                self.BACKGROUND.astype(jnp.float32), (th, tw), method="nearest"
+            ).astype(self.BACKGROUND.dtype)
 
         self._cache_sprite_references()
 

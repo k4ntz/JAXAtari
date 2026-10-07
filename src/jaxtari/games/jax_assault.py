@@ -1022,8 +1022,14 @@ class AssaultRenderer(JAXGameRenderer):
         # some enemy colors). Bake per-stage enemy masks with private color IDs.
         self._init_enemy_stage_masks()
 
-    def _stage_recolor_rgb(self, rgb: Tuple[int, int, int], stage: int) -> Tuple[int, int, int]:
-        r, g, b = int(rgb[0]), int(rgb[1]), int(rgb[2])
+    def _stage_recolor_color(self, color: Tuple[int, ...], stage: int) -> Tuple[int, ...]:
+        """Permute channels for stage tinting. Grayscale is a no-op (no hue to swap)."""
+        vals = tuple(int(x) for x in np.asarray(color).reshape(-1))
+        if len(vals) == 1:
+            return vals
+        if len(vals) < 3:
+            return vals
+        r, g, b = vals[0], vals[1], vals[2]
         if stage == 0:
             return (r, g, b)
         if stage == 1:
@@ -1039,11 +1045,51 @@ class AssaultRenderer(JAXGameRenderer):
             out[mask_np == src] = dst
         return jnp.asarray(out, dtype=mask.dtype)
 
+    def _ensure_palette_color(
+        self, palette: jnp.ndarray, color: Tuple[int, ...], fallback_id: int
+    ) -> Tuple[jnp.ndarray, int]:
+        """Reuse an existing palette entry, or append if uint8 ID space remains."""
+        color_arr = np.asarray(color, dtype=np.asarray(palette).dtype).reshape(-1)
+        # add_palette_color converts RGB→gray when channels==1
+        if self.config.channels == 1 and color_arr.shape[0] == 3:
+            gray = int(
+                0.299 * int(color_arr[0])
+                + 0.587 * int(color_arr[1])
+                + 0.114 * int(color_arr[2])
+            )
+            color_arr = np.asarray([gray], dtype=color_arr.dtype)
+
+        pal_np = np.asarray(palette)
+        transparent = int(self.jr.TRANSPARENT_ID)
+        for i in range(pal_np.shape[0]):
+            if i == transparent:
+                continue
+            entry = pal_np[i].reshape(-1)
+            if entry.shape[0] >= color_arr.shape[0] and np.array_equal(
+                entry[: color_arr.shape[0]], color_arr
+            ):
+                return palette, i
+
+        # Mask IDs are uint8; refuse to grow past 255.
+        if pal_np.shape[0] >= 256:
+            return palette, fallback_id
+        palette, new_id = self.jr.add_palette_color(palette, tuple(int(x) for x in color_arr.tolist()))
+        if int(new_id) > 255:
+            return palette, fallback_id
+        return palette, int(new_id)
+
     def _init_enemy_stage_masks(self) -> None:
         """Build per-stage enemy masks so recoloring does not affect shared sprites."""
         transparent = int(self.jr.TRANSPARENT_ID)
         base_enemy = np.asarray(self.SHAPE_MASKS["enemy"][0])
         base_tiny = np.asarray(self.SHAPE_MASKS["enemy_tiny"])
+
+        # Grayscale has no hue to permute; reuse base masks for all stages.
+        if self.config.channels == 1:
+            self.ENEMY_MASKS_BY_STAGE = jnp.stack([jnp.asarray(base_enemy)] * 4)
+            self.ENEMY_TINY_MASKS_BY_STAGE = jnp.stack([jnp.asarray(base_tiny)] * 4)
+            return
+
         base_ids = sorted(
             {int(x) for x in np.unique(np.concatenate([base_enemy.ravel(), base_tiny.ravel()]))}
             - {transparent, 0}
@@ -1055,13 +1101,13 @@ class AssaultRenderer(JAXGameRenderer):
         for stage in range(4):
             id_map = {}
             for color_id in base_ids:
-                rgb = tuple(int(x) for x in np.asarray(palette[color_id]))
-                new_rgb = self._stage_recolor_rgb(rgb, stage)
-                if stage == 0 or new_rgb == rgb:
+                color = tuple(int(x) for x in np.asarray(palette[color_id]).reshape(-1))
+                new_color = self._stage_recolor_color(color, stage)
+                if stage == 0 or new_color == color:
                     id_map[color_id] = color_id
                 else:
-                    palette, new_id = self.jr.add_palette_color(palette, new_rgb)
-                    id_map[color_id] = int(new_id)
+                    palette, new_id = self._ensure_palette_color(palette, new_color, color_id)
+                    id_map[color_id] = new_id
             enemy_masks.append(self._remap_mask_colors(base_enemy, id_map))
             tiny_masks.append(self._remap_mask_colors(base_tiny, id_map))
 

@@ -35,6 +35,7 @@ class NoDiversMod(JaxtariInternalModPlugin):
     def step_diver_movement(self,
             diver_positions: chex.Array,
             shark_positions: chex.Array,
+            sub_positions: chex.Array,
             state_player_x: chex.Array,
             state_player_y: chex.Array,
             state_divers_collected: chex.Array,
@@ -43,16 +44,13 @@ class NoDiversMod(JaxtariInternalModPlugin):
             rng: chex.PRNGKey
         ):
         """
-        Override for _diver_step (or equivalent logic function).
-        We return off-screen positions and inactive flags.
+        Override for step_diver_movement: keep divers off-screen / inactive.
+        Signature matches JaxSeaquest.step_diver_movement (incl. sub_positions).
         """
-        
-        # We assume the diver step returns: 
-        # (new_positions, new_actives, new_timers, score_addition)
-        
+        _ = (shark_positions, sub_positions, state_player_x, state_player_y, step_counter)
         return (
-            jnp.full_like(diver_positions, -1), 
-            state_divers_collected,  
+            jnp.full_like(diver_positions, -1),
+            state_divers_collected,
             spawn_state,
             rng
         )

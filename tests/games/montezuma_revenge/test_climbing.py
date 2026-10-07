@@ -67,26 +67,26 @@ def test_no_drop_ladder_onto_platform(montezuma_env):
     env = montezuma_env
     key = jax.random.PRNGKey(0)
     obs, state = env.reset(key)
-    
-    # Room 4, ladder at x=72, top=49.
-    # Platform is at Y=46..48.
+
+    # Room 4 (load_room_0_4): ladder[0] at x=72, top=50, bottom=88.
+    # Horizontal input must not disengage climbing while still in the ladder zone.
     state = state.replace(room_id=jnp.array(4, dtype=jnp.int32))
     from jaxtari.games.montezuma_revenge.rooms import load_room
     state = load_room(state.room_id, state, env.consts)
-    
-    # Place player on ladder near top
-    # Ground at 46. Feet should be at 45.
-    # y = 45 - 20 + 1 = 26
+
+    # Place player on that ladder mid-climb (feet ≈ 60 → y = 60 - 20 + 1 = 41).
+    # Mid-x of ladder is 72+8=80; player_x=77 centers width-7 on the ladder.
+    player_y = jnp.array(41, dtype=jnp.int32)
     state = state.replace(
         player_x=jnp.array(77, dtype=jnp.int32),
-        player_y=jnp.array(26, dtype=jnp.int32),
-        is_climbing=jnp.array(1, dtype=jnp.int32)
+        player_y=player_y,
+        is_climbing=jnp.array(1, dtype=jnp.int32),
+        last_ladder=jnp.array(0, dtype=jnp.int32),
     )
-    
-    # Move RIGHT (3) to do nothing 
+
+    # Move RIGHT (3): must stay climbing (ladders are vertical-only).
     obs, state, reward, done, info = env.step(state, 3)
-    
-    # everything stays the same 
+
     assert state.is_climbing == 1
     assert state.is_falling == 0
-    assert state.player_y == 26
+    assert state.player_y == player_y

@@ -15,7 +15,12 @@ class AlwaysCenteredMod(JaxtariPostStepModPlugin):
     @partial(jax.jit, static_argnums=(0,))
     def run(self, prev_state, new_state):
         pause = jnp.where(jnp.equal(prev_state.pause_timer, self._env.consts.DEATH_PAUSE_FRAMES + 2), self._env.consts.DEATH_PAUSE_FRAMES + 1, new_state.pause_timer)
-        return new_state.replace(local_player_offset=jnp.array(0), pause_timer=pause)
+        # Match state dtype (int32); bare jnp.array(0) is float32 and breaks
+        # AtariWrapper noop-reset lax.cond(reset vs step) type equality.
+        return new_state.replace(
+            local_player_offset=jnp.zeros_like(new_state.local_player_offset),
+            pause_timer=pause,
+        )
 
 class MoreTrucksMod (JaxtariInternalModPlugin):
     constants_overrides = {
