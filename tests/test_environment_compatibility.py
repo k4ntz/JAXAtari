@@ -429,13 +429,16 @@ class TestWrapperCompatibility:
         
         # States should be identical
         assert jax.tree_util.tree_all(jax.tree.map(jnp.array_equal, state1, state2)), "Wrapped states should be identical with same key"
-        
-        # Run same sequence of actions
-        actions = [0, 1, 2, 0, 1]  # Fixed action sequence
+
+        # Sample a fixed action sequence from the wrapper's action space so this
+        # works for both discrete envs and ContinuousActionWrapper (Box(3,)).
+        action_space = wrapped_env_integration_representative.action_space()
+        action_keys = jax.random.split(jax.random.PRNGKey(123), 5)
+        actions = [action_space.sample(k) for k in action_keys]
         for action in actions:
             obs1, state1, reward1, done1, _, info1 = wrapped_env_integration_representative.step(state1, action)
             obs2, state2, reward2, done2, _, info2 = wrapped_env_integration_representative.step(state2, action)
-            
+
             # Results should be identical
             assert jax.tree_util.tree_all(jax.tree.map(jnp.array_equal, state1, state2)), "Wrapped states should be identical after same action"
             assert jnp.array_equal(reward1, reward2), "Wrapped rewards should be identical after same action"

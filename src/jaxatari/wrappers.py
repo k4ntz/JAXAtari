@@ -1179,7 +1179,9 @@ class ContinuousActionWrapper(JaxatariWrapper):
                 "ContinuousActionWrapper requires full_action_space=True in the wrapped AtariWrapper. "
                 "Please set full_action_space=True when creating the AtariWrapper."
             )
-        self.tau = tau
+        self.tau = float(tau)
+        # Surfaced so nested getattr checks / further wrappers see the full set.
+        self.full_action_space = True
         self.continuous_action_space = spaces.Box(
             low=np.array([0.0, -np.pi, 0.0], dtype=np.float32),
             high=np.array([1.0, np.pi, 1.0], dtype=np.float32),
@@ -1226,8 +1228,14 @@ class ContinuousActionWrapper(JaxatariWrapper):
         """
         Convert a continuous action (r, theta, fire) into a discrete ALE action index
         using a 3x3x2 discretization grid.
+
+        ``action`` must have trailing shape ``(3,)`` (optionally batched as ``(..., 3)``).
+        Use indexing instead of Python unpacking so scalar / 0-d inputs fail clearly.
         """
-        r, theta, fire = action
+        action = jnp.asarray(action, dtype=jnp.float32)
+        r = action[..., 0]
+        theta = action[..., 1]
+        fire = action[..., 2]
 
         # Calculate Cartesian Coordinates
         x = r * jnp.cos(theta)
