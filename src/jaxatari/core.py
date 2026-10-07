@@ -101,6 +101,7 @@ GAME_MODULES = {
     "hero": "jaxatari.games.jax_hero",
     "jamesbond": "jaxatari.games.jax_jamesbond",
     "stargunner": "jaxatari.games.jax_stargunner",
+    "stargunner2": "jaxatari.games.jax_stargunner2",
     "kungfumaster": "jaxatari.games.jax_kungfumaster",
     "demonattack": "jaxatari.games.jax_demonattack",
     # Add new games here
