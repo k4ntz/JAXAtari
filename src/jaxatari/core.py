@@ -96,6 +96,7 @@ GAME_MODULES = {
     "basicmath": "jaxatari.games.jax_basicmath",
     "miniaturegolf": "jaxatari.games.jax_miniature_golf",
     "yarsrevenge": "jaxatari.games.jax_yarsrevenge",
+    "crazyclimber": "jaxatari.games.jax_crazy_climber",
     # Add new games here
 }
 
