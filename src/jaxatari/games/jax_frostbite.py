@@ -2684,6 +2684,7 @@ class JaxFrostbite(JaxEnvironment[FrostbiteState, FrostbiteObservation, Frostbit
 
         Collision mechanics:
         - Bear can only catch Bailey when on shore (not jumping)
+        - An igloo entry already in progress prevents capture
         - Once caught, Bailey is dragged left at bear's speed
         - Death occurs when Bailey is dragged to the shore boundary (x <= 8)
         """
@@ -2721,9 +2722,11 @@ class JaxFrostbite(JaxEnvironment[FrostbiteState, FrostbiteObservation, Frostbit
 
         # Track if Bailey is being dragged by the bear
         was_already_caught = state.bailey_grizzly_collision_value != 0
-        # Set collision flag when bear catches Bailey
+        # An entry already in progress takes precedence over capture. Also
+        # clear a stale capture latch so overlapping states can finish entry.
+        entering_igloo = state.igloo_entry_status == 0x80
         new_collision_value = jnp.where(
-            is_active & (was_already_caught | has_collision),
+            is_active & ~entering_igloo & (was_already_caught | has_collision),
             jnp.int32(0x80),  # Collision flag value
             jnp.int32(0)
         )
@@ -2883,6 +2886,7 @@ class JaxFrostbite(JaxEnvironment[FrostbiteState, FrostbiteObservation, Frostbit
         - Bailey must be near the door position
         - Player must press UP
         - Bailey must be alive and not jumping
+        - Bailey must not already be captured by the bear
 
         Args:
             state: Current game state
@@ -2907,8 +2911,12 @@ class JaxFrostbite(JaxEnvironment[FrostbiteState, FrostbiteObservation, Frostbit
         # Check if player is pressing UP (or diagonal up)
         pressing_up = (action == Action.UP) | (action == Action.UPLEFT) | (action == Action.UPRIGHT)
 
-        # Determine if Bailey can start entering igloo
-        can_enter = igloo_complete & at_shore & near_door & pressing_up & (state.bailey_alive == 1) & not_jumping & not_entering
+        # A bear capture processed earlier in this frame prevents a new entry.
+        not_caught = state.bailey_grizzly_collision_value == 0
+        can_enter = (
+            igloo_complete & at_shore & near_door & pressing_up &
+            (state.bailey_alive == 1) & not_jumping & not_entering & not_caught
+        )
 
         # Entry animation completes when Bailey reaches top of screen (y <= 6)
         completed_entry = already_entering & (state.bailey_y <= 6)
