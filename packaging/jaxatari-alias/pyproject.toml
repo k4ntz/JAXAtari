@@ -1,0 +1,19 @@
+[project]
+name = "jaxatari"
+version = "0.1.0"
+description = "Alias for JAXtari: GPU-accelerated, object-centric Atari environments for reinforcement learning with JAX."
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+dependencies = ["JAXtari==0.1.0"]
+
+[project.urls]
+Homepage = "https://github.com/k4ntz/JAXAtari"
+"Main package" = "https://pypi.org/project/JAXtari/"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+bypass-selection = true
