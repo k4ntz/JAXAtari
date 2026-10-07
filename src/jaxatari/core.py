@@ -44,6 +44,7 @@ GAME_MODULES = {
     "centipede": "jaxatari.games.jax_centipede",
     "crossbow": "jaxatari.games.jax_crossbow",
     "choppercommand": "jaxatari.games.jax_choppercommand",
+    "darkchambers": "jaxatari.games.jax_darkchambers",
     "donkeykong": "jaxatari.games.jax_donkeykong",
     "enduro": "jaxatari.games.jax_enduro",
     "fishingderby": "jaxatari.games.jax_fishingderby",
@@ -112,6 +113,7 @@ GAME_ALIASES = {
 
 # Mod modules registry: for each game, provide the Controller class path
 MOD_MODULES = {
+    "darkchambers": "jaxatari.games.mods.darkchambers_mods.DarkchambersEnvMod",
     "donkeykong": "jaxatari.games.mods.donkeykong_mods.DonkeyKongEnvMod",
     "pong": "jaxatari.games.mods.pong_mods.PongEnvMod",
     "kangaroo": "jaxatari.games.mods.kangaroo_mods.KangarooEnvMod",
