@@ -1091,26 +1091,9 @@ class AirRaidRenderer(JAXGameRenderer):
         padded_background = self._load_and_pad_background(sprite_path)
         asset_config = [
             {'name': 'background', 'type': 'background', 'data': padded_background},
-            {
-                'name': 'player',
-                'type': 'group',
-                'data': [self._rows_to_rgba(_decode_bitmap(rows, 14, row_repeat=2), self.PLAYER_ROW_COLORS)
-                         for rows in self.PLAYER_FRAMES],
-            },
-            {
-                'name': 'player_death',
-                'type': 'group',
-                'data': [self._rows_to_rgba(_decode_bitmap(rows, 16, row_repeat=2), self.PLAYER_DEATH_ROW_COLORS)
-                         for rows in self.PLAYER_DEATH_FRAMES],
-            },
+            {'name': 'player', 'type': 'group', 'data': self._create_player_sprites()},
             {'name': 'building', 'type': 'group', 'data': self._create_building_sprites()},
-            {'name': 'enemy', 'type': 'group', 'data': self._load_enemy_sprites(sprite_path)},
-            {
-                'name': 'enemy_explosion',
-                'type': 'group',
-                'data': [self._rows_to_rgba(_decode_bitmap(rows, 16, row_repeat=2), self.EXPLOSION_ROW_COLORS)
-                         for rows in self.ENEMY_EXPLOSION_FRAMES],
-            },
+            {'name': 'enemy', 'type': 'group', 'data': self._create_enemy_sprites(sprite_path)},
             {'name': 'missile', 'type': 'single', 'file': 'missile.npy'},
             {'name': 'life', 'type': 'single', 'file': 'life.npy'},
             {
@@ -1150,8 +1133,21 @@ class AirRaidRenderer(JAXGameRenderer):
         rgba[~bitmap] = 0
         return jnp.array(rgba)
 
-    def _load_enemy_sprites(self, sprite_path: str) -> list:
-        """Loads the color enemy sprites (25, 50, 75, 100 points) and adds the second 25 point animation frame."""
+    def _create_player_sprites(self) -> list:
+        """Player group: 2 rotor animation frames, followed by the hit sprite and 2 explosion frames."""
+        sprites = [self._rows_to_rgba(_decode_bitmap(rows, 14, row_repeat=2), self.PLAYER_ROW_COLORS)
+                   for rows in self.PLAYER_FRAMES]
+        for rows in self.PLAYER_DEATH_FRAMES:
+            death = np.array(self._rows_to_rgba(_decode_bitmap(rows, 16, row_repeat=2), self.PLAYER_DEATH_ROW_COLORS))
+            # The destroyed ship is drawn 1px below the ship's position
+            sprites.append(jnp.array(np.pad(death, ((1, 0), (0, 0), (0, 0)))))
+        return sprites
+
+    def _create_enemy_sprites(self, sprite_path: str) -> list:
+        """
+        Enemy group: the color enemy sprites (25, 50, 75, 100 points), the second 25 point animation
+        frame and the 3 explosion frames.
+        """
         sprites = []
         for points in (25, 50, 75, 100):
             sprite = np.load(os.path.join(sprite_path, f"enemy_{points}_color.npy"))
@@ -1165,7 +1161,10 @@ class AirRaidRenderer(JAXGameRenderer):
         flapped = sprites[0].copy()
         flapped[:2] = np.roll(flapped[:2], 4, axis=1)
         sprites.append(flapped)
-        return [jnp.array(sprite) for sprite in sprites]
+        sprites = [jnp.array(sprite) for sprite in sprites]
+        sprites += [self._rows_to_rgba(_decode_bitmap(rows, 16, row_repeat=2), self.EXPLOSION_ROW_COLORS)
+                    for rows in self.ENEMY_EXPLOSION_FRAMES]
+        return sprites
 
     def _create_building_sprites(self) -> list:
         sprites = []
@@ -1210,30 +1209,37 @@ class AirRaidRenderer(JAXGameRenderer):
 
     @partial(jax.jit, static_argnums=(0,))
     def render(self, state: AirRaidState):
-
+        # Only the wrapping buildings need clipping; all other objects always lie fully on screen, so they are
+        # drawn with cheap slice updates (hidden objects are drawn with a fully transparent mask).
+        transparent = self.jr.TRANSPARENT_ID
         raster = self.jr.create_object_raster(self.BACKGROUND)
 
         building_masks = self.SHAPE_MASKS["building"]
         enemy_masks = self.SHAPE_MASKS["enemy"]
-        explosion_masks = self.SHAPE_MASKS["enemy_explosion"]
         player_masks = self.SHAPE_MASKS["player"]
-        player_death_masks = self.SHAPE_MASKS["player_death"]
         missile_mask = self.SHAPE_MASKS["missile"]
         life_mask = self.SHAPE_MASKS["life"]
         score_digit_masks = self.SHAPE_MASKS["score_digits"]
 
-        def render_building(i, raster_in):
-            building_mask = building_masks[state.building_damage[i]]
-            building_x = state.building_x[i]
-            # Buildings wrap around the screen edges
-            raster_out = self.jr.render_at_clipped(raster_in, building_x, AirRaidConstants.BUILDING_INITIAL_Y, building_mask)
-            return self.jr.render_at_clipped(
-                raster_out, building_x - AirRaidConstants.WIDTH, AirRaidConstants.BUILDING_INITIAL_Y, building_mask
-            )
-
-        raster = jax.lax.fori_loop(0, AirRaidConstants.NUM_BUILDINGS, render_building, raster)
+        # Buildings wrap around the screen edges: sample each column of the building strip modulo the width
+        # (all positions are converted to raster pixels, which differ from game pixels when downscaling)
+        raster_width = raster.shape[1]
+        building_height, building_width = building_masks.shape[1], building_masks.shape[2]
+        building_top = int(round(AirRaidConstants.BUILDING_INITIAL_Y * self.config.height_scaling))
+        building_top = min(building_top, raster.shape[0] - building_height)
+        strip = raster[building_top:building_top + building_height]
+        columns = jnp.arange(raster_width)
+        for i in range(AirRaidConstants.NUM_BUILDINGS):
+            building_x = jnp.round(state.building_x[i] * self.config.width_scaling).astype(jnp.int32)
+            rel_x = (columns - building_x) % raster_width
+            inside = rel_x < building_width
+            values = building_masks[state.building_damage[i]][:, jnp.minimum(rel_x, building_width - 1)]
+            strip = jnp.where(jnp.logical_and(inside[None, :], values != transparent), values, strip)
+        raster = raster.at[building_top:building_top + building_height].set(strip)
 
         enemy_x_offsets = jnp.array(self.ENEMY_RENDER_X_OFFSETS, dtype=jnp.int32)
+        sprite_rows = jnp.arange(enemy_masks.shape[1])[:, None]
+        horizon_y = int(round(AirRaidConstants.ENEMY_HORIZON_Y * self.config.height_scaling))
 
         def render_enemy(i, raster_in):
             is_active = state.enemy_active[i] == 1
@@ -1242,93 +1248,76 @@ class AirRaidRenderer(JAXGameRenderer):
             sprite_index = jnp.where(
                 jnp.logical_and(enemy_type == 0, (state.step_counter // 2) % 2 == 1), 4, enemy_type
             )
-            enemy_mask = enemy_masks[sprite_index]
-            enemy_x = state.enemy_x[i] + enemy_x_offsets[enemy_type]
-            render_result = self.jr.render_at_clipped(raster_in, enemy_x, state.enemy_y[i], enemy_mask)
-
             # Recently shot enemies show a short explosion animation
             explosion_age = AirRaidConstants.ENEMY_KILL_RESPAWN_DELAY - state.enemy_timer[i]
             is_exploding = jnp.logical_and(
                 jnp.logical_not(is_active),
                 explosion_age < AirRaidConstants.ENEMY_EXPLOSION_FRAMES,
             )
-            explosion_frame = jnp.clip(explosion_age // 3, 0, 2)
-            explosion_result = self.jr.render_at_clipped(
-                raster_in, state.enemy_x[i], state.enemy_y[i], explosion_masks[explosion_frame]
+            explosion_index = 5 + jnp.clip(explosion_age // 3, 0, 2)
+            mask = enemy_masks[jnp.where(is_active, sprite_index, explosion_index)]
+            enemy_x = state.enemy_x[i] + jnp.where(is_active, enemy_x_offsets[enemy_type], 0)
+            # Enemies sink behind the horizon above the player's flight level
+            visible = jnp.logical_and(
+                jnp.logical_or(is_active, is_exploding),
+                jnp.round(state.enemy_y[i] * self.config.height_scaling).astype(jnp.int32) + sprite_rows < horizon_y,
             )
-            return jnp.where(is_active, render_result, jnp.where(is_exploding, explosion_result, raster_in))
+            mask = jnp.where(visible, mask, transparent)
+            return self.jr.render_at(raster_in, enemy_x, state.enemy_y[i], mask)
 
-        enemy_raster = jax.lax.fori_loop(0, AirRaidConstants.TOTAL_ENEMIES, render_enemy, raster)
-        # Enemies sink behind the horizon above the player's flight level
-        rows = jnp.arange(raster.shape[0])[:, None]
-        raster = jnp.where(rows < AirRaidConstants.ENEMY_HORIZON_Y, enemy_raster, raster)
+        raster = jax.lax.fori_loop(0, AirRaidConstants.TOTAL_ENEMIES, render_enemy, raster)
 
-        # The ship's rotor animation alternates every 8 frames
-        player_frame = (state.step_counter // 8) % 2
-        player_rendered = self.jr.render_at_clipped(raster, state.player_x, state.player_y, player_masks[player_frame])
-        raster = jnp.where(state.player_visible == 1, player_rendered, raster)
-
-        # A destroyed ship is shown briefly hit and then exploding
+        # The ship's rotor animation alternates every 8 frames, a destroyed ship is shown hit and then exploding
         death_timer = state.player_death_timer
         death_frame = jnp.where(
             death_timer <= AirRaidConstants.PLAYER_HIT_FRAMES,
-            0,
-            1 + ((death_timer - AirRaidConstants.PLAYER_HIT_FRAMES - 1) // 4) % 2,
-        )
-        death_rendered = self.jr.render_at_clipped(
-            raster, state.player_x, state.player_y + 1, player_death_masks[death_frame]
+            2,
+            3 + ((death_timer - AirRaidConstants.PLAYER_HIT_FRAMES - 1) // 4) % 2,
         )
         show_death = jnp.logical_and(
             jnp.logical_and(state.player_visible == 0, death_timer > 0),
             death_timer <= AirRaidConstants.PLAYER_DEATH_FRAMES,
         )
-        raster = jnp.where(show_death, death_rendered, raster)
+        player_frame = jnp.where(state.player_visible == 1, (state.step_counter // 8) % 2, death_frame)
+        player_mask = jnp.where(
+            jnp.logical_or(state.player_visible == 1, show_death), player_masks[player_frame], transparent
+        )
+        raster = self.jr.render_at(raster, state.player_x, state.player_y, player_mask)
 
         def render_player_missile(i, raster_in):
-            render_result = self.jr.render_at_clipped(raster_in, state.player_missile_x[i], state.player_missile_y[i], missile_mask)
-            return jnp.where(state.player_missile_active[i] == 1, render_result, raster_in)
+            mask = jnp.where(state.player_missile_active[i] == 1, missile_mask, transparent)
+            return self.jr.render_at(raster_in, state.player_missile_x[i], state.player_missile_y[i], mask)
 
         raster = jax.lax.fori_loop(0, AirRaidConstants.NUM_PLAYER_MISSILES, render_player_missile, raster)
 
         def render_enemy_missile(i, raster_in):
-            render_result = self.jr.render_at_clipped(raster_in, state.enemy_missile_x[i], state.enemy_missile_y[i], missile_mask)
-            return jnp.where(state.enemy_missile_active[i] == 1, render_result, raster_in)
+            mask = jnp.where(state.enemy_missile_active[i] == 1, missile_mask, transparent)
+            return self.jr.render_at(raster_in, state.enemy_missile_x[i], state.enemy_missile_y[i], mask)
 
         raster = jax.lax.fori_loop(0, AirRaidConstants.NUM_ENEMY_MISSILES, render_enemy_missile, raster)
 
         # The area below the city flashes when a building is hit
-        flash_rendered = self.jr.render_at(raster, 0, AirRaidConstants.HUD_Y, self.SHAPE_MASKS["hud_flash"])
-        raster = jnp.where(state.flash_counter > 0, flash_rendered, raster)
+        hud_mask = jnp.where(state.flash_counter > 0, self.SHAPE_MASKS["hud_flash"], transparent)
+        raster = self.jr.render_at(raster, 0, AirRaidConstants.HUD_Y, hud_mask)
 
-        score_value = state.score
-        score_digits = self.jr.int_to_digits(score_value, max_digits=6)
-        is_score_zero = score_value == 0
-        significant_mask = score_digits > 0
-        indices = jnp.arange(6, dtype=jnp.int32)
-        first_significant_idx = jnp.min(jnp.where(significant_mask, indices, 6))
-        start_index = jax.lax.select(is_score_zero, 5, first_significant_idx)
-        num_to_render = jax.lax.select(is_score_zero, 1, 6 - first_significant_idx)
+        # Score, right-aligned with its last digit at SCORE_X and without leading zeros
+        score_digits = self.jr.int_to_digits(state.score, max_digits=6)
+        first_significant_idx = jnp.min(jnp.where(score_digits > 0, jnp.arange(6), 5))
+        num_digits = 6 - first_significant_idx
 
-        raster = self.jr.render_label_selective(
-            raster,
-            AirRaidConstants.SCORE_X,
-            AirRaidConstants.SCORE_Y,
-            score_digits,
-            score_digit_masks,
-            start_index,
-            num_to_render,
-            spacing=self.score_digit_spacing,
-            max_digits_to_render=6,
-            right_align=True,
-        )
+        def render_digit(i, raster_in):
+            digit = score_digits[jnp.minimum(first_significant_idx + i, 5)]
+            mask = jnp.where(i < num_digits, score_digit_masks[digit], transparent)
+            digit_x = AirRaidConstants.SCORE_X + (i - (num_digits - 1)) * self.score_digit_spacing
+            return self.jr.render_at(raster_in, digit_x, AirRaidConstants.SCORE_Y, mask)
+
+        raster = jax.lax.fori_loop(0, 6, render_digit, raster)
 
         # Reserve ships are shown below the city
-        lives = state.player_lives
-
         def render_life(i, raster_in):
             icon_x = AirRaidConstants.LIFE_X + i * AirRaidConstants.LIFE_SPACING
-            render_result = self.jr.render_at(raster_in, icon_x, AirRaidConstants.LIFE_Y, life_mask)
-            return jnp.where(i < lives - 1, render_result, raster_in)
+            mask = jnp.where(i < state.player_lives - 1, life_mask, transparent)
+            return self.jr.render_at(raster_in, icon_x, AirRaidConstants.LIFE_Y, mask)
 
         raster = jax.lax.fori_loop(0, AirRaidConstants.MAX_PLAYER_LIVES - 1, render_life, raster)
 
