@@ -99,6 +99,7 @@ GAME_MODULES = {
     "crazyclimber": "jaxatari.games.jax_crazy_climber",
     "icehockey": "jaxatari.games.jax_icehockey",
     "hero": "jaxatari.games.jax_hero",
+    "jamesbond": "jaxatari.games.jax_jamesbond",
     # Add new games here
 }
 
