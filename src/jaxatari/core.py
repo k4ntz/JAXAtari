@@ -102,6 +102,7 @@ GAME_MODULES = {
     "jamesbond": "jaxatari.games.jax_jamesbond",
     "stargunner": "jaxatari.games.jax_stargunner",
     "kungfumaster": "jaxatari.games.jax_kungfumaster",
+    "demonattack": "jaxatari.games.jax_demonattack",
     # Add new games here
 }
 
@@ -157,9 +158,10 @@ MOD_MODULES = {
     "yarsrevenge": "jaxatari.games.mods.yarsrevenge_mods.YarsRevengeEnvMod",
     "boxing": "jaxatari.games.mods.boxing_mods.BoxingEnvMod",
     "amidar": "jaxatari.games.mods.amidar_mods.AmidarEnvMod",
-    "timepilot": "jaxatari.games.mods.timepilot_mods.TimePilotEnvMod"
-    "icehockey": "jaxatari.games.mods.icehockey_mods.IceHockeyEnvMod"
+    "timepilot": "jaxatari.games.mods.timepilot_mods.TimePilotEnvMod",
+    "icehockey": "jaxatari.games.mods.icehockey_mods.IceHockeyEnvMod",
     "hero": "jaxatari.games.mods.hero_mods.HeroEnvMod",
+    "demonattack": "jaxatari.games.mods.demonattack_mods.DemonAttackEnvMod",
 }
 
 
