@@ -11,8 +11,8 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 
-from jaxatari.games.jax_montezumarevenge import JaxMontezumaRevenge
-from jaxatari.games.montezuma_revenge.core import MontezumaRevengeState
+from jaxtari.games.jax_montezumarevenge import JaxMontezumaRevenge
+from jaxtari.games.montezuma_revenge.core import MontezumaRevengeState
 
 from .base import cast_like, collect_category, find_object, objects_as_dicts
 from .registry import print_disclaimers

@@ -11,9 +11,9 @@ import collections
 from dataclasses import is_dataclass, asdict
 
 # --- Import Core Components ---
-from jaxatari.environment import JaxEnvironment
-from jaxatari.renderers import JAXGameRenderer
-from jaxatari.wrappers import (
+from jaxtari.environment import JaxEnvironment
+from jaxtari.renderers import JAXGameRenderer
+from jaxtari.wrappers import (
     AtariWrapper,
     MultiRewardWrapper,
     PixelObsWrapper,
@@ -24,7 +24,7 @@ from jaxatari.wrappers import (
     LogWrapper,
     MultiRewardLogWrapper,
 )
-import jaxatari.spaces as spaces
+import jaxtari.spaces as spaces
 from conftest import INTEGRATION_STEPS, load_game_environment
 
 # Add flax import for serialization tests
@@ -250,10 +250,10 @@ class TestBasicAPI:
 
 
     ''' TODO: rewrite this and then reintroduce the test
-    def test_jaxatari_vs_ale_image_and_action_space():
+    def test_jaxtari_vs_ale_image_and_action_space():
         for jax_name, ale_name in ALE_GAME_MAP.items():
-            # JAXAtari env
-            jax_env = jaxatari.make(jax_name)
+            # Jaxtari env
+            jax_env = jaxtari.make(jax_name)
             import jax
             key = jax.random.PRNGKey(0)
             jax_obs, jax_state = jax_env.reset(key)
@@ -269,11 +269,11 @@ class TestBasicAPI:
             # Compare image shapes
             assert jax_frame.shape == ale_frame.shape, (
                 f"Image shape mismatch for {jax_name}: "
-                f"JAXAtari {jax_frame.shape} vs ALE {ale_frame.shape}"
+                f"Jaxtari {jax_frame.shape} vs ALE {ale_frame.shape}"
             )
             assert jax_frame.dtype == ale_frame.dtype, (
                 f"Image dtype mismatch for {jax_name}: "
-                f"JAXAtari {jax_frame.dtype} vs ALE {ale_frame.dtype}"
+                f"Jaxtari {jax_frame.dtype} vs ALE {ale_frame.dtype}"
             )
 
             # Compare action spaces
@@ -283,7 +283,7 @@ class TestBasicAPI:
             assert hasattr(jax_action_space, "n") and hasattr(ale_action_space, "n")
             assert jax_action_space.n == ale_action_space.n, (
                 f"Action space size mismatch for {jax_name}: "
-                f"JAXAtari {jax_action_space.n} vs ALE {ale_action_space.n}"
+                f"Jaxtari {jax_action_space.n} vs ALE {ale_action_space.n}"
             )
 
             # Optionally, compare action meanings if available
@@ -293,7 +293,7 @@ class TestBasicAPI:
                     jax_meanings = jax_env.get_action_meanings()
                     assert jax_meanings == ale_meanings, (
                         f"Action meanings mismatch for {jax_name}: "
-                        f"JAXAtari {jax_meanings} vs ALE {ale_meanings}"
+                        f"Jaxtari {jax_meanings} vs ALE {ale_meanings}"
                     )
 
             ale_env.close()

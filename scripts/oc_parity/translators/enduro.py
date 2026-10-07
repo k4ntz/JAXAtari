@@ -1,4 +1,4 @@
-"""Translate OCAtari Enduro snapshots into JAXAtari EnduroGameState."""
+"""Translate OCAtari Enduro snapshots into Jaxtari EnduroGameState."""
 
 from __future__ import annotations
 
@@ -8,7 +8,7 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 
-from jaxatari.games.jax_enduro import EnduroGameState, JaxEnduro
+from jaxtari.games.jax_enduro import EnduroGameState, JaxEnduro
 
 from .base import cast_like, collect_category, find_object, objects_as_dicts
 from .registry import print_disclaimers

@@ -1,4 +1,4 @@
-"""Translate OCAtari Kangaroo object snapshots into JAXAtari KangarooState."""
+"""Translate OCAtari Kangaroo object snapshots into Jaxtari KangarooState."""
 
 from __future__ import annotations
 
@@ -8,7 +8,7 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 
-from jaxatari.games.jax_kangaroo import JaxKangaroo, KangarooState, PlayerState
+from jaxtari.games.jax_kangaroo import JaxKangaroo, KangarooState, PlayerState
 
 from .base import cast_like, collect_category, find_object, objects_as_dicts
 from .registry import print_disclaimers

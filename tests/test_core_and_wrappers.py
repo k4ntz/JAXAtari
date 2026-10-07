@@ -2,10 +2,10 @@ import collections
 import jax
 import jax.numpy as jnp
 import pytest
-import jaxatari
+import jaxtari
 from dataclasses import is_dataclass
-from jaxatari.environment import EnvInfo, EnvObs, EnvState, JAXAtariAction as Action
-from jaxatari.wrappers import (
+from jaxtari.environment import EnvInfo, EnvObs, EnvState, JaxtariAction as Action
+from jaxtari.wrappers import (
     NormalizeObservationWrapper,
     ObjectCentricWrapper,
     PixelObsWrapper,
@@ -17,7 +17,7 @@ from jaxatari.wrappers import (
     FlattenObservationWrapper,
     ContinuousActionWrapper
 )
-import jaxatari.spaces as spaces
+import jaxtari.spaces as spaces
 import numpy as np
 import warnings
 
@@ -417,7 +417,7 @@ def test_integration_with_pixel_obs(full_atari_env):
 
 def test_integration_with_object_centric(full_atari_env):
     """Integrate ContinuousActionWrapper with ObjectCentricWrapper."""
-    from jaxatari.wrappers import ObjectCentricWrapper
+    from jaxtari.wrappers import ObjectCentricWrapper
 
     key = jax.random.PRNGKey(0)
     env = ContinuousActionWrapper(ObjectCentricWrapper(full_atari_env))

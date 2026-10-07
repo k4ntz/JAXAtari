@@ -55,7 +55,7 @@
   },
   "runs": [
     {
-      "traj_path": "/home/paul/Documents/JAXAtari/data/oc_parity_corpus/raw/skiing_play01.npz",
+      "traj_path": "/home/paul/Documents/Jaxtari/data/oc_parity_corpus/raw/skiing_play01.npz",
       "t0": 391,
       "traj_seed": 0,
       "first_diverge_soft": 0,
@@ -187,7 +187,7 @@
       }
     },
     {
-      "traj_path": "/home/paul/Documents/JAXAtari/data/oc_parity_corpus/raw/skiing_play01.npz",
+      "traj_path": "/home/paul/Documents/Jaxtari/data/oc_parity_corpus/raw/skiing_play01.npz",
       "t0": 446,
       "traj_seed": 0,
       "first_diverge_soft": 0,
@@ -324,7 +324,7 @@
       }
     },
     {
-      "traj_path": "/home/paul/Documents/JAXAtari/data/oc_parity_corpus/raw/skiing_play01.npz",
+      "traj_path": "/home/paul/Documents/Jaxtari/data/oc_parity_corpus/raw/skiing_play01.npz",
       "t0": 740,
       "traj_seed": 0,
       "first_diverge_soft": 0,
@@ -461,7 +461,7 @@
       }
     },
     {
-      "traj_path": "/home/paul/Documents/JAXAtari/data/oc_parity_corpus/raw/skiing_play01.npz",
+      "traj_path": "/home/paul/Documents/Jaxtari/data/oc_parity_corpus/raw/skiing_play01.npz",
       "t0": 922,
       "traj_seed": 0,
       "first_diverge_soft": 0,
@@ -608,7 +608,7 @@
       }
     },
     {
-      "traj_path": "/home/paul/Documents/JAXAtari/data/oc_parity_corpus/raw/skiing_play01.npz",
+      "traj_path": "/home/paul/Documents/Jaxtari/data/oc_parity_corpus/raw/skiing_play01.npz",
       "t0": 1230,
       "traj_seed": 0,
       "first_diverge_soft": 0,

@@ -24,7 +24,7 @@ from pathlib import Path
 import numpy as np
 
 try:
-    from jaxatari.paths import get_base_sprite_dir, canonical_storage_dir
+    from jaxtari.paths import get_base_sprite_dir, canonical_storage_dir
 except ImportError:
     from platformdirs import user_data_dir
 
@@ -256,7 +256,7 @@ def main():
 
     if not args.src.exists():
         raise SystemExit(f"Source directory not found: {args.src}\n"
-                         "Run `python -m jaxatari.install_sprites` first.")
+                         "Run `python -m jaxtari.install_sprites` first.")
 
     if args.dst.exists():
         print(f"Destination {args.dst} already exists — overwriting changed files.")

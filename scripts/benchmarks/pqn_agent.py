@@ -20,11 +20,11 @@ import optax
 import flax.linen as nn
 from flax.training.train_state import TrainState
 from flax.core.frozen_dict import FrozenDict
-from jaxatari.wrappers import AtariWrapper, MultiRewardWrapper, PixelObsWrapper, FlattenObservationWrapper, LogWrapper, ObjectCentricWrapper, NormalizeObservationWrapper, MultiRewardWrapper, MultiRewardLogWrapper
+from jaxtari.wrappers import AtariWrapper, MultiRewardWrapper, PixelObsWrapper, FlattenObservationWrapper, LogWrapper, ObjectCentricWrapper, NormalizeObservationWrapper, MultiRewardWrapper, MultiRewardLogWrapper
 import hydra
 from omegaconf import OmegaConf
 
-import jaxatari
+import jaxtari
 import wandb
 
 from train_utils import video_callback, save_params
@@ -200,9 +200,9 @@ def make_train(config):
 
     # Training env: base env or env with TRAIN_MODS.
     print("train mods list:", train_mods_list)
-    env = jaxatari.make(config["ENV_NAME"].lower(), mods=train_mods_list)
+    env = jaxtari.make(config["ENV_NAME"].lower(), mods=train_mods_list)
     print("eval mods list:", eval_mods_list)
-    mod_env = jaxatari.make(config["ENV_NAME"].lower(), mods=eval_mods_list)
+    mod_env = jaxtari.make(config["ENV_NAME"].lower(), mods=eval_mods_list)
 
     renderer = mod_env.renderer
 
@@ -575,7 +575,7 @@ def _generate_single_final_video(
     env_step=None,
 ):
     """Generate a single video for the given mod configuration and log it to wandb."""
-    env = jaxatari.make(config["ENV_NAME"].lower(), mods=mods_config)
+    env = jaxtari.make(config["ENV_NAME"].lower(), mods=mods_config)
     renderer = env.renderer
 
     # Apply wrappers

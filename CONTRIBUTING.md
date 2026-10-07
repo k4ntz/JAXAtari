@@ -1,4 +1,4 @@
-# Contributing to JAXAtari
+# Contributing to Jaxtari
 
 Thank you for contributing! This guide covers the three most common contribution paths:
 
@@ -16,13 +16,13 @@ For any of these, the workflow is:
 
 ## Adding a mod
 
-All modifications are located under `src/jaxatari/games/mods/`. Each environment that has modifications has its own subfolder for specific mods and a top-level controller file to register them. If there is no folder or controller file yet, one should be created in the same pattern as for the existing environments.
+All modifications are located under `src/jaxtari/games/mods/`. Each environment that has modifications has its own subfolder for specific mods and a top-level controller file to register them. If there is no folder or controller file yet, one should be created in the same pattern as for the existing environments.
 
 ### File structure
 
 ```
-src/jaxatari/games/mods/
-├── pong_mods.py                   ← mod controller (REGISTRY + JaxAtariModController)
+src/jaxtari/games/mods/
+├── pong_mods.py                   ← mod controller (REGISTRY + JaxtariModController)
 └── pong/
     ├── pong_mod_plugins.py        ← individual plugin classes
     └── sprites/                   ← custom sprites for optional overrides
@@ -30,20 +30,20 @@ src/jaxatari/games/mods/
 
 ### Step 1 — write a plugin class
 
-Open (or create) `src/jaxatari/games/mods/<environment>/<environment>_mod_plugins.py`.
+Open (or create) `src/jaxtari/games/mods/<environment>/<environment>_mod_plugins.py`.
 
 Choose one of two base classes depending on what you want to do:
 
-#### `JaxAtariInternalModPlugin` — patch methods or override constants
+#### `JaxtariInternalModPlugin` — patch methods or override constants
 
 Use this when your mod replaces a method that runs *inside* the game's step logic (e.g. enemy AI, collision logic, movement).
 
 ```python
 from functools import partial
 import jax
-from jaxatari.modification import JaxAtariInternalModPlugin
+from jaxtari.modification import JaxtariInternalModPlugin
 
-class LazyEnemyMod(JaxAtariInternalModPlugin):
+class LazyEnemyMod(JaxtariInternalModPlugin):
     # Optional: declare conflicts with other mod keys. Will throw an error if mods with conflicting functionality are enabled together.
     conflicts_with = ["random_enemy"]
 
@@ -64,16 +64,16 @@ class LazyEnemyMod(JaxAtariInternalModPlugin):
 
 Every method you define on the plugin replaces the corresponding method on the environment. Only define what you want to change — everything else is left untouched. Sometimes the environments are very monolithic and there are no specific methods to replace. In that case it is possible to insert hook functions (empty functions called at the point at which you need to modify the environment logic) into the environment logic itself. This is a more advanced technique and should be used with caution.
 
-#### `JaxAtariPostStepModPlugin` — run logic after the step completes
+#### `JaxtariPostStepModPlugin` — run logic after the step completes
 
 Use this when your mod reads or modifies state *after* the main step has already run (e.g. clamping a score, injecting an event). This will cover most use cases that dont necessitate in-depth mechanics modifications.
 
 ```python
 from functools import partial
 import jax
-from jaxatari.modification import JaxAtariPostStepModPlugin
+from jaxtari.modification import JaxtariPostStepModPlugin
 
-class AlwaysZeroScoreMod(JaxAtariPostStepModPlugin):
+class AlwaysZeroScoreMod(JaxtariPostStepModPlugin):
     @partial(jax.jit, static_argnums=(0,))
     def run(self, prev_state, new_state):
         # prev_state = state before step, new_state = state after step
@@ -90,13 +90,13 @@ class AlwaysZeroScoreMod(JaxAtariPostStepModPlugin):
 
 ### Step 2 — register the modifications in the mod controller
 
-Open (or create) `src/jaxatari/games/mods/<environment>_mods.py`:
+Open (or create) `src/jaxtari/games/mods/<environment>_mods.py`:
 
 ```python
-from jaxatari.modification import JaxAtariModController
-from jaxatari.games.mods.<environment>.<environment>_mod_plugins import LazyEnemyMod, AlwaysZeroScoreMod
+from jaxtari.modification import JaxtariModController
+from jaxtari.games.mods.<environment>.<environment>_mod_plugins import LazyEnemyMod, AlwaysZeroScoreMod
 
-class PongEnvMod(JaxAtariModController):
+class PongEnvMod(JaxtariModController):
     REGISTRY = {
         "lazy_enemy": LazyEnemyMod,
         "zero_score": AlwaysZeroScoreMod,
@@ -114,12 +114,12 @@ class PongEnvMod(JaxAtariModController):
 ### Step 3 — register the controller in `core.py`
 (only necessary if the environment is not already registered in `GAME_MODULES` / does not have modifications yet)
 
-Add an entry to `MOD_MODULES` in `src/jaxatari/core.py`:
+Add an entry to `MOD_MODULES` in `src/jaxtari/core.py`:
 
 ```python
 MOD_MODULES = {
     ...
-    "pong": "jaxatari.games.mods.pong_mods.PongEnvMod",
+    "pong": "jaxtari.games.mods.pong_mods.PongEnvMod",
 }
 ```
 
@@ -137,15 +137,15 @@ pytest tests/test_all_mods.py --game pong --slow
 
 ### Step 1 — implement `JaxEnvironment`
 
-Create `src/jaxatari/games/jax_<environment>.py`. Your class must subclass `JaxEnvironment` and implement the full required interface, including helper hooks used by utility code:
+Create `src/jaxtari/games/jax_<environment>.py`. Your class must subclass `JaxEnvironment` and implement the full required interface, including helper hooks used by utility code:
 
 ```python
 import jax
 import jax.numpy as jnp
 from flax import struct
 from functools import partial
-from jaxatari.environment import JaxEnvironment, ObjectObservation
-from jaxatari.renderers import JAXGameRenderer
+from jaxtari.environment import JaxEnvironment, ObjectObservation
+from jaxtari.renderers import JAXGameRenderer
 
 @struct.dataclass
 class MyGameState:
@@ -193,17 +193,17 @@ class JaxMyGame(JaxEnvironment):
 
     def observation_space(self):
         # Return a spaces.Dict of ObjectObservation spaces — one entry per object type.
-        from jaxatari.spaces import Dict, Box
+        from jaxtari.spaces import Dict, Box
         return Dict({
             "player": Box(low=0, high=255, shape=(8,), dtype=jnp.int32),
         })
 
     def action_space(self):
-        from jaxatari.spaces import Discrete
+        from jaxtari.spaces import Discrete
         return Discrete(len(self.ACTION_SET))
 
     def image_space(self):
-        from jaxatari.spaces import Box
+        from jaxtari.spaces import Box
         return Box(low=0, high=255, shape=(210, 160, 3), dtype=jnp.uint8)
 
     def render(self, state: MyGameState) -> jnp.ndarray:
@@ -258,12 +258,12 @@ Generally compare your environment against existing environments and how they im
 
 ### Step 2 — register in `core.py`
 
-Add to `GAME_MODULES` in `src/jaxatari/core.py`:
+Add to `GAME_MODULES` in `src/jaxtari/core.py`:
 
 ```python
 GAME_MODULES = {
     ...
-    "mygame": "jaxatari.games.jax_mygame",
+    "mygame": "jaxtari.games.jax_mygame",
 }
 ```
 
@@ -305,17 +305,17 @@ python scripts/trajectory_regression.py --game mygame
 
 ## Adding a wrapper
 
-### Step 1 — subclass `JaxatariWrapper`
+### Step 1 — subclass `JaxtariWrapper`
 
-Add your wrapper to `src/jaxatari/wrappers.py`:
+Add your wrapper to `src/jaxtari/wrappers.py`:
 
 ```python
 import functools
 import jax
 import chex
-from jaxatari.wrappers import JaxatariWrapper
+from jaxtari.wrappers import JaxtariWrapper
 
-class MyWrapper(JaxatariWrapper):
+class MyWrapper(JaxtariWrapper):
     """One-line description of what this wrapper does."""
 
     def __init__(self, env, my_param: float = 1.0):
@@ -355,7 +355,7 @@ Things to keep in mind:
 
 ### Step 2 — export from `__init__.py`
 
-Add the wrapper to the exports in `src/jaxatari/__init__.py` and ensure it's importable from `jaxatari.wrappers`.
+Add the wrapper to the exports in `src/jaxtari/__init__.py` and ensure it's importable from `jaxtari.wrappers`.
 
 ### Step 3 — add to the test suite
 

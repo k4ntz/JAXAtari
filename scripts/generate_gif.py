@@ -12,8 +12,8 @@ import jax
 import jax.numpy as jnp
 import jax.random as jrandom
 
-from jaxatari.core import make as jaxatari_make
-from jaxatari.environment import JAXAtariAction
+from jaxtari.core import make as jaxtari_make
+from jaxtari.environment import JaxtariAction
 
 DEFAULT_GIF_DIR = os.path.join(os.path.dirname(__file__), "..", "docs", "source", "_static", "gifs")
 DISPLAY_SCALE = 4  # pygame window upscale (independent of GIF scale)
@@ -48,7 +48,7 @@ def _get_action_from_keys(env):
     elif right: name = "RIGHT"
     else:       name = "NOOP"
 
-    const = getattr(JAXAtariAction, name, JAXAtariAction.NOOP)
+    const = getattr(JaxtariAction, name, JaxtariAction.NOOP)
     if hasattr(env, "ACTION_SET"):
         action_set = np.array(env.ACTION_SET)
         matches = np.where(action_set == int(const))[0]
@@ -58,7 +58,7 @@ def _get_action_from_keys(env):
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Generate a GIF from a JAXAtari environment.")
+    parser = argparse.ArgumentParser(description="Generate a GIF from a Jaxtari environment.")
     parser.add_argument("-g", "--game",   type=str, required=True, help="Game name (e.g. 'seaquest')")
     parser.add_argument("--frames",  type=int, default=300, help="Number of frames to capture")
     parser.add_argument("--fps",     type=int, default=15,  help="GIF frame rate")
@@ -74,7 +74,7 @@ def main():
         os.makedirs(DEFAULT_GIF_DIR, exist_ok=True)
         args.output = os.path.join(DEFAULT_GIF_DIR, f"{args.game}.gif")
 
-    env = jaxatari_make(args.game)
+    env = jaxtari_make(args.game)
     jitted_reset  = jax.jit(env.reset)
     jitted_step   = jax.jit(env.step)
     jitted_render = jax.jit(env.render)

@@ -8,7 +8,7 @@ def test_climb_ladder(montezuma_env):
     
     # Room 4 has a ladder at x=72, top=49, bottom=88
     state = state.replace(room_id=jnp.array(4, dtype=jnp.int32))
-    from jaxatari.games.montezuma_revenge.rooms import load_room
+    from jaxtari.games.montezuma_revenge.rooms import load_room
     state = load_room(state.room_id, state, env.consts)
     
     # Place player at the bottom of the ladder
@@ -42,7 +42,7 @@ def test_climb_rope(montezuma_env):
     
     # Room 4 has a rope at x=111, top=49, bottom=88
     state = state.replace(room_id=jnp.array(4, dtype=jnp.int32))
-    from jaxatari.games.montezuma_revenge.rooms import load_room
+    from jaxtari.games.montezuma_revenge.rooms import load_room
     state = load_room(state.room_id, state, env.consts)
     
     # Place player at the rope
@@ -71,7 +71,7 @@ def test_no_drop_ladder_onto_platform(montezuma_env):
     # Room 4, ladder at x=72, top=49.
     # Platform is at Y=46..48.
     state = state.replace(room_id=jnp.array(4, dtype=jnp.int32))
-    from jaxatari.games.montezuma_revenge.rooms import load_room
+    from jaxtari.games.montezuma_revenge.rooms import load_room
     state = load_room(state.room_id, state, env.consts)
     
     # Place player on ladder near top

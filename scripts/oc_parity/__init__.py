@@ -1,1 +1,1 @@
-"""OCAtari ↔ JAXAtari micro-parity tooling (Pong-first)."""
+"""OCAtari ↔ Jaxtari micro-parity tooling (Pong-first)."""

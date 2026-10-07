@@ -15,7 +15,7 @@ Drive a Baja Bugger along branching hillside roads, collect eight colored
 flags, pick up prizes, and avoid or jump onto other cars. Jump with FIRE;
 UP/DOWN change speed (no LEFT/RIGHT — lane changes are jumps between roads).
 
-This JAXAtari port implements **three looping track layouts** (``LEVEL_COUNT=3``)
+This Jaxtari port implements **three looping track layouts** (``LEVEL_COUNT=3``)
 with hazard water on layout 3. The Atari 2600 cartridge progresses through
 **rounds 1–9** with escalating difficulty; rounds beyond the three baked
 geometries and remaining gameplay gaps are summarized below (from the
@@ -106,7 +106,7 @@ Missing / incomplete vs cartridge manual
 
 **Presentation**
 
-* **Audio / music** — Not in scope for JAXAtari RGB envs.
+* **Audio / music** — Not in scope for Jaxtari RGB envs.
 * **Exact sprite / color / scroll parity** — Ongoing; see
   ``docs/issue-reports/upndown-parity/``.
 

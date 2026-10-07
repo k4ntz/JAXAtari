@@ -1,4 +1,4 @@
-"""Translate OCAtari Pong object snapshots into JAXAtari PongState."""
+"""Translate OCAtari Pong object snapshots into Jaxtari PongState."""
 
 from __future__ import annotations
 
@@ -8,7 +8,7 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 
-from jaxatari.games.jax_pong import JaxPong, PongConstants, PongState
+from jaxtari.games.jax_pong import JaxPong, PongConstants, PongState
 
 from .base import find_object, objects_as_dicts
 

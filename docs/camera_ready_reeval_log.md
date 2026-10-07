@@ -270,8 +270,8 @@ TimePilot if only mod/recolor hooks
 
 ```bash
 # Substantive game-file history since cutoff on destin
-git log --since=2026-04-30 --oneline origin/dev -- 'src/jaxatari/games/jax_*.py' \
-  'src/jaxatari/games/montezuma_revenge/'
+git log --since=2026-04-30 --oneline origin/dev -- 'src/jaxtari/games/jax_*.py' \
+  'src/jaxtari/games/montezuma_revenge/'
 
 # After merging a PR, append the env to the right section above.
 ```

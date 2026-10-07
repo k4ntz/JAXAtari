@@ -1,4 +1,4 @@
-# Games covered in JaxAtari
+# Games covered in Jaxtari
 
 - 🥇: game is very close to original game and well optimized.
 - 🥈: game is close to original game, but may miss some parts, implements them differently or is not yet optimized for performance.

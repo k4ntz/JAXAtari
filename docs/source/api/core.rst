@@ -8,12 +8,12 @@ Here’s a minimal example:
 
 .. code-block:: python
 
-    import jaxatari
+    import jaxtari
 
-    env = jaxatari.make("pong")
-    print(jaxatari.list_available_games())
+    env = jaxtari.make("pong")
+    print(jaxtari.list_available_games())
 
-.. automodule:: jaxatari.core
+.. automodule:: jaxtari.core
    :members:
    :show-inheritance:
    :undoc-members:

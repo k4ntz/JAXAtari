@@ -6,13 +6,13 @@ import inspect
 import gc
 from pathlib import Path
 
-# Force CPU before any JAX import (jaxatari pulls JAX in transitively).
+# Force CPU before any JAX import (jaxtari pulls JAX in transitively).
 # Overrides a user/shell JAX_PLATFORMS so pytest never tries to init a missing GPU.
 os.environ["JAX_PLATFORMS"] = "cpu"
 os.environ.setdefault("XLA_PYTHON_CLIENT_PREALLOCATE", "false")
 
-from jaxatari.environment import JaxEnvironment
-from jaxatari.wrappers import (
+from jaxtari.environment import JaxEnvironment
+from jaxtari.wrappers import (
     AtariWrapper,
     PixelObsWrapper,
     ObjectCentricWrapper,
@@ -145,9 +145,9 @@ def pytest_collection_modifyitems(config, items):
 def discover_games() -> list[str]:
     """Scans the games directory and returns a list of all available game names."""
     try:
-        games_dir = Path(__file__).parent.parent / "src" / "jaxatari" / "games"
+        games_dir = Path(__file__).parent.parent / "src" / "jaxtari" / "games"
         game_files = games_dir.glob("jax_*.py")
-        # Extracts 'breakout' from a path like '.../src/jaxatari/games/jax_breakout.py'
+        # Extracts 'breakout' from a path like '.../src/jaxtari/games/jax_breakout.py'
         game_names = [p.stem.replace('jax_', '') for p in game_files if p.name!= 'jax___init__.py']
         if not game_names:
             raise FileNotFoundError("No game files found in the games directory.")
@@ -258,14 +258,14 @@ def _load_game_class(game_name: str) -> type[JaxEnvironment]:
     if cached is not None:
         return cached
 
-    module_name = f"jaxatari.games.jax_{game_name.lower()}"
+    module_name = f"jaxtari.games.jax_{game_name.lower()}"
     try:
         game_module = importlib.import_module(module_name)
     except ImportError:
         # Fallback for games that exist as files but are not a package import.
         test_file_dir = Path(__file__).parent.resolve()
         project_root = test_file_dir.parent
-        game_file_path = project_root / "src" / "jaxatari" / "games" / f"jax_{game_name.lower()}.py"
+        game_file_path = project_root / "src" / "jaxtari" / "games" / f"jax_{game_name.lower()}.py"
         if not game_file_path.is_file():
             raise FileNotFoundError(f"Game file not found: {game_file_path}") from None
         spec = importlib.util.spec_from_file_location(game_file_path.stem, game_file_path)
@@ -343,7 +343,7 @@ def fresh_raw_env(game_name):
 @pytest.fixture(scope="session")
 def montezuma_env():
     """Shared Montezuma instance for tests/games/montezuma_revenge (state is passed through reset/step)."""
-    from jaxatari.games.jax_montezumarevenge import JaxMontezumaRevenge
+    from jaxtari.games.jax_montezumarevenge import JaxMontezumaRevenge
     return JaxMontezumaRevenge()
 
 @pytest.fixture

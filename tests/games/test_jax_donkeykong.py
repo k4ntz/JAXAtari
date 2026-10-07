@@ -5,8 +5,8 @@ import jax
 import jax.numpy as jnp
 import chex
 
-import jaxatari
-from jaxatari.environment import JAXAtariAction as Action
+import jaxtari
+from jaxtari.environment import JaxtariAction as Action
 
 
 def test_idle_rollout_exact_equivalence():
@@ -28,7 +28,7 @@ def test_idle_rollout_exact_equivalence():
     expected_barrel_y = baseline_data["barrel_y"]
     expected_barrel_stage = baseline_data["barrel_stage"]
 
-    env = jaxatari.make("donkeykong")
+    env = jaxtari.make("donkeykong")
     key = jax.random.PRNGKey(42)
     obs, state = env.reset(key)
 
@@ -79,7 +79,7 @@ def test_mario_climbing_and_jumping():
     Verify that Mario climbing up, climbing down, jumping, and broken ladder rejection
     all function correctly.
     """
-    env = jaxatari.make("donkeykong")
+    env = jaxtari.make("donkeykong")
     key = jax.random.PRNGKey(0)
     obs, state = env.reset(key)
 
@@ -128,7 +128,7 @@ def test_barrel_interactions():
     Test Case 2 (Part B):
     Verify that barrels move along stages and descend ladders.
     """
-    env = jaxatari.make("donkeykong")
+    env = jaxtari.make("donkeykong")
     key = jax.random.PRNGKey(42)
     obs, state = env.reset(key)
 
@@ -156,7 +156,7 @@ def test_shifted_ladders_mod_assetless():
     Test Case 2 (Part C):
     Verify that ShiftedLaddersMod works dynamically without requiring custom .npy files.
     """
-    env = jaxatari.make("donkeykong", mods=["shifted_ladders"])
+    env = jaxtari.make("donkeykong", mods=["shifted_ladders"])
     key = jax.random.PRNGKey(123)
     obs, state = env.reset(key)
 
@@ -179,7 +179,7 @@ def test_center_ladders_mod():
       Mario can climb the centered bottom ladder at x=94.
     - Level 2: 4 columns centered to [52, 68, 88, 104].
     """
-    env = jaxatari.make("donkeykong", mods=["center_ladders"])
+    env = jaxtari.make("donkeykong", mods=["center_ladders"])
     key = jax.random.PRNGKey(42)
     obs, state = env.reset(key)
 
@@ -262,7 +262,7 @@ def test_jax_optimality_and_vmap():
     Test Case 3:
     Verify JIT compilation and parallel execution throughput with jax.vmap.
     """
-    env = jaxatari.make("donkeykong")
+    env = jaxtari.make("donkeykong")
     step_fn = jax.jit(env.step)
     render_fn = jax.jit(env.render)
 
@@ -295,7 +295,7 @@ def test_mario_climbs_to_princess_goal():
     Verify that Mario climbs all the way up to the princess platform (y <= 26)
     before the goal is cleared, rather than clearing prematurely at y=40.
     """
-    env = jaxatari.make("donkeykong")
+    env = jaxtari.make("donkeykong")
     key = jax.random.PRNGKey(42)
     obs, state = env.reset(key)
 
@@ -343,7 +343,7 @@ def test_start_top_platform_mod():
     Verify start_top_platform mod starts Mario on the platform just below the top one
     (Stage 6, x=106, y=43) on the right side facing left, can walk to the ladder and climb to the goal.
     """
-    env = jaxatari.make("donkeykong", mods=["start_top_platform"])
+    env = jaxtari.make("donkeykong", mods=["start_top_platform"])
     key = jax.random.PRNGKey(42)
     obs, state = env.reset(key)
 
@@ -393,7 +393,7 @@ def test_no_barrels_mod():
     Verify that NoBarrelsMod prevents barrels from spawning either on game start (FIRE)
     or during game rollout.
     """
-    env = jaxatari.make("donkeykong", mods=["no_barrels"])
+    env = jaxtari.make("donkeykong", mods=["no_barrels"])
     fire_idx = jnp.where(env.ACTION_SET == Action.FIRE)[0][0]
     right_idx = jnp.where(env.ACTION_SET == Action.RIGHT)[0][0]
 

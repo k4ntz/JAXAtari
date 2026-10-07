@@ -3,7 +3,7 @@ import jax.numpy as jnp
 import pytest
 from dataclasses import replace
 
-from jaxatari.games.jax_boxing import JaxBoxing, BoxingConstants, BoxingState, Action
+from jaxtari.games.jax_boxing import JaxBoxing, BoxingConstants, BoxingState, Action
 
 
 class TestJaxBoxing:

@@ -1,4 +1,4 @@
-"""Translate OCAtari Breakout snapshots into JAXAtari BreakoutState."""
+"""Translate OCAtari Breakout snapshots into Jaxtari BreakoutState."""
 
 from __future__ import annotations
 
@@ -8,7 +8,7 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 
-from jaxatari.games.jax_breakout import BreakoutState, JaxBreakout
+from jaxtari.games.jax_breakout import BreakoutState, JaxBreakout
 
 from .base import cast_like, collect_category, find_object, objects_as_dicts
 from .registry import print_disclaimers

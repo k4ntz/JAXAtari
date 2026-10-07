@@ -59,7 +59,7 @@ Recommended medal
 **🥈 Silver** — playable chess rules with castling, en passant, promotions, check
 filtering, and a working black opponent, but not full ALE Video Chess parity
 (no cartridge AI levels / opening book / timing / audio), and the minimax bot is
-a JAXAtari addition rather than a faithful port of the 2600 engine.
+a Jaxtari addition rather than a faithful port of the 2600 engine.
 
 Known issues
 ------------

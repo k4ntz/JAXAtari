@@ -42,7 +42,7 @@ jobs:
       - name: Generate full game matrix
         id: set-matrix
         run: |
-          ALL_GAMES=$(ls src/jaxatari/games/jax_*.py | sed -e 's|src/jaxatari/games/jax_||' -e 's|\.py$||' | jq -R . | jq -cs .)
+          ALL_GAMES=$(ls src/jaxtari/games/jax_*.py | sed -e 's|src/jaxtari/games/jax_||' -e 's|\.py$||' | jq -R . | jq -cs .)
           echo "matrix=$ALL_GAMES" >> "$GITHUB_OUTPUT"
         shell: bash
 

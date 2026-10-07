@@ -8,7 +8,7 @@ def test_conveyor_movement(montezuma_env):
     
     # Room 4 has a conveyor at y=88 (surface), x=60, direction 1.
     # Feet at 87 -> player_y = 87 - 20 + 1 = 68.
-    from jaxatari.games.montezuma_revenge.rooms import load_room
+    from jaxtari.games.montezuma_revenge.rooms import load_room
     state = state.replace(room_id=jnp.array(4, dtype=jnp.int32))
     state = load_room(state.room_id, state, env.consts)
     
@@ -33,7 +33,7 @@ def test_wall_collision(montezuma_env):
     obs, state = env.reset(key)
     
     # Room 5 has a right wall at x=156
-    from jaxatari.games.montezuma_revenge.rooms import load_room
+    from jaxtari.games.montezuma_revenge.rooms import load_room
     state = state.replace(room_id=jnp.array(5, dtype=jnp.int32))
     state = load_room(state.room_id, state, env.consts)
     
@@ -57,7 +57,7 @@ def test_jump_off_ladder_impossible(montezuma_env):
     obs, state = env.reset(key)
     
     # Room 4, ladder at x=72.
-    from jaxatari.games.montezuma_revenge.rooms import load_room
+    from jaxtari.games.montezuma_revenge.rooms import load_room
     state = state.replace(room_id=jnp.array(4, dtype=jnp.int32))
     state = load_room(state.room_id, state, env.consts)
     
@@ -88,7 +88,7 @@ def test_transition_landing_overlap(montezuma_env):
     obs, state = env.reset(key)
     
     # Start in Room 18 (ROOM_2_2)
-    from jaxatari.games.montezuma_revenge.rooms import load_room
+    from jaxtari.games.montezuma_revenge.rooms import load_room
     state = state.replace(room_id=jnp.array(18, jnp.int32))
     state = load_room(jnp.array(18, jnp.int32), state, env.consts)
     
@@ -99,7 +99,7 @@ def test_transition_landing_overlap(montezuma_env):
     state = state.replace(player_x=jnp.array(0, jnp.int32), player_y=jnp.array(37, jnp.int32))
     
     # Action LEFT (4) to trigger transition
-    # JAXAtariAction.LEFT is 4
+    # JaxtariAction.LEFT is 4
     obs, state, r, d, i = env.step(state, 4)
     
     assert state.room_id == 17
@@ -115,7 +115,7 @@ def test_jump_descent_overlap(montezuma_env):
     obs, state = env.reset(key)
     
     # Room 19 (ROOM_2_3)
-    from jaxatari.games.montezuma_revenge.rooms import load_room
+    from jaxtari.games.montezuma_revenge.rooms import load_room
     state = state.replace(room_id=jnp.array(19, jnp.int32))
     state = load_room(jnp.array(19, jnp.int32), state, env.consts)
     

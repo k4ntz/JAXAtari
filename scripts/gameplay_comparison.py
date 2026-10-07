@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 """
-A script to play and compare JAXAtari and ALE (Gymnasium) game versions.
+A script to play and compare Jaxtari and ALE (Gymnasium) game versions.
 
 Supports two modes:
 1.  'parallel': Play both games side-by-side with mirrored input.
-2.  'record_replay': Play and record JAXAtari, then replay the actions
+2.  'record_replay': Play and record Jaxtari, then replay the actions
     on both environments side-by-side for a deterministic comparison.
 
 Prints a detailed action-mapping comparison on startup.
@@ -20,7 +20,7 @@ Controls:
 -   Quit: ESCAPE (or Q in record mode)
 
 Assumes `core.py` is in the same directory or Python path.
-Requires `jaxatari`, `gymnasium[atari]`, `ale-py`, `pygame`, and `numpy`.
+Requires `jaxtari`, `gymnasium[atari]`, `ale-py`, `pygame`, and `numpy`.
 """
 
 import argparse
@@ -45,12 +45,12 @@ import jax.random as jrandom
 import jax.numpy as jnp
 
 try:
-    import jaxatari.core as core 
-    from jaxatari.environment import JaxEnvironment, JAXAtariAction
-    from jaxatari.renderers import JAXGameRenderer
+    import jaxtari.core as core 
+    from jaxtari.environment import JaxEnvironment, JaxtariAction
+    from jaxtari.renderers import JAXGameRenderer
 except ImportError:
-    print("Error: Could not import 'core' or 'jaxatari'.")
-    print("Please ensure 'core.py' is in the same directory and 'jaxatari' is installed.")
+    print("Error: Could not import 'core' or 'jaxtari'.")
+    print("Please ensure 'core.py' is in the same directory and 'jaxtari' is installed.")
     sys.exit(1)
 
 
@@ -66,7 +66,7 @@ NATIVE_H, NATIVE_W = 210, 160
 SCALED_W = NATIVE_W * UPSCALE_FACTOR
 SCALED_H = NATIVE_H * UPSCALE_FACTOR
 
-# JAXAtari registry keys whose ALE ROM title differs (e.g. tron -> Trondead).
+# Jaxtari registry keys whose ALE ROM title differs (e.g. tron -> Trondead).
 ALE_GAME_TITLES = {
     "tron": "Trondead",
 }
@@ -104,7 +104,7 @@ def pace_paired_emulation_frame(clock: pygame.time.Clock, playback_hz: int) -> N
 
 
 def resolve_comparison_game_names(name: str) -> Tuple[str, str]:
-    """Map a CLI game name to (JAXAtari registry key, ALE ROM title)."""
+    """Map a CLI game name to (Jaxtari registry key, ALE ROM title)."""
     jax_name = core.GAME_ALIASES.get(name.lower(), name.lower())
     ale_name = ALE_GAME_TITLES.get(jax_name, name)
     return jax_name, ale_name
@@ -118,9 +118,9 @@ def setup_ale_env(game_name: str, seed: int) -> gym.Env:
         env = gym.make(
             f"ALE/{game_name}-v5",
             render_mode="rgb_array",
-            frameskip=1,  # 1 ALE step == 1 NTSC frame == 1 JAXAtari step
+            frameskip=1,  # 1 ALE step == 1 NTSC frame == 1 Jaxtari step
             repeat_action_probability=0.0,  # Deterministic
-            full_action_space=False,  # Minimal action set; matches typical JAXAtari ACTION_SET sizing
+            full_action_space=False,  # Minimal action set; matches typical Jaxtari ACTION_SET sizing
         )
         env.reset(seed=seed)
         frameskip = getattr(env.unwrapped, "frameskip", None)
@@ -157,8 +157,8 @@ def load_ale_checkpoint(ale_env: gym.Env, checkpoint_path: str) -> None:
         sys.exit(1)
 
 def setup_jax_env(game_name: str, seed: int) -> Dict[str, Any]:
-    """Initializes the JAXAtari environment using core.py."""
-    print(f"Initializing JAXAtari env: '{game_name}'")
+    """Initializes the Jaxtari environment using core.py."""
+    print(f"Initializing Jaxtari env: '{game_name}'")
     try:
         env = core.make(game_name)
         renderer = env.renderer
@@ -168,7 +168,7 @@ def setup_jax_env(game_name: str, seed: int) -> Dict[str, Any]:
         master_key = jrandom.PRNGKey(seed)
         obs, state = env.reset(master_key)
         
-        print("JAXAtari environment initialized and jitting functions...")
+        print("Jaxtari environment initialized and jitting functions...")
         return {
             "env": env,
             "renderer": renderer,
@@ -179,18 +179,18 @@ def setup_jax_env(game_name: str, seed: int) -> Dict[str, Any]:
             "seed": seed,
         }
     except Exception as e:
-        print(f"Error creating JAXAtari environment: {e}")
+        print(f"Error creating Jaxtari environment: {e}")
         sys.exit(1)
 
 
 # --- Action Mapping ---
 
 def build_jax_action_map() -> Dict[str, int]:
-    """Builds a map of semantic action names to JAXAtariAction integers."""
+    """Builds a map of semantic action names to JaxtariAction integers."""
     return {
-        name: getattr(JAXAtariAction, name)
-        for name in dir(JAXAtariAction)
-        if not name.startswith("_") and isinstance(getattr(JAXAtariAction, name), int)
+        name: getattr(JaxtariAction, name)
+        for name in dir(JaxtariAction)
+        if not name.startswith("_") and isinstance(getattr(JaxtariAction, name), int)
     }
 
 def build_ale_action_map(env: gym.Env) -> Dict[str, int]:
@@ -206,20 +206,20 @@ def build_ale_action_map(env: gym.Env) -> Dict[str, int]:
 def map_action_to_index(env, action_input, verbose=True):
     """
     Maps an input (Index or Constant) to the specific index required by env.step().
-    Includes logging to verify NN-to-JAXAtari mapping.
+    Includes logging to verify NN-to-Jaxtari mapping.
     """
     # 1. Identify the Semantic Name of the Constant for debugging
     # This maps the integer value (e.g., 4) back to "LEFT"
     action_names = {
-        v: k for k, v in vars(JAXAtariAction).items() 
+        v: k for k, v in vars(JaxtariAction).items() 
         if not k.startswith("_") and isinstance(v, int)
     }
 
     if hasattr(env, 'ACTION_SET'):
         action_set = np.array(env.ACTION_SET)
-        noop_idx = int(np.where(action_set == JAXAtariAction.NOOP)[0][0]) if JAXAtariAction.NOOP in action_set else 0
+        noop_idx = int(np.where(action_set == JaxtariAction.NOOP)[0][0]) if JaxtariAction.NOOP in action_set else 0
         
-        # If the input is already a JAXAtariAction constant (like from get_human_action)
+        # If the input is already a JaxtariAction constant (like from get_human_action)
         # we find its position in the ACTION_SET.
         if action_input in action_set:
             matches = np.where(action_set == action_input)[0]
@@ -353,7 +353,7 @@ def create_comparison_surface(
         print(f"Diff render error: {e}")
 
     # --- Add Headers ---
-    headers = ["JAXATARI", "ALE", "DIFFERENCE"]
+    headers = ["JAXTARI", "ALE", "DIFFERENCE"]
     for i, header in enumerate(headers):
         text = font.render(header, True, COLOR_WHITE)
         text_rect = text.get_rect(center=(SCALED_W * i + SCALED_W // 2, 15))
@@ -493,9 +493,9 @@ def run_parallel_mode(
         # This looks up "LEFT" in the ALE meaning list (e.g., ALE index 3)
         ale_action = ale_action_map.get(semantic_action, 0)
 
-        # 3. Map for JAXAtari
+        # 3. Map for Jaxtari
         # First, get the JAX constant for "LEFT" (value 4)
-        jax_const = jax_action_map.get(semantic_action, JAXAtariAction.NOOP)
+        jax_const = jax_action_map.get(semantic_action, JaxtariAction.NOOP)
         # Second, find where constant 4 is in your game's ACTION_SET (e.g., JAX index 3)
         jax_action_index = map_action_to_index(jax_data["env"], jax_const)
 
@@ -551,7 +551,7 @@ def run_record_replay_mode(
     
     # --- Part 1: Record JAX ---
     print("--- RECORDING PHASE ---")
-    print("Playing JAXAtari. Press 'Q' or ESCAPE to stop recording and start replay.")
+    print("Playing Jaxtari. Press 'Q' or ESCAPE to stop recording and start replay.")
     
     # Resize window for single view
     screen = pygame.display.set_mode((SCALED_W, SCALED_H))
@@ -596,7 +596,7 @@ def run_record_replay_mode(
         if pause or (frame_by_frame and not next_frame_asked):
             mode_text = "PAUSED (RECORDING)" if pause else "FRAME-BY-FRAME (Press N)"
             single_surface = render_single_frame(
-                jax_frame, font, "JAXATARI (RECORDING)", mode_text, COLOR_PAUSE
+                jax_frame, font, "JAXTARI (RECORDING)", mode_text, COLOR_PAUSE
             )
             screen.blit(single_surface, (0, 0))
             pygame.display.flip()
@@ -611,7 +611,7 @@ def run_record_replay_mode(
         recorded_actions.append(semantic_action)
         
         # --- Map & Step JAX ---
-        jax_action_constant = jax_action_map.get(semantic_action, JAXAtariAction.NOOP)
+        jax_action_constant = jax_action_map.get(semantic_action, JaxtariAction.NOOP)
         jax_action_index = map_action_to_index(jax_data["env"], jax_action_constant)
         jax_obs, jax_state, jax_reward, jax_done, jax_info = jitted_step(jax_state, jax_action_index)
         frame_timer.tick()
@@ -621,7 +621,7 @@ def run_record_replay_mode(
         
         # --- Blit Single Frame ---
         single_surface = render_single_frame(
-            jax_frame, font, "JAXATARI (RECORDING)", "Press Q or ESC to stop", COLOR_RECORD
+            jax_frame, font, "JAXTARI (RECORDING)", "Press Q or ESC to stop", COLOR_RECORD
         )
         screen.blit(single_surface, (0, 0))
         pygame.display.flip()
@@ -711,9 +711,9 @@ def run_record_replay_mode(
         # This looks up "LEFT" in the ALE meaning list (e.g., ALE index 3)
         ale_action = ale_action_map.get(semantic_action, 0)
 
-        # 3. Map for JAXAtari
+        # 3. Map for Jaxtari
         # First, get the JAX constant for "LEFT" (value 4)
-        jax_const = jax_action_map.get(semantic_action, JAXAtariAction.NOOP)
+        jax_const = jax_action_map.get(semantic_action, JaxtariAction.NOOP)
         # Second, find where constant 4 is in your game's ACTION_SET (e.g., JAX index 3)
         jax_action_index = map_action_to_index(jax_data["env"], jax_const)
 
@@ -750,7 +750,7 @@ def run_record_replay_mode(
 # --- Main ---
 
 def main():
-    parser = argparse.ArgumentParser(description="Compare JAXAtari and ALE game renders.")
+    parser = argparse.ArgumentParser(description="Compare Jaxtari and ALE game renders.")
     parser.add_argument(
         "-g", "--game",
         type=str,
@@ -776,7 +776,7 @@ def main():
         default=DEFAULT_PLAYBACK_FPS,
         help=(
             "Wall-clock Hz for the pygame loop (NTSC Atari is 60). Each tick is one "
-            "paired emulated frame: exactly one JAXAtari step and one ALE step with "
+            "paired emulated frame: exactly one Jaxtari step and one ALE step with "
             "frameskip=1 (when not paused)."
         ),
     )
@@ -803,7 +803,7 @@ def main():
     pygame.init()
     pygame.font.init()
     font = pygame.font.SysFont("Arial", 18)
-    pygame.display.set_caption(f"JAXAtari vs ALE Comparison: {args.game}")
+    pygame.display.set_caption(f"Jaxtari vs ALE Comparison: {args.game}")
     clock = pygame.time.Clock()
 
     # Init environments
@@ -811,7 +811,7 @@ def main():
     if args.ale_load_state:
         load_ale_checkpoint(ale_env, args.ale_load_state)
         print(
-            "Note: ALE was loaded from checkpoint; JAXAtari still starts from "
+            "Note: ALE was loaded from checkpoint; Jaxtari still starts from "
             "its standard reset state."
         )
     jax_data = setup_jax_env(jax_game_name, args.seed)

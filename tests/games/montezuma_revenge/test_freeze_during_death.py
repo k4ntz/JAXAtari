@@ -39,7 +39,7 @@ def test_lasers_freeze_during_death(montezuma_env):
     obs, state = env.reset(key)
     
     # Trigger death by laser
-    from jaxatari.games.montezuma_revenge.rooms import load_room
+    from jaxtari.games.montezuma_revenge.rooms import load_room
     state = load_room(jnp.array(14, dtype=jnp.int32), state, env.consts)
     state = state.replace(
         player_x=jnp.array(40, dtype=jnp.int32),

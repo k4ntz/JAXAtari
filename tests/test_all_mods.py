@@ -20,14 +20,14 @@ from functools import partial
 from dataclasses import is_dataclass as dc_is_dataclass, fields
 from typing import Dict, List, Any
 
-from jaxatari.core import make as _core_make, MOD_MODULES, GAME_MODULES
-from jaxatari.modification import (
-    JaxAtariInternalModPlugin,
-    JaxAtariPostStepModPlugin,
+from jaxtari.core import make as _core_make, MOD_MODULES, GAME_MODULES
+from jaxtari.modification import (
+    JaxtariInternalModPlugin,
+    JaxtariPostStepModPlugin,
     _load_from_string,
     apply_native_downscaling,
 )
-from jaxatari.wrappers import AtariWrapper, PixelObsWrapper
+from jaxtari.wrappers import AtariWrapper, PixelObsWrapper
 from conftest import parse_game_list, skip_unless_game_selected, normalize_game_name
 
 
@@ -312,7 +312,7 @@ class TestModExecution:
         if mod_key not in registry or isinstance(registry[mod_key], list):
             return
         plugin_class = registry[mod_key]
-        if not issubclass(plugin_class, JaxAtariInternalModPlugin):
+        if not issubclass(plugin_class, JaxtariInternalModPlugin):
             return
 
         has_constant = getattr(plugin_class, "constants_overrides", None) and len(plugin_class.constants_overrides) > 0
@@ -817,23 +817,23 @@ class TestModPluginTypes:
 
     def test_internal_mod_plugin_structure(self):
         """Test that InternalModPlugin has required attributes."""
-        assert hasattr(JaxAtariInternalModPlugin, "constants_overrides")
-        assert hasattr(JaxAtariInternalModPlugin, "attribute_overrides")
-        assert hasattr(JaxAtariInternalModPlugin, "asset_overrides")
-        assert hasattr(JaxAtariInternalModPlugin, "conflicts_with")
+        assert hasattr(JaxtariInternalModPlugin, "constants_overrides")
+        assert hasattr(JaxtariInternalModPlugin, "attribute_overrides")
+        assert hasattr(JaxtariInternalModPlugin, "asset_overrides")
+        assert hasattr(JaxtariInternalModPlugin, "conflicts_with")
 
     def test_poststep_mod_plugin_structure(self):
         """Test that PostStepModPlugin has required attributes."""
-        assert hasattr(JaxAtariPostStepModPlugin, "constants_overrides")
-        assert hasattr(JaxAtariPostStepModPlugin, "attribute_overrides")
-        assert hasattr(JaxAtariPostStepModPlugin, "asset_overrides")
-        assert hasattr(JaxAtariPostStepModPlugin, "conflicts_with")
-        assert hasattr(JaxAtariPostStepModPlugin, "run")
-        assert hasattr(JaxAtariPostStepModPlugin, "after_reset")
+        assert hasattr(JaxtariPostStepModPlugin, "constants_overrides")
+        assert hasattr(JaxtariPostStepModPlugin, "attribute_overrides")
+        assert hasattr(JaxtariPostStepModPlugin, "asset_overrides")
+        assert hasattr(JaxtariPostStepModPlugin, "conflicts_with")
+        assert hasattr(JaxtariPostStepModPlugin, "run")
+        assert hasattr(JaxtariPostStepModPlugin, "after_reset")
 
     def test_mod_plugin_can_override_constants(self):
         """Test that a mod plugin can define constant overrides."""
-        class TestMod(JaxAtariInternalModPlugin):
+        class TestMod(JaxtariInternalModPlugin):
             constants_overrides = {"TEST_CONSTANT": 42}
 
         assert TestMod.constants_overrides == {"TEST_CONSTANT": 42}
@@ -841,7 +841,7 @@ class TestModPluginTypes:
 
     def test_mod_plugin_can_override_attributes(self):
         """Test that a mod plugin can define attribute overrides."""
-        class TestMod(JaxAtariInternalModPlugin):
+        class TestMod(JaxtariInternalModPlugin):
             attribute_overrides = {"test_attr": "test_value"}
 
         assert TestMod.attribute_overrides == {"test_attr": "test_value"}
@@ -849,7 +849,7 @@ class TestModPluginTypes:
 
     def test_mod_plugin_can_override_assets(self):
         """Test that a mod plugin can define asset overrides."""
-        class TestMod(JaxAtariInternalModPlugin):
+        class TestMod(JaxtariInternalModPlugin):
             asset_overrides = {
                 "test_asset": {"name": "test_asset", "type": "single", "file": "test.npy"}
             }
@@ -1022,7 +1022,7 @@ class TestDatatypeConsistency:
 # Focused regression test for the renderer-swap JIT staleness fix
 # ---------------------------------------------------------------------------
 
-class _SyntheticRendererPatchMod(JaxAtariInternalModPlugin):
+class _SyntheticRendererPatchMod(JaxtariInternalModPlugin):
     """
     Minimal mod that patches a renderer hook using renderer state.
 
@@ -1061,7 +1061,7 @@ def test_renderer_patch_jit_staleness_fixed(request, isolate_jit_cache):
     # 1. Base env (kangaroo has _render_hook_post_ui on its renderer).
     env = make('kangaroo')
 
-    # 2. Inject the synthetic patch the same way JaxAtariModController does.
+    # 2. Inject the synthetic patch the same way JaxtariModController does.
     plugin = _SyntheticRendererPatchMod()
     plugin._env = env
     setattr(env.renderer, '_render_hook_post_ui', plugin._render_hook_post_ui)

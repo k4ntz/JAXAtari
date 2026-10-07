@@ -152,7 +152,7 @@
         }
       },
       "worst_run": {
-        "traj_path": "/home/paul/Documents/JAXAtari/data/oc_parity_corpus/raw/freeway_play01.npz",
+        "traj_path": "/home/paul/Documents/Jaxtari/data/oc_parity_corpus/raw/freeway_play01.npz",
         "t0": 391,
         "entity_l1_at_0": 0.0,
         "entity_l1_at_end": 87.36363636363636,
@@ -324,7 +324,7 @@
         }
       },
       "worst_run": {
-        "traj_path": "/home/paul/Documents/JAXAtari/data/oc_parity_corpus/raw/montezumarevenge_play01.npz",
+        "traj_path": "/home/paul/Documents/Jaxtari/data/oc_parity_corpus/raw/montezumarevenge_play01.npz",
         "t0": 1230,
         "entity_l1_at_0": 0.0,
         "entity_l1_at_end": 42.0,
@@ -416,7 +416,7 @@
         }
       },
       "worst_run": {
-        "traj_path": "/home/paul/Documents/JAXAtari/data/oc_parity_corpus/raw/pong_play01.npz",
+        "traj_path": "/home/paul/Documents/Jaxtari/data/oc_parity_corpus/raw/pong_play01.npz",
         "t0": 446,
         "entity_l1_at_0": 0.0,
         "entity_l1_at_end": 44.65302530924479,
@@ -520,7 +520,7 @@
         }
       },
       "worst_run": {
-        "traj_path": "/home/paul/Documents/JAXAtari/data/oc_parity_corpus/raw/bankheist_play01.npz",
+        "traj_path": "/home/paul/Documents/Jaxtari/data/oc_parity_corpus/raw/bankheist_play01.npz",
         "t0": 1230,
         "entity_l1_at_0": 0.0,
         "entity_l1_at_end": 0.6666666666666666,
@@ -671,7 +671,7 @@
         }
       },
       "worst_run": {
-        "traj_path": "/home/paul/Documents/JAXAtari/data/oc_parity_corpus/raw/seaquest_play01.npz",
+        "traj_path": "/home/paul/Documents/Jaxtari/data/oc_parity_corpus/raw/seaquest_play01.npz",
         "t0": 391,
         "entity_l1_at_0": 1.0,
         "entity_l1_at_end": 43.0,
@@ -869,7 +869,7 @@
         }
       },
       "worst_run": {
-        "traj_path": "/home/paul/Documents/JAXAtari/data/oc_parity_corpus/raw/skiing_play01.npz",
+        "traj_path": "/home/paul/Documents/Jaxtari/data/oc_parity_corpus/raw/skiing_play01.npz",
         "t0": 922,
         "entity_l1_at_0": 17.857142857142858,
         "entity_l1_at_end": 126.20449835062027,

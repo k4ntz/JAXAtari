@@ -8,10 +8,10 @@ import textwrap
 warnings.filterwarnings("ignore", category=UserWarning)
 os.environ['PYGAME_HIDE_SUPPORT_PROMPT'] = "hide"
 
-# Add src to path so we can import jaxatari if it's not installed
+# Add src to path so we can import jaxtari if it's not installed
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "src")))
 
-from jaxatari.core import GAME_MODULES, MOD_MODULES
+from jaxtari.core import GAME_MODULES, MOD_MODULES
 
 def _load_from_string(path: str):
     """Dynamically import an attribute from a module path string."""

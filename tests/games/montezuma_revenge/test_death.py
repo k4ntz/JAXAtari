@@ -9,7 +9,7 @@ def test_death_by_falling(montezuma_env):
     # Use Room 12 (index 5)
     # Middle platform is at y=26 (feet at 45). Next floor is at 88 (feet at 87).
     # Distance = 87 - 20 + 1 - 26 = 68 - 26 = 42. 42 > 33.
-    from jaxatari.games.montezuma_revenge.rooms import load_room
+    from jaxtari.games.montezuma_revenge.rooms import load_room
     state = load_room(jnp.array(12, dtype=jnp.int32), state, env.consts)
     
     initial_lives = state.lives
@@ -67,7 +67,7 @@ def test_death_by_laser(montezuma_env):
     
     # Laser is active when laser_cycle is [0, 92)
     # Laser room is room 14
-    from jaxatari.games.montezuma_revenge.rooms import load_room
+    from jaxtari.games.montezuma_revenge.rooms import load_room
     state = load_room(jnp.array(14, dtype=jnp.int32), state, env.consts)
     
     state = state.replace(

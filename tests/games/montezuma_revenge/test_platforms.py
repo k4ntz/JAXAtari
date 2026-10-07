@@ -5,7 +5,7 @@ def test_walking_on_platform(montezuma_env):
     env = montezuma_env
     key = jax.random.PRNGKey(0)
     obs, state = env.reset(key)
-    from jaxatari.games.montezuma_revenge.rooms import load_room
+    from jaxtari.games.montezuma_revenge.rooms import load_room
     state = load_room(jnp.array(12, dtype=jnp.int32), state, env.consts)
     
     # Starting position (77, 26) is on a conveyor in room 12
@@ -23,7 +23,7 @@ def test_falling_off_platform(montezuma_env):
     env = montezuma_env
     key = jax.random.PRNGKey(0)
     obs, state = env.reset(key)
-    from jaxatari.games.montezuma_revenge.rooms import load_room
+    from jaxtari.games.montezuma_revenge.rooms import load_room
     state = load_room(jnp.array(12, dtype=jnp.int32), state, env.consts)
     
     # In room 12, the middle platform/conveyor is from x=57 to x=103?
@@ -45,7 +45,7 @@ def test_jumping_on_platform(montezuma_env):
     env = montezuma_env
     key = jax.random.PRNGKey(0)
     obs, state = env.reset(key)
-    from jaxatari.games.montezuma_revenge.rooms import load_room
+    from jaxtari.games.montezuma_revenge.rooms import load_room
     state = load_room(jnp.array(12, dtype=jnp.int32), state, env.consts)
     
     # Jump (Action 1 is FIRE, which triggers jump if on ground)

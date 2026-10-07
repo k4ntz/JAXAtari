@@ -1,7 +1,7 @@
 # Rebuttal trajectory-comparison artifacts
 
 Snapshot of **only** the human-play runs and outputs cited in
-`docs/issue-reports/rebuttal-ale-jaxatari-similarity.md`.
+`docs/issue-reports/rebuttal-ale-jaxtari-similarity.md`.
 
 Not part of the Sphinx site (`docs/source/`); lives next to other issue-report
 notes so it will not be picked up by the docs build.

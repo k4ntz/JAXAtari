@@ -22,7 +22,7 @@ if PROJECT_SRC not in sys.path:
 
 try:
     # Use the original template module for constants and default maze
-    from jaxatari.games.amidar_mazes import original as ORIG # You can change the template here
+    from jaxtari.games.amidar_mazes import original as ORIG # You can change the template here
 except Exception as e:
     messagebox.showerror("Import Error", f"Failed to import original template: {e}")
     raise
@@ -200,7 +200,7 @@ class MazeEditor(tk.Tk):
         self.canvas.bind("<Motion>", self._on_motion)
 
     # --------------------- Precompute helpers (NumPy versions) ---------------------
-    # These mirror the logic in src/jaxatari/games/jax_amidar.py for path-derived constants,
+    # These mirror the logic in src/jaxtari/games/jax_amidar.py for path-derived constants,
     # adapted to NumPy for offline computation at export time.
 
     @staticmethod
@@ -717,7 +717,7 @@ class MazeEditor(tk.Tk):
     def _show_about(self):
         messagebox.showinfo(
             "About",
-            "Amidar Maze Editor\nCreate and export Amidar-style mazes for JAXAtari.",
+            "Amidar Maze Editor\nCreate and export Amidar-style mazes for Jaxtari.",
         )
 
     def _show_help(self):
@@ -759,7 +759,7 @@ Template
 - Snap template: Snap to the original template's grid (from amidar_mazes.original).
 - Add corners: Add all template corners to your current set.
 - Add player & enemies: Loads INITIAL_PLAYER_POSITION and INITIAL_ENEMY_POSITIONS from the original maze module.
-    • These are defined in src/jaxatari/games/amidar_mazes/original.py.
+    • These are defined in src/jaxtari/games/amidar_mazes/original.py.
 If you would like to use a different maze than the original as the template, search the script for "You can change the template here". There you can choose to import a different maze as the original.
 
 Tools
@@ -769,7 +769,7 @@ Tools
 - Connect all: Connect all adjacent corners along rows and columns where valid.
 - Clear: Remove all corners, edges, enemies and the player.
 
-Export or Ctrl+S: Writes a Python module with JAX arrays into src/jaxatari/games/amidar_mazes/maze_N.py, including:
+Export or Ctrl+S: Writes a Python module with JAX arrays into src/jaxtari/games/amidar_mazes/maze_N.py, including:
     • PATH_CORNERS, HORIZONTAL_PATH_EDGES, VERTICAL_PATH_EDGES, PATH_EDGES
     • RECTANGLES, RECTANGLE_BOUNDS, CORNER_RECTANGLES
     • MAX_ENEMIES, INITIAL_PLAYER_POSITION, INITIAL_ENEMY_POSITIONS
@@ -1454,8 +1454,8 @@ Tips
                 )
                 return
 
-        # Save into organized folder: src/jaxatari/games/amidar_mazes
-        mazes_dir = os.path.join(PROJECT_SRC, "jaxatari", "games", "amidar_mazes")
+        # Save into organized folder: src/jaxtari/games/amidar_mazes
+        mazes_dir = os.path.join(PROJECT_SRC, "jaxtari", "games", "amidar_mazes")
         try:
             os.makedirs(mazes_dir, exist_ok=True)
             # ensure it's a package
@@ -1515,7 +1515,7 @@ Tips
         try:
             with open(path, "w", encoding="utf-8") as f:
                 f.write("\n".join(content))
-            module_name = f"jaxatari.games.amidar_mazes.{os.path.splitext(filename)[0]}"
+            module_name = f"jaxtari.games.amidar_mazes.{os.path.splitext(filename)[0]}"
             messagebox.showinfo(
                 "Saved",
                 (

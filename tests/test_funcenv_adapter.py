@@ -9,7 +9,7 @@ import numpy as np
 import collections
 from gymnasium.utils import env_checker
 
-from jaxatari.gym_wrapper import GymnasiumJaxAtariWrapper, JaxAtariFuncEnv, to_gymnasium_space
+from jaxtari.gym_wrapper import GymnasiumJaxtariWrapper, JaxtariFuncEnv, to_gymnasium_space
 
 
 # ==============================================================================
@@ -19,17 +19,17 @@ from jaxatari.gym_wrapper import GymnasiumJaxAtariWrapper, JaxAtariFuncEnv, to_g
 @pytest.fixture
 def gym_env(raw_env):
     """
-    Provides an instance of the GymnasiumJaxAtariWrapper for a given raw_env.
+    Provides an instance of the GymnasiumJaxtariWrapper for a given raw_env.
     The `raw_env` is automatically provided and parameterized by conftest.py,
     ensuring these tests run for every specified game.
     """
-    return GymnasiumJaxAtariWrapper(raw_env, render_mode="rgb_array")
+    return GymnasiumJaxtariWrapper(raw_env, render_mode="rgb_array")
 
 
 @pytest.fixture
 def func_env(raw_env):
     """Provides direct access to the functional adapter for testing JAX transforms."""
-    return JaxAtariFuncEnv(raw_env)
+    return JaxtariFuncEnv(raw_env)
 
 
 # ==============================================================================
@@ -82,8 +82,8 @@ class TestGymnasiumApiCompliance:
     def test_seeding_and_determinism(self, raw_env):
         """Ensures that seeding the environment produces deterministic trajectories."""
         # Create two separate wrapper instances from the same raw env
-        env1 = GymnasiumJaxAtariWrapper(raw_env)
-        env2 = GymnasiumJaxAtariWrapper(raw_env)
+        env1 = GymnasiumJaxtariWrapper(raw_env)
+        env2 = GymnasiumJaxtariWrapper(raw_env)
 
         obs1, _ = env1.reset(seed=42)
         obs2, _ = env2.reset(seed=42)

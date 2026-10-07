@@ -16,7 +16,7 @@ def test_jump_through_dynamic_platform(montezuma_env):
         is_falling=jnp.array(0, dtype=jnp.int32),
         is_jumping=jnp.array(0, dtype=jnp.int32)
     )
-    from jaxatari.games.montezuma_revenge.rooms import load_room
+    from jaxtari.games.montezuma_revenge.rooms import load_room
     state = load_room(jnp.array(17, dtype=jnp.int32), state, env.consts)
 
     # Ensure we are on platform 2 (y=76)
@@ -69,7 +69,7 @@ def test_jump_through_static_platform(montezuma_env):
         is_falling=jnp.array(0, dtype=jnp.int32),
         is_jumping=jnp.array(0, dtype=jnp.int32)
     )
-    from jaxatari.games.montezuma_revenge.rooms import load_room
+    from jaxtari.games.montezuma_revenge.rooms import load_room
     state = load_room(jnp.array(17, dtype=jnp.int32), state, env.consts)
 
     # Jump UP

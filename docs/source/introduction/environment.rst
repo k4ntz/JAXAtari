@@ -1,7 +1,7 @@
 Base Environment
 ================
 
-.. automodule:: jaxatari.environment
+.. automodule:: jaxtari.environment
    :members:
    :show-inheritance:
    :undoc-members:

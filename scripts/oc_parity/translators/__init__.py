@@ -1,4 +1,4 @@
-"""Per-game OCAtari object snapshot → JAXAtari state translators."""
+"""Per-game OCAtari object snapshot → Jaxtari state translators."""
 
 from .pong import oc_frame_to_pong_state, trajectory_frame_to_pong_state
 from .bankheist import oc_frame_to_bankheist_state

@@ -17,8 +17,8 @@ import jax.numpy as jnp
 import jax.random as jrandom
 import numpy as np
 
-import jaxatari
-from jaxatari.wrappers import AtariWrapper, ObjectCentricWrapper, FlattenObservationWrapper, PixelObsWrapper, LogWrapper, NormalizeObservationWrapper
+import jaxtari
+from jaxtari.wrappers import AtariWrapper, ObjectCentricWrapper, FlattenObservationWrapper, PixelObsWrapper, LogWrapper, NormalizeObservationWrapper
 
 # Import network and utilities from pqn_agent
 from pqn_agent import QNetwork, CNN
@@ -71,7 +71,7 @@ def update_pygame(window, image, upscale_factor, native_w, native_h):
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Visualize a trained PQN agent playing a JAXAtari game."
+        description="Visualize a trained PQN agent playing a Jaxtari game."
     )
     parser.add_argument(
         "--model",
@@ -191,7 +191,7 @@ def main():
             mods_config = mods if isinstance(mods, list) else [mods]
 
     # Create environment
-    env = jaxatari.make(game_name.lower(), mods=mods_config)
+    env = jaxtari.make(game_name.lower(), mods=mods_config)
     renderer = env.renderer
 
     # Apply wrappers (matching training setup)
