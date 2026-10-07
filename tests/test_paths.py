@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from jaxatari import paths
+from jaxtari import paths
 
 
 def test_prefers_canonical_when_present(tmp_path, monkeypatch):

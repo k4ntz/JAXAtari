@@ -90,10 +90,10 @@ N_SEEDS = 2
 WORKERS_PER_GPU = 1 # we already run three seeds per GPU/Env
 
 CONFIGS = [
-    # "pqn_jaxatari_pixel_optimal_scaling",
-    # "pqn_jaxatari_object_optimal_scaling",
-    "pqn_jaxatari_pixel_repr",
-    "pqn_jaxatari_object_repr",
+    # "pqn_jaxtari_pixel_optimal_scaling",
+    # "pqn_jaxtari_object_optimal_scaling",
+    "pqn_jaxtari_pixel_repr",
+    "pqn_jaxtari_object_repr",
 ]
 
 def worker(gpu_id: str, worker_id: int, task_queue: queue.Queue, extra_args: list):
@@ -131,7 +131,7 @@ def worker(gpu_id: str, worker_id: int, task_queue: queue.Queue, extra_args: lis
             task_queue.task_done()
 
 def main():
-    parser = argparse.ArgumentParser(description="Run PQN JaxAtari scan on multiple GPUs concurrently.")
+    parser = argparse.ArgumentParser(description="Run PQN Jaxtari scan on multiple GPUs concurrently.")
     parser.add_argument(
         "--gpus", 
         type=str, 

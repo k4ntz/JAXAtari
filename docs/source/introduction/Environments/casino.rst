@@ -1,17 +1,17 @@
 Casino
 ======
 
-The original Atari 2600 *Casino* cartridge contains three distinct games. JAXAtari
+The original Atari 2600 *Casino* cartridge contains three distinct games. Jaxtari
 does not expose a combined ``casino`` environment and does not use ALE-style
 ``mode`` selection. Create each game separately:
 
 .. code-block:: python
 
-   import jaxatari
+   import jaxtari
 
-   blackjack = jaxatari.make("casinoblackjack")
-   five_stud = jaxatari.make("casinofivestudpoker")
-   solitaire = jaxatari.make("casinopokersolitaire")
+   blackjack = jaxtari.make("casinoblackjack")
+   five_stud = jaxtari.make("casinofivestudpoker")
+   solitaire = jaxtari.make("casinopokersolitaire")
 
 These IDs are not the same as ``blackjack``, which is the separate Atari
 *Blackjack* cartridge.
@@ -19,17 +19,17 @@ These IDs are not the same as ``blackjack``, which is the separate Atari
 Casino Blackjack
 ----------------
 
-``jaxatari.make("casinoblackjack")``
+``jaxtari.make("casinoblackjack")``
 
 Casino Five Stud Poker
 ----------------------
 
-``jaxatari.make("casinofivestudpoker")``
+``jaxtari.make("casinofivestudpoker")``
 
 Casino Poker Solitaire
 ----------------------
 
-``jaxatari.make("casinopokersolitaire")``
+``jaxtari.make("casinopokersolitaire")``
 
 Known issues
 ------------

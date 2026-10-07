@@ -18,4 +18,4 @@ Each panel: **OC | JAX | |diff|** at inject (start) and after replay (end).
 - If the claim is 'hard to tell after 5s', look at **best/** and especially games tagged surv / high soft_div.
 - Early bright diff at END ⇒ claim fails for that title without manual latent/RNG alignment.
 
-Per-game: `/home/paul/Documents/JAXAtari/data/oc_parity_corpus/final_report/rebuttal/start_end_gallery/best` and `/home/paul/Documents/JAXAtari/data/oc_parity_corpus/final_report/rebuttal/start_end_gallery/worst`.
+Per-game: `/home/paul/Documents/Jaxtari/data/oc_parity_corpus/final_report/rebuttal/start_end_gallery/best` and `/home/paul/Documents/Jaxtari/data/oc_parity_corpus/final_report/rebuttal/start_end_gallery/worst`.

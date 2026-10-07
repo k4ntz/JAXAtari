@@ -1,4 +1,4 @@
-"""Translate OCAtari Venture object snapshots into JAXAtari GameState.
+"""Translate OCAtari Venture object snapshots into Jaxtari GameState.
 
 Infers main-map (level 0) vs room from OC object categories; world stays at 1.
 """
@@ -11,7 +11,7 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 
-from jaxatari.games.jax_venture import GameState, JaxVenture
+from jaxtari.games.jax_venture import GameState, JaxVenture
 
 from .base import cast_like, collect_category, find_object, objects_as_dicts
 from .registry import print_disclaimers

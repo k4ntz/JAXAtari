@@ -7,7 +7,7 @@ def test_enemy_bounce_bounds(montezuma_env):
     obs, state = env.reset(key)
     
     # Use Room 4, enemy 0
-    from jaxatari.games.montezuma_revenge.rooms import load_room
+    from jaxtari.games.montezuma_revenge.rooms import load_room
     state = state.replace(room_id=jnp.array(4, dtype=jnp.int32))
     state = load_room(state.room_id, state, env.consts)
     
@@ -54,7 +54,7 @@ def test_skulls_synchronization(montezuma_env):
     obs, state = env.reset(key)
     
     # Use Room 5 (Old 3), which has 2 skulls
-    from jaxatari.games.montezuma_revenge.rooms import load_room
+    from jaxtari.games.montezuma_revenge.rooms import load_room
     state = state.replace(room_id=jnp.array(5, dtype=jnp.int32))
     state = load_room(state.room_id, state, env.consts)
     

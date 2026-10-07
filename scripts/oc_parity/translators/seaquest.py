@@ -1,4 +1,4 @@
-"""Translate OCAtari Seaquest object snapshots into JAXAtari SeaquestState."""
+"""Translate OCAtari Seaquest object snapshots into Jaxtari SeaquestState."""
 
 from __future__ import annotations
 
@@ -8,7 +8,7 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 
-from jaxatari.games.jax_seaquest import JaxSeaquest, SeaquestState
+from jaxtari.games.jax_seaquest import JaxSeaquest, SeaquestState
 
 from .base import cast_like, collect_category, find_object, objects_as_dicts
 from .registry import print_disclaimers

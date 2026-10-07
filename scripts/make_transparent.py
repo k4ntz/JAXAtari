@@ -4,7 +4,7 @@ import sys
 
 BASECOLOR = (0, 0, 0, 255)
 NEWCOLOR = (0, 0, 0, 0)
-BASEDIR = os.path.expanduser("~") +  "/Library/Application Support/jaxatari/sprites"
+BASEDIR = os.path.expanduser("~") +  "/Library/Application Support/jaxtari/sprites"
 if not os.path.exists(BASEDIR):
     print("Please fix BASEDIR in the script")
     exit(1)

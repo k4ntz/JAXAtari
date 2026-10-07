@@ -8,7 +8,7 @@ def test_laser_inactive_cycle(montezuma_env):
     
     # Laser is inactive when laser_cycle >= 92
     # Laser room is room 14
-    from jaxatari.games.montezuma_revenge.rooms import load_room
+    from jaxtari.games.montezuma_revenge.rooms import load_room
     state = load_room(jnp.array(14, dtype=jnp.int32), state, env.consts)
     
     state = state.replace(

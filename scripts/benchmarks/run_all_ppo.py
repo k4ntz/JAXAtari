@@ -92,13 +92,13 @@ N_SEEDS = 2
 WORKERS_PER_GPU = 1
 
 CONFIGS = [
-    "ppo_jaxatari_pixel",
-    "ppo_jaxatari_object",
+    "ppo_jaxtari_pixel",
+    "ppo_jaxtari_object",
 ]
 
 # game_specific_configs = {
-#     "kangaroo": ("ppo_jaxatari_pixel_large", [3]),
-#     "beamrider": ("ppo_jaxatari_pixel", [1,2,3])
+#     "kangaroo": ("ppo_jaxtari_pixel_large", [3]),
+#     "beamrider": ("ppo_jaxtari_pixel", [1,2,3])
 # }
 game_specific_configs = {}
 
@@ -120,7 +120,7 @@ def worker(gpu_id: str, worker_id: int, task_queue: queue.Queue, extra_args: lis
         env_vars["CUDA_VISIBLE_DEVICES"] = gpu_id
         
         cmd = [
-            "uv", "run", "scripts/benchmarks/ppo_jaxatari_scan.py",
+            "uv", "run", "scripts/benchmarks/ppo_jaxtari_scan.py",
             f"+alg={alg_config}",
             f"alg.ENV_ID={env_id}",
             f"SEED={seed}",
@@ -136,7 +136,7 @@ def worker(gpu_id: str, worker_id: int, task_queue: queue.Queue, extra_args: lis
             task_queue.task_done()
 
 def main():
-    parser = argparse.ArgumentParser(description="Run PPO JaxAtari scan on multiple GPUs concurrently.")
+    parser = argparse.ArgumentParser(description="Run PPO Jaxtari scan on multiple GPUs concurrently.")
     parser.add_argument(
         "--gpus", 
         type=str, 
@@ -144,7 +144,7 @@ def main():
         help="Comma-separated list of GPU IDs to use (e.g., '0,1,2,3')."
     )
     
-    # Parse known args, anything else gets passed directly to the ppo_jaxatari_scan script
+    # Parse known args, anything else gets passed directly to the ppo_jaxtari_scan script
     args, extra_args = parser.parse_known_args()
     gpus = [g.strip() for g in args.gpus.split(",") if g.strip()]
     
@@ -165,7 +165,7 @@ def main():
                     task_queue.put((env, seed, alg_config))
         
     print(f"Starting {task_queue.qsize()} jobs across {len(gpus)} GPU(s): {gpus} ({WORKERS_PER_GPU} workers per GPU)")
-    print(f"Extra args for ppo_jaxatari_scan.py: {' '.join(extra_args) if extra_args else 'None'}")
+    print(f"Extra args for ppo_jaxtari_scan.py: {' '.join(extra_args) if extra_args else 'None'}")
     
     total_workers = len(gpus) * WORKERS_PER_GPU
     # Launch multiple worker threads per GPU

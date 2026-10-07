@@ -38,7 +38,7 @@ if _SCRIPTS_DIR not in sys.path:
 def _map_oc_action_to_jax(env, oc_action: int, meanings: Optional[Sequence[str]]) -> Any:
     """Map an OC/ALE action index onto the JAX env's ACTION_SET index."""
     import jax.numpy as jnp
-    from jaxatari.environment import JAXAtariAction
+    from jaxtari.environment import JaxtariAction
 
     action_set = np.asarray(
         getattr(env, "ACTION_SET", None)
@@ -48,7 +48,7 @@ def _map_oc_action_to_jax(env, oc_action: int, meanings: Optional[Sequence[str]]
 
     if meanings is not None and 0 <= int(oc_action) < len(meanings):
         name = str(meanings[int(oc_action)]).upper()
-        const = getattr(JAXAtariAction, name, None)
+        const = getattr(JaxtariAction, name, None)
         if const is not None:
             matches = np.where(action_set == int(const))[0]
             if len(matches):
@@ -57,7 +57,7 @@ def _map_oc_action_to_jax(env, oc_action: int, meanings: Optional[Sequence[str]]
     # Fallback: assume identical compact indexing.
     idx = int(oc_action)
     if idx < 0 or idx >= len(action_set):
-        matches = np.where(action_set == int(JAXAtariAction.NOOP))[0]
+        matches = np.where(action_set == int(JaxtariAction.NOOP))[0]
         idx = int(matches[0]) if len(matches) else 0
     return jnp.asarray(idx, dtype=jnp.int32)
 
@@ -496,7 +496,7 @@ def main() -> None:
     args = parser.parse_args()
 
     import jax
-    import jaxatari
+    import jaxtari
     from oc_parity.trajectory_io import load_trajectory
     from oc_parity.translators.registry import (
         list_implemented_translators,
@@ -529,7 +529,7 @@ def main() -> None:
         f"oracle={args.oracle_lookahead} trajs={len(paths)}"
     )
 
-    env = jaxatari.make(jax_key)
+    env = jaxtari.make(jax_key)
     jitted_step = jax.jit(env.step)
     jitted_render = jax.jit(env.render)
     # Warm JIT

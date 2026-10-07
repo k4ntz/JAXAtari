@@ -175,7 +175,7 @@ def _render_worst_gif(
     fps: float = 15.0,
 ) -> None:
     import jax
-    import jaxatari
+    import jaxtari
     from oc_parity.render_comparison_videos import _replay_strips, _write_gif
     from oc_parity.trajectory_io import load_trajectory
 
@@ -192,7 +192,7 @@ def _render_worst_gif(
     t0 = int(run["t0"])
     l1e = (run.get("metrics_at_end") or {}).get("entity_mean_l1")
     traj = load_trajectory(traj_path)
-    env = jaxatari.make(jax_key)
+    env = jaxtari.make(jax_key)
     jitted_step = jax.jit(env.step)
     jitted_render = jax.jit(env.render)
     _o, st = env.reset(jax.random.PRNGKey(0))

@@ -68,7 +68,7 @@ jobs:
       - name: Override games with PR changes
         if: ${{ inputs.pr_head_sha != '' && inputs.pr_overlay_scope == 'games_only' }}
         run: |
-          rsync -av pr_head/src/jaxatari/games/ src/jaxatari/games/
+          rsync -av pr_head/src/jaxtari/games/ src/jaxtari/games/
         shell: bash
 
       - name: Override full repo with PR changes
@@ -100,7 +100,7 @@ jobs:
       - name: Install sprites (CI ownership pre-confirmed)
         run: |
           . .venv/bin/activate
-          JAXATARI_CONFIRM_OWNERSHIP=1 install-sprites
+          JAXTARI_CONFIRM_OWNERSHIP=1 install-sprites
         shell: bash
 
       - name: Run tests

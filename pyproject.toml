@@ -28,7 +28,7 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [project.scripts]
-install-sprites = "jaxatari.install_sprites:download_and_extract"
+install-sprites = "jaxtari.install_sprites:download_and_extract"
 
 [project.optional-dependencies]
 dev = [
@@ -64,20 +64,22 @@ markers = [
   "integration: broader integration checks",
   "slow: expensive checks for exhaustive validation",
   "wrapper_full: tests that should run with the full wrapper recipe matrix",
-  "ale_comparison: tests that compare JAXAtari behavior against ALE reference values",
+  "ale_comparison: tests that compare Jaxtari behavior against ALE reference values",
   "serial: tests that must run without xdist parallel workers",
 ]
+
+[dependency-groups]
 dev = [
     "pytest>=8.4.2",
 ]
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/jaxatari"]
+packages = ["src/jaxtari", "src/jaxatari"]
 
 [tool.hatch.build.targets.sdist]
-include = ["/src/jaxatari", "/README.md", "/LICENSE", "/pyproject.toml"]
+include = ["/src/jaxtari", "/src/jaxatari", "/README.md", "/LICENSE", "/pyproject.toml"]
 exclude = ["**/__pycache__"]
 
 [project.urls]
-Homepage = "https://github.com/k4ntz/JAXAtari"
-Repository = "https://github.com/k4ntz/JAXAtari"
+Homepage = "https://github.com/k4ntz/Jaxtari"
+Repository = "https://github.com/k4ntz/Jaxtari"

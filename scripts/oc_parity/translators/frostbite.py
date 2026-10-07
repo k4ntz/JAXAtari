@@ -1,4 +1,4 @@
-"""Translate OCAtari Frostbite object snapshots into JAXAtari FrostbiteState."""
+"""Translate OCAtari Frostbite object snapshots into Jaxtari FrostbiteState."""
 
 from __future__ import annotations
 
@@ -8,7 +8,7 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 
-from jaxatari.games.jax_frostbite import FrostbiteState, JaxFrostbite
+from jaxtari.games.jax_frostbite import FrostbiteState, JaxFrostbite
 
 from .base import cast_like, collect_category, find_object, objects_as_dicts
 from .registry import print_disclaimers

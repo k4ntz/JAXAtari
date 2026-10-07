@@ -1,4 +1,4 @@
-# JAXAtari: GPU-Accelerated Object-Centric Atari Environments
+# Jaxtari: GPU-Accelerated Object-Centric Atari Environments
 
 [License](LICENSE)
 
@@ -7,7 +7,7 @@ Quentin Delfosse, Raban Emunds, Paul Seitz, Jannis Blüml, Sebastian Wette, Domi
 
 [Features](#features) • [Installation](#installation) • [Quick Start](#quick-start) • [Wrappers](#wrapper-reference) • [Environments](#available-environments) • [Contributing](#contributing) • [Citation](#citation)
 
-**JAXAtari** is a GPU-accelerated, object-centric Atari environment framework powered by [JAX](https://github.com/google/jax). Inspired by [OCAtari](https://github.com/k4ntz/OC_Atari), it enables training agents with 100M steps in under 1 hour (pixel-based observations) or under 15 minutes (object-centric observation) through JIT compilation, vectorization, and full GPU parallelization — while exposing structured, object-centric observations alongside standard pixel inputs. Similar to [HackAtari](https://github.com/k4ntz/HackAtari), it also supports game modifications for testing agent generalization.
+**Jaxtari** is a GPU-accelerated, object-centric Atari environment framework powered by [JAX](https://github.com/google/jax). Inspired by [OCAtari](https://github.com/k4ntz/OC_Atari), it enables training agents with 100M steps in under 1 hour (pixel-based observations) or under 15 minutes (object-centric observation) through JIT compilation, vectorization, and full GPU parallelization — while exposing structured, object-centric observations alongside standard pixel inputs. Similar to [HackAtari](https://github.com/k4ntz/HackAtari), it also supports game modifications for testing agent generalization.
 
 ---
 
@@ -93,11 +93,11 @@ If you do not have ownership of the original Atari ROMs, you can continue with r
 You can also use your own sprites by placing them in the `~/.local/share/jaxtari/sprites` directory
 (legacy installs under `~/.local/share/jaxatari/sprites` are still detected).
 
-Sprite packs ship a `.version` file. When a newer pack is required, JaxAtari will
+Sprite packs ship a `.version` file. When a newer pack is required, Jaxtari will
 ask once whether to download it (opt-in). You can always refresh manually with:
 
 ```bash
-python3 -m jaxatari.install_sprites
+python3 -m jaxtari.install_sprites
 # or
 .venv/bin/install-sprites
 ```
@@ -110,26 +110,26 @@ python3 -m jaxatari.install_sprites
 
 ```python
 import jax
-import jaxatari
+import jaxtari
 
-env = jaxatari.make("pong")
+env = jaxtari.make("pong")
 
 # List all available games
-print(jaxatari.list_available_games())
+print(jaxtari.list_available_games())
 ```
 
 ### Game modifications
 
-JAXAtari ships with pre-built modifications for testing generalization:
+Jaxtari ships with pre-built modifications for testing generalization:
 
 ```python
-import jaxatari
+import jaxtari
 
 # Single mod
-env = jaxatari.make("pong", mods=["lazy_enemy"])
+env = jaxtari.make("pong", mods=["lazy_enemy"])
 
 # Multiple mods simultaneously
-env = jaxatari.make("pong", mods=["lazy_enemy", "shift_enemy"])
+env = jaxtari.make("pong", mods=["lazy_enemy", "shift_enemy"])
 ```
 
 ### Applying wrappers
@@ -137,8 +137,8 @@ env = jaxatari.make("pong", mods=["lazy_enemy", "shift_enemy"])
 Wrappers must be applied in order: `AtariWrapper` first, then an observation wrapper, then optional utility wrappers.
 
 ```python
-import jaxatari
-from jaxatari.wrappers import (
+import jaxtari
+from jaxtari.wrappers import (
     AtariWrapper,
     ObjectCentricWrapper,
     PixelObsWrapper,
@@ -148,7 +148,7 @@ from jaxatari.wrappers import (
     LogWrapper,
 )
 
-base_env = jaxatari.make("pong")
+base_env = jaxtari.make("pong")
 atari_env = AtariWrapper(base_env)
 
 # Choose one observation type:
@@ -170,10 +170,10 @@ env = LogWrapper(env)
 
 ```python
 import jax
-import jaxatari
-from jaxatari.wrappers import AtariWrapper, ObjectCentricWrapper, FlattenObservationWrapper
+import jaxtari
+from jaxtari.wrappers import AtariWrapper, ObjectCentricWrapper, FlattenObservationWrapper
 
-env = FlattenObservationWrapper(ObjectCentricWrapper(AtariWrapper(jaxatari.make("pong"))))
+env = FlattenObservationWrapper(ObjectCentricWrapper(AtariWrapper(jaxtari.make("pong"))))
 
 n_envs = 1024
 rng = jax.random.PRNGKey(0)
@@ -199,14 +199,14 @@ _, (rewards, terminations, truncations, infos) = jax.lax.scan(
 
 ### Gymnasium compatibility *(WIP)*
 
-> **Note:** This wrapper is currently work in progress and supports interoperability with CPU-based Gymnasium pipelines (e.g. stable-baselines3). It currently only exposes pixel observations and does not accept JAXAtari wrappers. For JAX-native training use the wrapper stack above instead.
+> **Note:** This wrapper is currently work in progress and supports interoperability with CPU-based Gymnasium pipelines (e.g. stable-baselines3). It currently only exposes pixel observations and does not accept Jaxtari wrappers. For JAX-native training use the wrapper stack above instead.
 
 ```python
-from jaxatari.gym_wrapper import GymnasiumJaxAtariWrapper
-import jaxatari
+from jaxtari.gym_wrapper import GymnasiumJaxtariWrapper
+import jaxtari
 
-base_env = jaxatari.make("pong")
-gym_env = GymnasiumJaxAtariWrapper(base_env)
+base_env = jaxtari.make("pong")
+gym_env = GymnasiumJaxtariWrapper(base_env)
 
 obs, info = gym_env.reset()
 obs, reward, terminated, truncated, info = gym_env.step(gym_env.action_space.sample())
@@ -217,8 +217,8 @@ obs, reward, terminated, truncated, info = gym_env.step(gym_env.action_space.sam
 Use `MultiRewardWrapper` to compute several reward signals in parallel (apply it directly after the base environment, before any other wrapper):
 
 ```python
-import jaxatari
-from jaxatari.wrappers import MultiRewardWrapper, AtariWrapper, ObjectCentricWrapper, MultiRewardLogWrapper
+import jaxtari
+from jaxtari.wrappers import MultiRewardWrapper, AtariWrapper, ObjectCentricWrapper, MultiRewardLogWrapper
 
 def survival_reward(prev_state, state):
     return 1.0  # reward every surviving step
@@ -226,7 +226,7 @@ def survival_reward(prev_state, state):
 def score_delta(prev_state, state):
     return state.score - prev_state.score
 
-base_env = jaxatari.make("pong")
+base_env = jaxtari.make("pong")
 env = MultiRewardWrapper(base_env, reward_funcs=[survival_reward, score_delta])
 env = ObjectCentricWrapper(AtariWrapper(env))
 env = MultiRewardLogWrapper(env)
@@ -243,7 +243,7 @@ python3 scripts/play.py -g Pong --mods lazy_enemy
 
 ## Wrapper Reference
 
-All wrappers live in `src/jaxatari/wrappers.py`. The standard stack is:
+All wrappers live in `src/jaxtari/wrappers.py`. The standard stack is:
 
 ```
 base env  →  [MultiRewardWrapper]  →  AtariWrapper  →  <obs wrapper>  →  [utility wrappers]
@@ -297,8 +297,8 @@ A full status overview with quality ratings is in [games_covered.md](games_cover
 ## Project Structure
 
 ```
-JAXAtari/
-├── src/jaxatari/
+Jaxtari/
+├── src/jaxtari/
 │   ├── core.py              # make() factory, game and mod registries
 │   ├── environment.py       # JaxEnvironment base class
 │   ├── wrappers.py          # all wrappers
@@ -330,22 +330,22 @@ Contributions are welcome! See [CONTRIBUTING.md](CONTRIBUTING.md) for detailed g
 
 ### Adding a new environment
 
-1. Create `src/jaxatari/games/jax_<game>.py` implementing `JaxEnvironment`
-2. Register it in `GAME_MODULES` in `src/jaxatari/core.py`
+1. Create `src/jaxtari/games/jax_<game>.py` implementing `JaxEnvironment`
+2. Register it in `GAME_MODULES` in `src/jaxtari/core.py`
 3. Add a test in `tests/games/`
 4. Update your game's status in [games_covered.md](games_covered.md)
 
 ### Adding a mod
 
-1. Create `src/jaxatari/games/mods/<game>/<game>_mod_plugins.py` with your plugin class(es) extending `JaxAtariInternalModPlugin` or `JaxAtariPostStepModPlugin`
-2. Create or update `src/jaxatari/games/mods/<game>_mods.py` — add your mod key to the `REGISTRY` dict
-3. Register the controller in `MOD_MODULES` in `src/jaxatari/core.py` (if not already present)
+1. Create `src/jaxtari/games/mods/<game>/<game>_mod_plugins.py` with your plugin class(es) extending `JaxtariInternalModPlugin` or `JaxtariPostStepModPlugin`
+2. Create or update `src/jaxtari/games/mods/<game>_mods.py` — add your mod key to the `REGISTRY` dict
+3. Register the controller in `MOD_MODULES` in `src/jaxtari/core.py` (if not already present)
 
 ### Adding a wrapper
 
-1. Subclass `JaxatariWrapper` in `src/jaxatari/wrappers.py`
+1. Subclass `JaxtariWrapper` in `src/jaxtari/wrappers.py`
 2. Implement `reset()`, `step()`, and `observation_space()` / `action_space()`
-3. Export it from `src/jaxatari/__init__.py`
+3. Export it from `src/jaxtari/__init__.py`
 
 ### General
 
@@ -360,13 +360,13 @@ Feel free to share new mods or environments by opening a PR!
 ## Citation
 
 ```bibtex
-@misc{jaxatari2026,
+@misc{jaxtari2026,
   author = {Delfosse, Quentin and Emunds, Raban and Seitz, Paul and Wette, Sebastian and Bl{\"u}ml, Jannis and Kersting, Kristian},
-  title = {JAXAtari: A High-Performance Framework for Reasoning agents},
+  title = {Jaxtari: A High-Performance Framework for Reasoning agents},
   year = {2026},
   publisher = {GitHub},
   journal = {GitHub repository},
-  howpublished = {https://github.com/k4ntz/JAXAtari/},
+  howpublished = {https://github.com/k4ntz/Jaxtari/},
 }
 ```
 

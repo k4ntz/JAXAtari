@@ -11,7 +11,7 @@ import jax
 import jax.random as jrandom
 from PIL import Image
 
-from jaxatari.core import make as jaxatari_make
+from jaxtari.core import make as jaxtari_make
 
 DEFAULT_OUT_DIR = os.path.join(os.path.dirname(__file__), "..", "docs", "source", "_static", "svgs")
 
@@ -50,7 +50,7 @@ def capture_game(game: str, warmup: int, seed: int, scale: int, pdf: bool, outpu
         output = os.path.join(DEFAULT_OUT_DIR, f"{game}.{ext}")
 
     print(f"[{game}] Loading...")
-    env = jaxatari_make(game)
+    env = jaxtari_make(game)
     jitted_reset = jax.jit(env.reset)
     jitted_step = jax.jit(env.step)
     jitted_render = jax.jit(env.render)
@@ -91,7 +91,7 @@ def capture_game(game: str, warmup: int, seed: int, scale: int, pdf: bool, outpu
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Render an SVG (or PDF) screenshot of one or more JAXAtari games."
+        description="Render an SVG (or PDF) screenshot of one or more Jaxtari games."
     )
     game_group = parser.add_mutually_exclusive_group(required=True)
     game_group.add_argument("-g", "--game", type=str, help="Single game name (e.g. 'seaquest')")

@@ -1,4 +1,4 @@
-"""Translate OCAtari Asteroids snapshots into JAXAtari AsteroidsState."""
+"""Translate OCAtari Asteroids snapshots into Jaxtari AsteroidsState."""
 
 from __future__ import annotations
 
@@ -8,7 +8,7 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 
-from jaxatari.games.jax_asteroids import AsteroidsState, JaxAsteroids
+from jaxtari.games.jax_asteroids import AsteroidsState, JaxAsteroids
 
 from .base import cast_like, collect_category, find_object, objects_as_dicts
 from .registry import print_disclaimers

@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Generalized script to compare the first rendered screen from JAXAtari vs ALE for any game.
+Generalized script to compare the first rendered screen from Jaxtari vs ALE for any game.
 Focuses on shape comparison and visual differences.
 """
 
@@ -18,11 +18,11 @@ import os
 from pathlib import Path
 from typing import Any, Tuple, Optional
 
-# Add the src directory to the path so we can import jaxatari
+# Add the src directory to the path so we can import jaxtari
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'src'))
 
-from jaxatari.environment import JaxEnvironment
-from jaxatari.renderers import JAXGameRenderer
+from jaxtari.environment import JaxEnvironment
+from jaxtari.renderers import JAXGameRenderer
 
 
 def load_game_environment(game_file_path: str) -> Tuple[JaxEnvironment, Optional[JAXGameRenderer]]:
@@ -86,8 +86,8 @@ def get_ale_frame(ale_game_name: str, seed: int = 42) -> Optional[np.ndarray]:
         return None
 
 
-def get_jaxatari_frame(jax_env: JaxEnvironment, seed: int = 42) -> Optional[np.ndarray]:
-    """Get the first frame from JAXAtari environment."""
+def get_jaxtari_frame(jax_env: JaxEnvironment, seed: int = 42) -> Optional[np.ndarray]:
+    """Get the first frame from Jaxtari environment."""
     try:
         import jax
         key = jax.random.PRNGKey(seed)
@@ -95,7 +95,7 @@ def get_jaxatari_frame(jax_env: JaxEnvironment, seed: int = 42) -> Optional[np.n
         frame = jax_env.render(state)
         return frame
     except Exception as e:
-        print(f"Error creating JAXAtari environment: {e}")
+        print(f"Error creating Jaxtari environment: {e}")
         return None
 
 
@@ -112,11 +112,11 @@ def compare_shapes(ale_frame: Optional[np.ndarray], jax_frame: Optional[np.ndarr
         print(f"ALE {ale_game_name} Frame: None")
     
     if jax_frame is not None:
-        print(f"JAXAtari {jax_game_name} Frame shape: {jax_frame.shape}")
-        print(f"JAXAtari {jax_game_name} Frame dtype: {jax_frame.dtype}")
-        print(f"JAXAtari {jax_game_name} Frame min/max values: {jax_frame.min()}/{jax_frame.max()}")
+        print(f"Jaxtari {jax_game_name} Frame shape: {jax_frame.shape}")
+        print(f"Jaxtari {jax_game_name} Frame dtype: {jax_frame.dtype}")
+        print(f"Jaxtari {jax_game_name} Frame min/max values: {jax_frame.min()}/{jax_frame.max()}")
     else:
-        print(f"JAXAtari {jax_game_name} Frame: None")
+        print(f"Jaxtari {jax_game_name} Frame: None")
     
     if ale_frame is not None and jax_frame is not None:
         print(f"\nShape match: {ale_frame.shape == jax_frame.shape}")
@@ -126,11 +126,11 @@ def compare_shapes(ale_frame: Optional[np.ndarray], jax_frame: Optional[np.ndarr
         if len(ale_frame.shape) == len(jax_frame.shape):
             print(f"Dimension count match: True")
             for i, (ale_dim, jax_dim) in enumerate(zip(ale_frame.shape, jax_frame.shape)):
-                print(f"  Dimension {i}: ALE={ale_dim}, JAXAtari={jax_dim}, Match={ale_dim == jax_dim}")
+                print(f"  Dimension {i}: ALE={ale_dim}, Jaxtari={jax_dim}, Match={ale_dim == jax_dim}")
         else:
             print(f"Dimension count match: False")
             print(f"  ALE dimensions: {len(ale_frame.shape)}")
-            print(f"  JAXAtari dimensions: {len(jax_frame.shape)}")
+            print(f"  Jaxtari dimensions: {len(jax_frame.shape)}")
 
 
 def normalize_frame(frame: Optional[np.ndarray]) -> Optional[np.ndarray]:
@@ -172,10 +172,10 @@ def display_frames(ale_frame: Optional[np.ndarray], jax_frame: Optional[np.ndarr
         ax1.set_title(f'ALE {ale_game_name}\nShape: {ale_norm.shape}')
         ax1.axis('off')
     
-    # Display JAXAtari frame
+    # Display Jaxtari frame
     if jax_norm is not None:
         ax2.imshow(jax_norm)
-        ax2.set_title(f'JAXAtari {jax_game_name}\nShape: {jax_norm.shape}')
+        ax2.set_title(f'Jaxtari {jax_game_name}\nShape: {jax_norm.shape}')
         ax2.axis('off')
     
     # Display difference (if shapes match)
@@ -215,7 +215,7 @@ def analyze_content(ale_frame: Optional[np.ndarray], jax_frame: Optional[np.ndar
         print(f"  Non-zero pixels: {np.count_nonzero(ale_frame)}")
     
     if jax_frame is not None:
-        print(f"JAXAtari {jax_game_name} Frame:")
+        print(f"Jaxtari {jax_game_name} Frame:")
         print(f"  Unique values: {len(np.unique(jax_frame))}")
         print(f"  Most common values: {np.bincount(jax_frame.flatten())[:5]}")
         print(f"  Non-zero pixels: {np.count_nonzero(jax_frame)}")
@@ -261,7 +261,7 @@ def save_comparison_results(results: dict, ale_game_name: str, jax_game_name: st
     with open(results_file, "w") as f:
         print(f"=== Render Comparison Results ===", file=f)
         print(f"ALE Game: {ale_game_name}", file=f)
-        print(f"JAXAtari Game: {jax_game_name}", file=f)
+        print(f"Jaxtari Game: {jax_game_name}", file=f)
         print(f"Timestamp: {Path(__file__).stat().st_mtime}", file=f)
         print("", file=f)
         
@@ -279,7 +279,7 @@ def save_comparison_results(results: dict, ale_game_name: str, jax_game_name: st
 
 def main():
     """Main comparison function."""
-    parser = argparse.ArgumentParser(description="Compare JAXAtari vs ALE renders for any game.")
+    parser = argparse.ArgumentParser(description="Compare Jaxtari vs ALE renders for any game.")
     parser.add_argument("--jax-game-path", type=str, required=True, 
                        help="Path to the Python file for the JAX game environment.")
     parser.add_argument("--ale-game-name", type=str, required=True, 
@@ -307,15 +307,15 @@ def main():
     if output_path:
         output_path.mkdir(parents=True, exist_ok=True)
     
-    print(f"Comparing JAXAtari {jax_game_name} vs ALE {args.ale_game_name} - First Frame")
+    print(f"Comparing Jaxtari {jax_game_name} vs ALE {args.ale_game_name} - First Frame")
     print("=" * 60)
     
     # Get frames
     print(f"Loading ALE {args.ale_game_name} frame...")
     ale_frame = get_ale_frame(args.ale_game_name, args.seed)
     
-    print(f"Loading JAXAtari {jax_game_name} frame...")
-    jax_frame = get_jaxatari_frame(jax_env, args.seed)
+    print(f"Loading Jaxtari {jax_game_name} frame...")
+    jax_frame = get_jaxtari_frame(jax_env, args.seed)
     
     # Compare shapes
     compare_shapes(ale_frame, jax_frame, args.ale_game_name, jax_game_name)

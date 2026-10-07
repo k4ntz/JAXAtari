@@ -1,0 +1,590 @@
+from jax._src.pjit import JitWrapped
+import os
+from functools import partial
+from typing import Tuple
+import jax
+import jax.lax
+import jax.numpy as jnp
+import chex
+from flax import struct
+
+import jaxtari.spaces as spaces
+from jaxtari.renderers import JAXGameRenderer
+from jaxtari.rendering import jax_rendering_utils as render_utils
+from jaxtari.environment import JaxEnvironment, JaxtariAction as Action, ObjectObservation
+
+def _create_wall_sprite(consts: "PongConstants", height: int) -> jnp.ndarray:
+    wall_color_rgba = (*consts.SCORE_COLOR, 255)
+    wall_shape = (height, consts.WIDTH, 4)
+    return jnp.tile(jnp.array(wall_color_rgba, dtype=jnp.uint8), (*wall_shape[:2], 1))
+
+def _get_default_asset_config() -> tuple:
+    return (
+        {'name': 'background', 'type': 'background', 'file': 'background.npy'},
+        {'name': 'player', 'type': 'single', 'file': 'player.npy'},
+        {'name': 'enemy', 'type': 'single', 'file': 'enemy.npy'},
+        {'name': 'ball', 'type': 'single', 'file': 'ball.npy'},
+        {'name': 'player_digits', 'type': 'digits', 'pattern': 'player_score_{}.npy'},
+        {'name': 'enemy_digits', 'type': 'digits', 'pattern': 'enemy_score_{}.npy'},
+    )
+
+class PongConstants(struct.PyTreeNode):
+    # Static Configuration (Integers/Tuples) -> pytree_node=False
+    ENEMY_STEP_SIZE: int = struct.field(pytree_node=False, default=2)
+    WIDTH: int = struct.field(pytree_node=False, default=160)
+    HEIGHT: int = struct.field(pytree_node=False, default=210)
+    BASE_BALL_SPEED: int = struct.field(pytree_node=False, default=1)
+    BALL_MAX_SPEED: int = struct.field(pytree_node=False, default=4)
+    MIN_BALL_SPEED: int = struct.field(pytree_node=False, default=1)
+    
+    # Colors and coordinates are static
+    BACKGROUND_COLOR: Tuple[int, int, int] = struct.field(pytree_node=False, default=(144, 72, 17))
+    PLAYER_COLOR: Tuple[int, int, int] = struct.field(pytree_node=False, default=(92, 186, 92))
+    ENEMY_COLOR: Tuple[int, int, int] = struct.field(pytree_node=False, default=(213, 130, 74))
+    BALL_COLOR: Tuple[int, int, int] = struct.field(pytree_node=False, default=(236, 236, 236))
+    WALL_COLOR: Tuple[int, int, int] = struct.field(pytree_node=False, default=(236, 236, 236))
+    SCORE_COLOR: Tuple[int, int, int] = struct.field(pytree_node=False, default=(236, 236, 236))
+    PLAYER_X: int = struct.field(pytree_node=False, default=140)
+    ENEMY_X: int = struct.field(pytree_node=False, default=16)
+    PLAYER_SIZE: Tuple[int, int] = struct.field(pytree_node=False, default=(4, 16))
+    BALL_SIZE: Tuple[int, int] = struct.field(pytree_node=False, default=(2, 4))
+    ENEMY_SIZE: Tuple[int, int] = struct.field(pytree_node=False, default=(4, 16))
+    WALL_TOP_Y: int = struct.field(pytree_node=False, default=24)
+    WALL_TOP_HEIGHT: int = struct.field(pytree_node=False, default=10)
+    WALL_BOTTOM_Y: int = struct.field(pytree_node=False, default=194)
+    WALL_BOTTOM_HEIGHT: int = struct.field(pytree_node=False, default=16)
+    ASSET_CONFIG: tuple = struct.field(pytree_node=False, default_factory=_get_default_asset_config)
+
+    # Ball and Player Constants
+    BALL_SPEED: Tuple[int, int] = struct.field(pytree_node=False, default=(-1, 1))
+    BALL_START_X: int = struct.field(pytree_node=False, default=78)
+    BALL_START_Y: int = struct.field(pytree_node=False, default=115)
+
+    # New Analog Paddle Constants
+    PADDLE_MAX_SPEED: float = struct.field(pytree_node=False, default=5.75)
+    PADDLE_MIN_Y: float = struct.field(pytree_node=False, default=24.0)
+    PADDLE_MAX_Y: float = struct.field(pytree_node=False, default=190.0)
+    PADDLE_DAMPENING_Y: float = struct.field(pytree_node=False, default=170.0)
+
+
+class PongState(struct.PyTreeNode):
+    player_y: chex.Array
+    player_speed: chex.Array
+    ball_x: chex.Array
+    ball_y: chex.Array
+    enemy_y: chex.Array
+    enemy_speed: chex.Array
+    ball_vel_x: chex.Array
+    ball_vel_y: chex.Array
+    player_score: chex.Array
+    enemy_score: chex.Array
+    step_counter: chex.Array
+    key: chex.PRNGKey
+
+class PongObservation(struct.PyTreeNode):
+    player: ObjectObservation
+    enemy: ObjectObservation
+    ball: ObjectObservation
+    score_player: jnp.ndarray
+    score_enemy: jnp.ndarray
+
+
+class PongInfo(struct.PyTreeNode):
+    time: jnp.ndarray
+
+
+class JaxPong(JaxEnvironment[PongState, PongObservation, PongInfo, PongConstants]):
+    # Minimal ALE action set for Pong:
+    # NOTE: for multiplayer, it's instead: [Action.NOOP, Action.FIRE, Action.UP, Action.RIGHT, Action.LEFT, Action.DOWN],
+    ACTION_SET: jnp.ndarray = jnp.array(
+        [Action.NOOP, Action.FIRE, Action.RIGHT, Action.LEFT, Action.RIGHTFIRE, Action.LEFTFIRE],
+        dtype=jnp.int32,
+    )
+
+    def __init__(self, consts: PongConstants = None):
+        consts = consts or PongConstants()
+        super().__init__(consts)
+        self.renderer = PongRenderer(self.consts)
+
+    def _player_step(self, state: PongState, action: chex.Array) -> PongState:
+        up = jnp.logical_or(action == Action.RIGHT, action == Action.RIGHTFIRE)
+        down = jnp.logical_or(action == Action.LEFT, action == Action.LEFTFIRE)
+
+        # 1. Determine Analog Target Speed
+        target_speed = jax.lax.cond(
+            down,
+            lambda _: self.consts.PADDLE_MAX_SPEED,
+            lambda _: jax.lax.cond(
+                up,
+                lambda _: -self.consts.PADDLE_MAX_SPEED,
+                lambda _: 0.0,
+                operand=None,
+            ),
+            operand=None,
+        )
+
+        # 2. RC Capacitor Acceleration (The Magic 0.3)
+        # Asymptotically pulls the current speed toward the target
+        new_speed = state.player_speed + (target_speed - state.player_speed) * 0.3
+
+        # 3. Bottom Dampening (The "Squishy Wall" Asymptote)
+        # Uses 0.25 to match the ALE deceleration curve
+        applied_dy = jnp.where(
+            jnp.logical_and(state.player_y >= self.consts.PADDLE_DAMPENING_Y, new_speed > 0),
+            jnp.minimum(new_speed, (self.consts.PADDLE_MAX_Y - state.player_y) * 0.25),
+            new_speed,
+        )
+
+        # 4. Apply position update and clip to physical bounds
+        new_y = jnp.clip(
+            state.player_y + applied_dy,
+            self.consts.PADDLE_MIN_Y,
+            self.consts.PADDLE_MAX_Y,
+        )
+
+        return state.replace(
+            player_y=new_y,
+            player_speed=new_speed,
+        )
+
+    def _ball_step(self, state: PongState, action) -> PongState:
+        ball_x = state.ball_x + state.ball_vel_x
+        ball_y = state.ball_y + state.ball_vel_y
+
+        wall_bounce = jnp.logical_or(
+            ball_y <= self.consts.WALL_TOP_Y + self.consts.WALL_TOP_HEIGHT - self.consts.BALL_SIZE[1],
+            ball_y >= self.consts.WALL_BOTTOM_Y,
+        )
+        ball_vel_y = jnp.where(wall_bounce, -state.ball_vel_y, state.ball_vel_y)
+
+        player_paddle_hit = jnp.logical_and(
+            jnp.logical_and(self.consts.PLAYER_X <= ball_x, ball_x <= self.consts.PLAYER_X + self.consts.PLAYER_SIZE[0]),
+            state.ball_vel_x > 0,
+        )
+
+        player_paddle_hit = jnp.logical_and(
+            player_paddle_hit,
+            jnp.logical_and(
+                state.player_y - self.consts.BALL_SIZE[1] <= ball_y,
+                ball_y <= state.player_y + self.consts.PLAYER_SIZE[1] + self.consts.BALL_SIZE[1],
+            ),
+        )
+
+        enemy_paddle_hit = jnp.logical_and(
+            jnp.logical_and(self.consts.ENEMY_X <= ball_x, ball_x <= self.consts.ENEMY_X + self.consts.ENEMY_SIZE[0] - 1),
+            state.ball_vel_x < 0,
+        )
+
+        enemy_paddle_hit = jnp.logical_and(
+            enemy_paddle_hit,
+            jnp.logical_and(
+                state.enemy_y - self.consts.BALL_SIZE[1] <= ball_y,
+                ball_y <= state.enemy_y + self.consts.ENEMY_SIZE[1] + self.consts.BALL_SIZE[1],
+            ),
+        )
+
+        paddle_hit = jnp.logical_or(player_paddle_hit, enemy_paddle_hit)
+
+        section_height = self.consts.PLAYER_SIZE[1] / 5
+
+        hit_position = jnp.where(
+            paddle_hit,
+            jnp.where(
+                player_paddle_hit,
+                jnp.where(
+                    ball_y < state.player_y + section_height,
+                    -2.0,
+                    jnp.where(
+                        ball_y < state.player_y + 2 * section_height,
+                        -1.0,
+                        jnp.where(
+                            ball_y < state.player_y + 3 * section_height,
+                            0.0,
+                            jnp.where(
+                                ball_y < state.player_y + 4 * section_height,
+                                1.0,
+                                2.0,
+                            ),
+                        ),
+                    ),
+                ),
+                jnp.where(
+                    ball_y < state.enemy_y + section_height,
+                    -2.0,
+                    jnp.where(
+                        ball_y < state.enemy_y + 2 * section_height,
+                        -1.0,
+                        jnp.where(
+                            ball_y < state.enemy_y + 3 * section_height,
+                            0.0,
+                            jnp.where(
+                                ball_y < state.enemy_y + 4 * section_height,
+                                1.0,
+                                2.0,
+                            ),
+                        ),
+                    ),
+                ),
+            ),
+            0.0,
+        )
+
+        paddle_speed = jnp.where(
+            player_paddle_hit,
+            state.player_speed,
+            jnp.where(
+                enemy_paddle_hit,
+                state.enemy_speed,
+                0.0,
+            ),
+        )
+
+        ball_vel_y = jnp.where(paddle_hit, hit_position, ball_vel_y)
+
+        boost_triggered = jnp.logical_and(
+            player_paddle_hit,
+            jnp.logical_or(
+                jnp.logical_or(action == Action.LEFTFIRE, action == Action.RIGHTFIRE),
+                action == Action.FIRE,
+            ),
+        )
+        player_max_hit = jnp.logical_and(
+            player_paddle_hit,
+            jnp.abs(state.player_speed) >= self.consts.PADDLE_MAX_SPEED,
+        )
+        ball_vel_x = jnp.where(
+            jnp.logical_or(boost_triggered, player_max_hit),
+            state.ball_vel_x
+            + jnp.sign(state.ball_vel_x),
+            state.ball_vel_x,
+        )
+
+        ball_vel_x = jnp.where(
+            paddle_hit,
+            -ball_vel_x,
+            ball_vel_x,
+        )
+
+        return state.replace(
+            ball_x=ball_x.astype(jnp.int32),
+            ball_y=ball_y.astype(jnp.int32),
+            ball_vel_x=ball_vel_x.astype(jnp.int32),
+            ball_vel_y=ball_vel_y.astype(jnp.int32)
+        )
+
+    def _enemy_step(self, state: PongState) -> PongState:
+        should_move = state.step_counter % 8 != 0
+        direction = jnp.sign(state.ball_y - state.enemy_y)
+        new_y = state.enemy_y + (direction * self.consts.ENEMY_STEP_SIZE).astype(jnp.int32)
+        
+        enemy_y = jax.lax.cond(
+            should_move, lambda _: new_y, lambda _: state.enemy_y, operand=None
+        )
+        
+        return state.replace(enemy_y=enemy_y.astype(jnp.int32))
+
+    def _score_and_reset(self, state: PongState) -> PongState:
+        player_goal = state.ball_x < 4
+        enemy_goal = state.ball_x > 156
+        ball_reset = jnp.logical_or(enemy_goal, player_goal)
+
+        player_score = jax.lax.cond(
+            player_goal,
+            lambda s: s + 1,
+            lambda s: s,
+            operand=state.player_score,
+        )
+        enemy_score = jax.lax.cond(
+            enemy_goal,
+            lambda s: s + 1,
+            lambda s: s,
+            operand=state.enemy_score,
+        )
+
+        current_values = (
+            state.ball_x.astype(jnp.int32),
+            state.ball_y.astype(jnp.int32),
+            state.ball_vel_x.astype(jnp.int32),
+            state.ball_vel_y.astype(jnp.int32),
+        )
+        ball_x_final, ball_y_final, ball_vel_x_final, ball_vel_y_final = jax.lax.cond(
+            ball_reset,
+            lambda x: self._reset_ball_after_goal((state, enemy_goal)),
+            lambda x: x,
+            operand=current_values,
+        )
+
+        step_counter = jax.lax.cond(
+            ball_reset,
+            lambda s: jnp.array(0),
+            lambda s: s + 1,
+            operand=state.step_counter,
+        )
+
+        enemy_y_final = jax.lax.cond(
+            ball_reset,
+            lambda s: jnp.array(self.consts.BALL_START_Y).astype(jnp.int32),
+            lambda s: state.enemy_y.astype(jnp.int32),
+            operand=None,
+        )
+
+        ball_x_final = jax.lax.cond(
+            step_counter < 60,
+            lambda s: jnp.array(self.consts.BALL_START_X).astype(jnp.int32),
+            lambda s: s,
+            operand=ball_x_final,
+        )
+        ball_y_final = jax.lax.cond(
+            step_counter < 60,
+            lambda s: jnp.array(self.consts.BALL_START_Y).astype(jnp.int32),
+            lambda s: s,
+            operand=ball_y_final,
+        )
+
+        return state.replace(
+            ball_x=ball_x_final,
+            ball_y=ball_y_final,
+            enemy_y=enemy_y_final,
+            ball_vel_x=ball_vel_x_final,
+            ball_vel_y=ball_vel_y_final,
+            player_score=player_score,
+            enemy_score=enemy_score,
+            step_counter=step_counter,
+        )
+
+        initial_obs = self._get_observation(state)
+
+        return initial_obs, state
+
+    def _reset_ball_after_goal(self, state_and_goal: Tuple[PongState, bool]) -> Tuple[chex.Array, chex.Array, chex.Array, chex.Array]:
+        state, scored_right = state_and_goal
+
+        ball_vel_y = jnp.where(
+            state.ball_y > self.consts.BALL_START_Y,
+            1,
+            -1,
+        ).astype(jnp.int32)
+
+        ball_vel_x = jnp.where(
+            scored_right, 1, -1
+        ).astype(jnp.int32)
+
+        return (
+            jnp.array(self.consts.BALL_START_X).astype(jnp.int32),
+            jnp.array(self.consts.BALL_START_Y).astype(jnp.int32),
+            ball_vel_x.astype(jnp.int32),
+            ball_vel_y.astype(jnp.int32),
+        )
+
+    def reset(self, key: chex.PRNGKey = jax.random.PRNGKey(42)) -> Tuple[PongObservation, PongState]:
+        # Split key for env reset if needed and for state storage
+        state_key, _step_key = jax.random.split(key)
+        state = PongState(
+            player_y=jnp.array(96.0, dtype=jnp.float32),
+            player_speed=jnp.array(0.0, dtype=jnp.float32),
+            ball_x=jnp.array(self.consts.BALL_START_X).astype(jnp.int32),
+            ball_y=jnp.array(self.consts.BALL_START_Y).astype(jnp.int32),
+            enemy_y=jnp.array(115).astype(jnp.int32),
+            enemy_speed=jnp.array(0.0).astype(jnp.int32),
+            ball_vel_x=jnp.array(self.consts.BALL_SPEED[0]).astype(jnp.int32),
+            ball_vel_y=jnp.array(self.consts.BALL_SPEED[1]).astype(jnp.int32),
+            player_score=jnp.array(0).astype(jnp.int32),
+            enemy_score=jnp.array(0).astype(jnp.int32),
+            step_counter=jnp.array(0).astype(jnp.int32),
+            key=state_key,
+        )
+        initial_obs = self._get_observation(state)
+
+        return initial_obs, state
+
+    @partial(jax.jit, static_argnums=(0,))
+    def step(self, state: PongState, action: chex.Array) -> Tuple[PongObservation, PongState, float, bool, PongInfo]:
+        # Translate compact agent action index to ALE console action
+        atari_action = jnp.take(self.ACTION_SET, action.astype(jnp.int32))
+
+        previous_state = state
+        state = self._player_step(state, atari_action)
+        state = self._enemy_step(state)
+        state = self._ball_step(state, atari_action)
+        state = self._score_and_reset(state)
+
+        # Advance the RNG key for the next step (modifications may have already updated it)
+        _, next_rng = jax.random.split(state.key)
+        state = state.replace(key=next_rng)
+
+        done = self._get_done(state)
+        env_reward = self._get_reward(previous_state, state)
+        info = self._get_info(state)
+        observation = self._get_observation(state)
+
+        return observation, state, env_reward, done, info
+
+
+    def render(self, state: PongState) -> jnp.ndarray:
+        return self.renderer.render(state)
+
+    def _get_observation(self, state: PongState):
+        player = ObjectObservation.create(
+            x=jnp.array(self.consts.PLAYER_X),
+            y=state.player_y,
+            width=jnp.array(self.consts.PLAYER_SIZE[0]),
+            height=jnp.array(self.consts.PLAYER_SIZE[1]),
+        )
+        
+        enemy = ObjectObservation.create(
+            x=jnp.array(self.consts.ENEMY_X),
+            y=state.enemy_y,
+            width=jnp.array(self.consts.ENEMY_SIZE[0]),
+            height=jnp.array(self.consts.ENEMY_SIZE[1]),
+        )
+        
+        ball = ObjectObservation.create(
+            x=state.ball_x,
+            y=state.ball_y,
+            width=jnp.array(self.consts.BALL_SIZE[0]),
+            height=jnp.array(self.consts.BALL_SIZE[1]),
+        )
+        return PongObservation(
+            player=player,
+            enemy=enemy,
+            ball=ball,
+            score_player=state.player_score,
+            score_enemy=state.enemy_score,
+        )
+
+    def action_space(self) -> spaces.Discrete:
+        return spaces.Discrete(len(self.ACTION_SET))
+
+    def observation_space(self) -> spaces:
+        # Use get_object_space helper to create standard ObjectObservation spaces
+        object_space = spaces.get_object_space(n=None, screen_size=(self.consts.HEIGHT, self.consts.WIDTH))
+        
+        return spaces.Dict({
+            "player": object_space,
+            "enemy": object_space,
+            "ball": object_space,
+            "score_player": spaces.Box(low=0, high=21, shape=(), dtype=jnp.int32),
+            "score_enemy": spaces.Box(low=0, high=21, shape=(), dtype=jnp.int32),
+        })
+
+    def image_space(self) -> spaces.Box:
+        return spaces.Box(
+            low=0,
+            high=255,
+            shape=(210, 160, 3),
+            dtype=jnp.uint8
+        )
+
+    @partial(jax.jit, static_argnums=(0,))
+    def _get_info(self, state: PongState, ) -> PongInfo:
+        return PongInfo(time=state.step_counter)
+
+    @partial(jax.jit, static_argnums=(0,))
+    def _get_reward(self, previous_state: PongState, state: PongState):
+        return (state.player_score - state.enemy_score) - (
+            previous_state.player_score - previous_state.enemy_score
+        )
+
+    @partial(jax.jit, static_argnums=(0,))
+    def _get_done(self, state: PongState) -> bool:
+        return jnp.logical_or(
+            jnp.greater_equal(state.player_score, 21),
+            jnp.greater_equal(state.enemy_score, 21),
+        )
+
+class PongRenderer(JAXGameRenderer):
+    def __init__(self, consts: PongConstants = None, config: render_utils.RendererConfig = None):
+        super().__init__(consts)
+        self.consts = consts or PongConstants()
+        
+        # Use injected config if provided, else default
+        if config is None:
+            self.config = render_utils.RendererConfig(
+                game_dimensions=(210, 160),
+                channels=3,
+                downscale=None
+            )
+        else:
+            self.config = config
+
+        self.jr = render_utils.JaxRenderingUtils(self.config)
+
+        # 1. Start from (possibly modded) asset config provided via constants
+        final_asset_config = list(self.consts.ASSET_CONFIG)
+
+        # 2. Create procedural assets using modded constants
+        wall_sprite_top = _create_wall_sprite(self.consts, self.consts.WALL_TOP_HEIGHT)
+        wall_sprite_bottom = _create_wall_sprite(self.consts, self.consts.WALL_BOTTOM_HEIGHT)
+
+        # 3. Append procedural assets
+        final_asset_config.append({'name': 'wall_top', 'type': 'procedural', 'data': wall_sprite_top})
+        final_asset_config.append({'name': 'wall_bottom', 'type': 'procedural', 'data': wall_sprite_bottom})
+
+        # 4. Bake assets once
+        sprite_path = os.path.join(render_utils.get_base_sprite_dir(), "pong")
+        (
+            self.PALETTE,
+            self.SHAPE_MASKS,
+            self.BACKGROUND,
+            self.COLOR_TO_ID,
+            self.FLIP_OFFSETS
+        ) = self.jr.load_and_setup_assets(final_asset_config, sprite_path)
+
+    @partial(jax.jit, static_argnums=(0,))
+    def render(self, state):
+        raster = self.jr.create_object_raster(self.BACKGROUND)
+
+        player_mask = self.SHAPE_MASKS["player"]
+        raster = self.jr.render_at(
+            raster,
+            self.consts.PLAYER_X,
+            jnp.round(state.player_y).astype(jnp.int32),
+            player_mask,
+        )
+
+        enemy_mask = self.SHAPE_MASKS["enemy"]
+        raster = self.jr.render_at(
+            raster,
+            self.consts.ENEMY_X,
+            state.enemy_y,
+            enemy_mask,
+        )
+
+        ball_mask = self.SHAPE_MASKS["ball"]
+        raster = self.jr.render_at(raster, state.ball_x, state.ball_y, ball_mask)
+
+        # --- Stamp Walls and Score (using the same color/ID) ---
+        score_color_tuple = self.consts.SCORE_COLOR # (236, 236, 236)
+        score_id = self.COLOR_TO_ID[score_color_tuple]
+
+        # Draw walls (using separate sprites for top and bottom)
+        raster = self.jr.render_at(raster, 0, self.consts.WALL_TOP_Y, self.SHAPE_MASKS["wall_top"])
+        raster = self.jr.render_at(raster, 0, self.consts.WALL_BOTTOM_Y, self.SHAPE_MASKS["wall_bottom"])
+
+        # Stamp Score using the label utility
+        player_digits = self.jr.int_to_digits(state.player_score, max_digits=2)
+        enemy_digits = self.jr.int_to_digits(state.enemy_score, max_digits=2)
+
+        # Note: The logic for single/double digits is complex for a jitted function.
+        player_digit_masks = self.SHAPE_MASKS["player_digits"] # Assumes single color
+        enemy_digit_masks = self.SHAPE_MASKS["enemy_digits"] # Assumes single color
+
+        is_player_single_digit = state.player_score < 10
+        player_start_index = jax.lax.select(is_player_single_digit, 1, 0)
+        player_num_to_render = jax.lax.select(is_player_single_digit, 1, 2)
+        player_render_x = jax.lax.select(is_player_single_digit,
+                                         120 + 16 // 2,
+                                         120)
+
+        raster = self.jr.render_label_selective(raster, player_render_x, 3, player_digits, player_digit_masks, player_start_index, player_num_to_render, spacing=16)
+        
+        is_enemy_single_digit = state.enemy_score < 10
+        enemy_start_index = jax.lax.select(is_enemy_single_digit, 1, 0)
+        enemy_num_to_render = jax.lax.select(is_enemy_single_digit, 1, 2)
+        enemy_render_x = jax.lax.select(is_enemy_single_digit,
+                                        10 + 16 // 2,
+                                        10)
+
+        raster = self.jr.render_label_selective(raster, enemy_render_x, 3, enemy_digits, enemy_digit_masks, enemy_start_index, enemy_num_to_render, spacing=16)
+
+        return self.jr.render_from_palette(raster, self.PALETTE)

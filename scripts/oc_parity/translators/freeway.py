@@ -1,4 +1,4 @@
-"""Translate OCAtari Freeway object snapshots into JAXAtari FreewayState."""
+"""Translate OCAtari Freeway object snapshots into Jaxtari FreewayState."""
 
 from __future__ import annotations
 
@@ -8,7 +8,7 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 
-from jaxatari.games.jax_freeway import FreewayState, JaxFreeway
+from jaxtari.games.jax_freeway import FreewayState, JaxFreeway
 
 from .base import cast_like, collect_category, objects_as_dicts
 from .registry import print_disclaimers

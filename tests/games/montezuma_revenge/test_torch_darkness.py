@@ -1,6 +1,6 @@
 import jax
 import jax.numpy as jnp
-from jaxatari.games.montezuma_revenge.rooms import load_room
+from jaxtari.games.montezuma_revenge.rooms import load_room
 
 def test_torch_darkness_rendering(montezuma_env):
     env = montezuma_env

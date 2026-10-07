@@ -1,4 +1,4 @@
-"""Translate OCAtari Qbert object snapshots into JAXAtari QbertState."""
+"""Translate OCAtari Qbert object snapshots into Jaxtari QbertState."""
 
 from __future__ import annotations
 
@@ -7,7 +7,7 @@ from typing import Any, List, Mapping, Optional, Sequence, Tuple
 import jax
 import numpy as np
 
-from jaxatari.games.jax_qbert import JaxQbert, QbertState
+from jaxtari.games.jax_qbert import JaxQbert, QbertState
 
 from .base import cast_like, find_object, objects_as_dicts
 from .registry import print_disclaimers

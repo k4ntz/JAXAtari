@@ -37,6 +37,6 @@ Known issues
 
 * **Number selection timing** — answer / number selection reacts instantly.
   ALE has selection timing / debounce that this port does not reproduce.
-* **Problem RNG** — posed arithmetic problems are drawn from JAXAtari's own
+* **Problem RNG** — posed arithmetic problems are drawn from Jaxtari's own
   RNG stream. With the same seed, problem sequences are **not** identical to
   ALE.

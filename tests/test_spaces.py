@@ -6,19 +6,19 @@ import jax.numpy as jnp
 import numpy as np
 import collections
 
-import jaxatari
-from jaxatari.core import list_available_games
-from jaxatari.wrappers import AtariWrapper, ObjectCentricWrapper, PixelAndObjectCentricWrapper
-import jaxatari.spaces as spaces
-from jaxatari.environment import JAXAtariAction
-from jaxatari.spaces import Space, Discrete, Box, Dict, Tuple, stack_space
+import jaxtari
+from jaxtari.core import list_available_games
+from jaxtari.wrappers import AtariWrapper, ObjectCentricWrapper, PixelAndObjectCentricWrapper
+import jaxtari.spaces as spaces
+from jaxtari.environment import JaxtariAction
+from jaxtari.spaces import Space, Discrete, Box, Dict, Tuple, stack_space
 
 
 def test_discrete_space():
     """Tests the functionality of the Discrete space."""
     key = jax.random.PRNGKey(42)
     # Get a discrete space from the environment's action space
-    env = jaxatari.make("pong")
+    env = jaxtari.make("pong")
     space = env.action_space()
 
     assert isinstance(space, spaces.Discrete)
@@ -50,7 +50,7 @@ def test_box_space():
     """Tests the functionality of the Box space."""
     key = jax.random.PRNGKey(43)
     # Get a Box space from a wrapper's observation space
-    env = ObjectCentricWrapper(AtariWrapper(jaxatari.make("pong")))
+    env = ObjectCentricWrapper(AtariWrapper(jaxtari.make("pong")))
     space = env.observation_space()
 
     assert isinstance(space, spaces.Box)
@@ -84,7 +84,7 @@ def test_dict_space():
     """Tests the functionality of the Dict space."""
     key = jax.random.PRNGKey(44)
     # Get a Dict space from the base environment's observation space
-    env = jaxatari.make("pong")
+    env = jaxtari.make("pong")
     space = env.observation_space()
 
     assert isinstance(space, spaces.Dict)
@@ -117,7 +117,7 @@ def test_tuple_space():
     """Tests the functionality of the Tuple space."""
     key = jax.random.PRNGKey(45)
     # Get a Tuple space from the combined wrapper
-    env = PixelAndObjectCentricWrapper(AtariWrapper(jaxatari.make("pong")))
+    env = PixelAndObjectCentricWrapper(AtariWrapper(jaxtari.make("pong")))
     space = env.observation_space()
 
     assert isinstance(space, spaces.Tuple)
@@ -146,30 +146,30 @@ def test_tuple_space():
     # Create a tuple with the wrong number of elements
     assert not space.contains((pixel_obs,))
 
-def test_jaxatari_action_constants():
-    """Test that JAXAtariAction constants are correctly defined."""
+def test_jaxtari_action_constants():
+    """Test that JaxtariAction constants are correctly defined."""
     # Test all action constants
-    assert JAXAtariAction.NOOP == 0
-    assert JAXAtariAction.FIRE == 1
-    assert JAXAtariAction.UP == 2
-    assert JAXAtariAction.RIGHT == 3
-    assert JAXAtariAction.LEFT == 4
-    assert JAXAtariAction.DOWN == 5
-    assert JAXAtariAction.UPRIGHT == 6
-    assert JAXAtariAction.UPLEFT == 7
-    assert JAXAtariAction.DOWNRIGHT == 8
-    assert JAXAtariAction.DOWNLEFT == 9
-    assert JAXAtariAction.UPFIRE == 10
-    assert JAXAtariAction.RIGHTFIRE == 11
-    assert JAXAtariAction.LEFTFIRE == 12
-    assert JAXAtariAction.DOWNFIRE == 13
-    assert JAXAtariAction.UPRIGHTFIRE == 14
-    assert JAXAtariAction.UPLEFTFIRE == 15
-    assert JAXAtariAction.DOWNRIGHTFIRE == 16
-    assert JAXAtariAction.DOWNLEFTFIRE == 17
+    assert JaxtariAction.NOOP == 0
+    assert JaxtariAction.FIRE == 1
+    assert JaxtariAction.UP == 2
+    assert JaxtariAction.RIGHT == 3
+    assert JaxtariAction.LEFT == 4
+    assert JaxtariAction.DOWN == 5
+    assert JaxtariAction.UPRIGHT == 6
+    assert JaxtariAction.UPLEFT == 7
+    assert JaxtariAction.DOWNRIGHT == 8
+    assert JaxtariAction.DOWNLEFT == 9
+    assert JaxtariAction.UPFIRE == 10
+    assert JaxtariAction.RIGHTFIRE == 11
+    assert JaxtariAction.LEFTFIRE == 12
+    assert JaxtariAction.DOWNFIRE == 13
+    assert JaxtariAction.UPRIGHTFIRE == 14
+    assert JaxtariAction.UPLEFTFIRE == 15
+    assert JaxtariAction.DOWNRIGHTFIRE == 16
+    assert JaxtariAction.DOWNLEFTFIRE == 17
     
     # Test get_all_values method
-    all_values = JAXAtariAction.get_all_values()
+    all_values = JaxtariAction.get_all_values()
     assert isinstance(all_values, jnp.ndarray), "get_all_values should return jnp.ndarray"
     assert all_values.shape == (18,), "get_all_values should have shape (18,)"
     assert all_values.dtype == jnp.int32, "get_all_values should have dtype int32"

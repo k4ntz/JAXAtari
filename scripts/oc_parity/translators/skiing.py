@@ -1,4 +1,4 @@
-"""Translate OCAtari Skiing object snapshots into JAXAtari SkiingState.
+"""Translate OCAtari Skiing object snapshots into Jaxtari SkiingState.
 
 LOW COMPATIBILITY — best-effort soft survival only. OC Score/Clock .value are
 often stuck at 0; pose/slot packing and piste scrolling diverge quickly.
@@ -12,7 +12,7 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 
-from jaxatari.games.jax_skiing import JaxSkiing, SkiingState
+from jaxtari.games.jax_skiing import JaxSkiing, SkiingState
 
 from .base import cast_like, collect_category, find_object, objects_as_dicts
 from .registry import print_disclaimers

@@ -48,7 +48,7 @@ from cleanrl_atari_wrapper import (
 # performance of sync envpool (256 envs, 10000 steps): 398k throughput (24.7s)
 # performance of sync envpool (512 envs, 10000 steps): 490k throughput (41s)
 
-JAXATARI_BACKEND = "jaxatari"
+JAXTARI_BACKEND = "jaxtari"
 ALE_BACKEND_LEGACY = "ale"
 GYM_ALE_BACKEND = "gym_ale"
 ALE_VECTORENV_BACKEND = "ale_vectorenv"
@@ -63,7 +63,7 @@ GPU_PLATFORM = "gpu"
 RESULT_COLUMNS = [
     "backend",
     "env_name",
-    "jaxatari_mode",
+    "jaxtari_mode",
     "pixel_options",
     "ale_vectorenv_async_stepping",
     "atari_frame_skip",
@@ -85,7 +85,7 @@ class BenchmarkTimeoutError(RuntimeError):
 
 _JAX_MODULE = None
 _JNP_MODULE = None
-_JAXATARI_MODULE = None
+_JAXTARI_MODULE = None
 _ATARI_WRAPPER = None
 _OBJECT_CENTRIC_WRAPPER = None
 _FLATTEN_OBSERVATION_WRAPPER = None
@@ -103,32 +103,32 @@ def _get_jax_modules():
     return _JAX_MODULE, _JNP_MODULE
 
 
-def _get_jaxatari_modules():
-    global _JAXATARI_MODULE
+def _get_jaxtari_modules():
+    global _JAXTARI_MODULE
     global _ATARI_WRAPPER, _OBJECT_CENTRIC_WRAPPER, _FLATTEN_OBSERVATION_WRAPPER, _PIXEL_OBS_WRAPPER
     if (
-        _JAXATARI_MODULE is None
+        _JAXTARI_MODULE is None
         or _ATARI_WRAPPER is None
         or _OBJECT_CENTRIC_WRAPPER is None
         or _FLATTEN_OBSERVATION_WRAPPER is None
         or _PIXEL_OBS_WRAPPER is None
     ):
-        import jaxatari
-        from jaxatari.wrappers import (
+        import jaxtari
+        from jaxtari.wrappers import (
             AtariWrapper,
             FlattenObservationWrapper,
             ObjectCentricWrapper,
             PixelObsWrapper,
         )
 
-        _JAXATARI_MODULE = jaxatari
+        _JAXTARI_MODULE = jaxtari
         _ATARI_WRAPPER = AtariWrapper
         _OBJECT_CENTRIC_WRAPPER = ObjectCentricWrapper
         _FLATTEN_OBSERVATION_WRAPPER = FlattenObservationWrapper
         _PIXEL_OBS_WRAPPER = PixelObsWrapper
 
     return (
-        _JAXATARI_MODULE,
+        _JAXTARI_MODULE,
         _ATARI_WRAPPER,
         _OBJECT_CENTRIC_WRAPPER,
         _FLATTEN_OBSERVATION_WRAPPER,
@@ -206,7 +206,7 @@ def _normalize_option_set(options: List[str]) -> Tuple[str, ...]:
 def _expand_pixel_option_combinations(config: Dict[str, Any]) -> List[Tuple[str, ...]]:
     allowed = {PIXEL_OPT_RESIZED, PIXEL_OPT_GRAYSCALE, PIXEL_OPT_NATIVE}
 
-    combo_config = config.get("JAXATARI_PIXEL_OPTION_COMBINATIONS", None)
+    combo_config = config.get("JAXTARI_PIXEL_OPTION_COMBINATIONS", None)
     if combo_config is not None:
         normalized = []
         for combo in combo_config:
@@ -216,12 +216,12 @@ def _expand_pixel_option_combinations(config: Dict[str, Any]) -> List[Tuple[str,
                 raise ValueError(f"Unknown pixel options in combination {combo}: {sorted(unknown)}")
             normalized.append(option_set)
     else:
-        base_options = [str(x).lower() for x in config.get("JAXATARI_PIXEL_OPTIONS", [])]
+        base_options = [str(x).lower() for x in config.get("JAXTARI_PIXEL_OPTIONS", [])]
         unknown = set(base_options) - allowed
         if unknown:
-            raise ValueError(f"Unknown JAXATARI_PIXEL_OPTIONS: {sorted(unknown)}")
+            raise ValueError(f"Unknown JAXTARI_PIXEL_OPTIONS: {sorted(unknown)}")
 
-        if config.get("JAXATARI_PIXEL_TRY_ALL_COMBINATIONS", False):
+        if config.get("JAXTARI_PIXEL_TRY_ALL_COMBINATIONS", False):
             normalized = []
             for r in range(len(base_options) + 1):
                 for combo in combinations(base_options, r):
@@ -239,7 +239,7 @@ def _expand_pixel_option_combinations(config: Dict[str, Any]) -> List[Tuple[str,
     return deduped if deduped else [tuple()]
 
 
-def _prepare_jaxatari_states(
+def _prepare_jaxtari_states(
     game_name: str,
     num_envs: int,
     seed: int,
@@ -250,14 +250,14 @@ def _prepare_jaxatari_states(
 ):
     jax, _ = _get_jax_modules()
     (
-        jaxatari,
+        jaxtari,
         AtariWrapper,
         ObjectCentricWrapper,
         FlattenObservationWrapper,
         PixelObsWrapper,
-    ) = _get_jaxatari_modules()
+    ) = _get_jaxtari_modules()
 
-    env = jaxatari.make(game_name)
+    env = jaxtari.make(game_name)
     env = AtariWrapper(env)
 
     if mode == JAX_MODE_OC:
@@ -276,7 +276,7 @@ def _prepare_jaxatari_states(
             frame_skip=atari_frame_skip,
         )
     else:
-        raise ValueError(f"Unknown JAXAtari mode '{mode}'. Expected one of [{JAX_MODE_OC}, {JAX_MODE_PIXEL}]")
+        raise ValueError(f"Unknown Jaxtari mode '{mode}'. Expected one of [{JAX_MODE_OC}, {JAX_MODE_PIXEL}]")
 
     base_key = jax.random.PRNGKey(seed)
     reset_keys = jax.random.split(base_key, num_envs)
@@ -493,7 +493,7 @@ def _build_result_row(
     num_envs: int,
     num_steps: int,
     *,
-    jaxatari_mode: str = "",
+    jaxtari_mode: str = "",
     pixel_options: str = "",
     ale_vectorenv_async_stepping: str = "",
     jax_platform: str = "",
@@ -507,7 +507,7 @@ def _build_result_row(
     return {
         "backend": backend,
         "env_name": env_name,
-        "jaxatari_mode": jaxatari_mode,
+        "jaxtari_mode": jaxtari_mode,
         "pixel_options": pixel_options,
         "ale_vectorenv_async_stepping": ale_vectorenv_async_stepping,
         "atari_frame_skip": atari_frame_skip,
@@ -590,7 +590,7 @@ def _resolve_benchmark_targets(config: Dict[str, Any]) -> List[Dict[str, str]]:
     return [
         {
             "game_name_input": game_name,
-            "game_name_jaxatari": "".join(token.lower() for token in _tokenize_game_name(game_name)),
+            "game_name_jaxtari": "".join(token.lower() for token in _tokenize_game_name(game_name)),
             "game_name_ale_vectorenv": "_".join(token.lower() for token in _tokenize_game_name(game_name)),
             "game_name_ale_standard": _to_camel_case(_tokenize_game_name(game_name)),
         }
@@ -609,10 +609,10 @@ def run_throughput_benchmark(config: Dict[str, Any]) -> List[Dict[str, Any]]:
     env_counts = [int(x) for x in config["ENV_COUNTS"]]
     num_steps = int(config["NUM_STEPS"])
     benchmark_targets = _resolve_benchmark_targets(config)
-    requested_backends = [str(x).lower() for x in config.get("BENCHMARK_BACKENDS", [JAXATARI_BACKEND])]
+    requested_backends = [str(x).lower() for x in config.get("BENCHMARK_BACKENDS", [JAXTARI_BACKEND])]
     backends = [GYM_ALE_BACKEND if backend == ALE_BACKEND_LEGACY else backend for backend in requested_backends]
-    jaxatari_modes = [str(x).lower() for x in config.get("JAXATARI_MODES", [JAX_MODE_OC, JAX_MODE_PIXEL])]
-    jaxatari_platforms = [str(x).lower() for x in config.get("JAXATARI_PLATFORMS", [GPU_PLATFORM])]
+    jaxtari_modes = [str(x).lower() for x in config.get("JAXTARI_MODES", [JAX_MODE_OC, JAX_MODE_PIXEL])]
+    jaxtari_platforms = [str(x).lower() for x in config.get("JAXTARI_PLATFORMS", [GPU_PLATFORM])]
     atari_frame_skips = _normalize_frame_skip_values(config.get("ATARI_FRAME_SKIP", 4))
     pixel_resize_shape = tuple(config.get("PIXEL_RESIZE_SHAPE", [84, 84]))
     pixel_option_combinations = _expand_pixel_option_combinations(config)
@@ -625,21 +625,21 @@ def run_throughput_benchmark(config: Dict[str, Any]) -> List[Dict[str, Any]]:
     ale_vectorenv_batch_size_override = config.get("ALE_VECTORENV_BATCH_SIZE", None)
     ale_vectorenv_thread_affinity_offset = config.get("ALE_VECTORENV_THREAD_AFFINITY_OFFSET", None)
 
-    if JAXATARI_BACKEND in backends:
+    if JAXTARI_BACKEND in backends:
         jax, _ = _get_jax_modules()
         device_list = jax.devices() + jax.devices(backend="cpu")
         available_platforms = {device.platform for device in device_list}
 
-    if JAXATARI_BACKEND in backends:
-        for platform in jaxatari_platforms:
+    if JAXTARI_BACKEND in backends:
+        for platform in jaxtari_platforms:
             if platform not in (CPU_PLATFORM, GPU_PLATFORM):
                 raise ValueError(f"Unknown JAX platform '{platform}'. Expected one of [{CPU_PLATFORM}, {GPU_PLATFORM}]")
             if platform not in available_platforms:
                 raise ValueError(f"Requested JAX platform '{platform}' not available. Available: {sorted(available_platforms)}")
 
-        for mode in jaxatari_modes:
+        for mode in jaxtari_modes:
             if mode not in (JAX_MODE_OC, JAX_MODE_PIXEL):
-                raise ValueError(f"Unknown JAXAtari mode '{mode}'. Expected one of [{JAX_MODE_OC}, {JAX_MODE_PIXEL}]")
+                raise ValueError(f"Unknown Jaxtari mode '{mode}'. Expected one of [{JAX_MODE_OC}, {JAX_MODE_PIXEL}]")
 
     gym.register_envs(ale_py)
 
@@ -676,8 +676,8 @@ def run_throughput_benchmark(config: Dict[str, Any]) -> List[Dict[str, Any]]:
 
         status = str(row.get("status", "ok"))
         details = []
-        if row.get("jaxatari_mode"):
-            details.append(f"mode={row['jaxatari_mode']}")
+        if row.get("jaxtari_mode"):
+            details.append(f"mode={row['jaxtari_mode']}")
         if row.get("pixel_options"):
             details.append(f"pixel={row['pixel_options']}")
         if row.get("ale_vectorenv_async_stepping"):
@@ -701,20 +701,20 @@ def run_throughput_benchmark(config: Dict[str, Any]) -> List[Dict[str, Any]]:
         run_step += 1
 
     for target in benchmark_targets:
-        game_name_jaxatari = target["game_name_jaxatari"]
+        game_name_jaxtari = target["game_name_jaxtari"]
         game_name_ale_vectorenv = target["game_name_ale_vectorenv"]
         game_name_ale_standard = target["game_name_ale_standard"]
 
         for atari_frame_skip in atari_frame_skips:
             for backend in backends:
                 if backend not in (
-                    JAXATARI_BACKEND,
+                    JAXTARI_BACKEND,
                     GYM_ALE_BACKEND,
                     ALE_VECTORENV_BACKEND,
                 ):
                     raise ValueError(
                         "Unknown backend "
-                        f"'{backend}'. Expected one of: [{JAXATARI_BACKEND}, {GYM_ALE_BACKEND}, {ALE_VECTORENV_BACKEND}]"
+                        f"'{backend}'. Expected one of: [{JAXTARI_BACKEND}, {GYM_ALE_BACKEND}, {ALE_VECTORENV_BACKEND}]"
                     )
 
                 for num_envs in env_counts:
@@ -731,18 +731,18 @@ def run_throughput_benchmark(config: Dict[str, Any]) -> List[Dict[str, Any]]:
                             f"(num_envs={num_envs}), got {ale_vectorenv_batch_size}"
                         )
 
-                    if backend == JAXATARI_BACKEND:
-                        for jax_mode in jaxatari_modes:
+                    if backend == JAXTARI_BACKEND:
+                        for jax_mode in jaxtari_modes:
                             mode_pixel_combos = pixel_option_combinations if jax_mode == JAX_MODE_PIXEL else [tuple()]
 
                             for pixel_options in mode_pixel_combos:
                                 pixel_options_str = "+".join(pixel_options)
 
-                                for jax_platform in jaxatari_platforms:
+                                for jax_platform in jaxtari_platforms:
                                     env_seed = base_seed + run_step
                                     try:
-                                        env, states = _prepare_jaxatari_states(
-                                            game_name=game_name_jaxatari,
+                                        env, states = _prepare_jaxtari_states(
+                                            game_name=game_name_jaxtari,
                                             num_envs=num_envs,
                                             seed=env_seed,
                                             mode=jax_mode,
@@ -762,11 +762,11 @@ def run_throughput_benchmark(config: Dict[str, Any]) -> List[Dict[str, Any]]:
                                         throughput = total_env_steps / runtime_s
                                         row = _build_result_row(
                                             backend=backend,
-                                            env_name=game_name_jaxatari,
+                                            env_name=game_name_jaxtari,
                                             atari_frame_skip=atari_frame_skip,
                                             num_envs=num_envs,
                                             num_steps=num_steps,
-                                            jaxatari_mode=jax_mode,
+                                            jaxtari_mode=jax_mode,
                                             pixel_options=pixel_options_str,
                                             jax_platform=jax_platform,
                                             compile_s=compile_s,
@@ -777,11 +777,11 @@ def run_throughput_benchmark(config: Dict[str, Any]) -> List[Dict[str, Any]]:
                                     except Exception as error:
                                         row = _build_result_row(
                                             backend=backend,
-                                            env_name=game_name_jaxatari,
+                                            env_name=game_name_jaxtari,
                                             atari_frame_skip=atari_frame_skip,
                                             num_envs=num_envs,
                                             num_steps=num_steps,
-                                            jaxatari_mode=jax_mode,
+                                            jaxtari_mode=jax_mode,
                                             pixel_options=pixel_options_str,
                                             jax_platform=jax_platform,
                                             status="error",
@@ -894,7 +894,7 @@ def run_throughput_benchmark(config: Dict[str, Any]) -> List[Dict[str, Any]]:
             table.add_data(
                 row["backend"],
                 row["env_name"],
-                row["jaxatari_mode"],
+                row["jaxtari_mode"],
                 row["pixel_options"],
                 row["ale_vectorenv_async_stepping"],
                 row["atari_frame_skip"],

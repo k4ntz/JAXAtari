@@ -13,7 +13,7 @@ Description
 
 Outrun Wile E. Coyote along a scrolling desert highway while collecting birdseed and dodging trucks, mines, cliffs, cannons, and rockets. Jump with the fire button. The Road Runner loses a life when caught by the coyote, hit by a truck or cannonball, landing on a mine, falling into a ravine, or (in later cartridge levels) hit by a falling rock.
 
-This JAXAtari port currently implements **levels 1–4**. The Atari 2600 cartridge has **8 levels** that escalate in difficulty; after level 8 the layouts loop while difficulty continues to rise. Features required for levels 5–8 are summarized below (from the official Atari manual and observed ALE / TAS level structure).
+This Jaxtari port currently implements **levels 1–4**. The Atari 2600 cartridge has **8 levels** that escalate in difficulty; after level 8 the layouts loop while difficulty continues to rise. Features required for levels 5–8 are summarized below (from the official Atari manual and observed ALE / TAS level structure).
 
 Actions
 -------

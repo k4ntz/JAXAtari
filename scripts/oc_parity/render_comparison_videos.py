@@ -212,7 +212,7 @@ def main() -> None:
     args = parser.parse_args()
 
     import jax
-    import jaxatari
+    import jaxtari
     from oc_parity.trajectory_io import load_trajectory
     from oc_parity.translators.registry import list_implemented_translators
 
@@ -242,7 +242,7 @@ def main() -> None:
             continue
 
         print(f"\n=== {jax_key}: {len(runs)} run(s) ===")
-        env = jaxatari.make(jax_key)
+        env = jaxtari.make(jax_key)
         jitted_step = jax.jit(env.step)
         jitted_render = jax.jit(env.render)
         _o, st = env.reset(jax.random.PRNGKey(0))

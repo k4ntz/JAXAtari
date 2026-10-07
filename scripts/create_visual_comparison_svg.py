@@ -1,7 +1,7 @@
 import os
 import sys
 
-from jaxatari.environment import JAXAtariAction
+from jaxtari.environment import JaxtariAction
 
 if "--cpu" in sys.argv:
     os.environ.setdefault("JAX_PLATFORMS", "cpu")
@@ -15,13 +15,13 @@ from PIL import Image
 import gymnasium as gym
 import ale_py  # noqa: F401  # Registers ALE environments for gymnasium.
 
-from jaxatari.core import make as jaxatari_make
-from jaxatari.core import list_available_games as jaxatari_list_games
+from jaxtari.core import make as jaxtari_make
+from jaxtari.core import list_available_games as jaxtari_list_games
 
 DEFAULT_OUT_DIR = os.path.join(os.path.dirname(__file__), "..", "docs", "source", "_static", "svgs")
 
-# Mapping from JAXAtari env names to ALE game names (without ALE/ prefix and -v5 suffix).
-JAXATARI_TO_ALE_GAMES = {
+# Mapping from Jaxtari env names to ALE game names (without ALE/ prefix and -v5 suffix).
+JAXTARI_TO_ALE_GAMES = {
     # important
     "asteroids": "Asteroids",
     "bankheist": "BankHeist",
@@ -114,7 +114,7 @@ def parse_csv_games(csv: str) -> list[str]:
 
 def get_game_frame(game: str, warmup: int, seed: int) -> np.ndarray:
     print(f"[{game}] Loading...")
-    env = jaxatari_make(game)
+    env = jaxtari_make(game)
     jitted_reset = jax.jit(env.reset)
     jitted_step = jax.jit(env.step)
     jitted_render = jax.jit(env.render)
@@ -125,7 +125,7 @@ def get_game_frame(game: str, warmup: int, seed: int) -> np.ndarray:
 
     if warmup > 0:
         print(f"[{game}] Warming up for {warmup} frames...")
-        noop = np.int32(JAXAtariAction.NOOP)
+        noop = np.int32(JaxtariAction.NOOP)
         for _ in range(warmup):
             obs, state, reward, done, info = jitted_step(state, noop)
             if bool(done):
@@ -148,7 +148,7 @@ def get_ale_frame(ale_game: str, warmup: int, seed: int) -> np.ndarray:
         obs, info = env.reset(seed=seed)
         if warmup > 0:
             print(f"[ALE:{ale_game}] Warming up for {warmup} frames...")
-            noop = int(JAXAtariAction.NOOP)
+            noop = int(JaxtariAction.NOOP)
             for _ in range(warmup):
                 obs, reward, terminated, truncated, info = env.step(noop)
                 if terminated or truncated:
@@ -247,7 +247,7 @@ def capture_game(game: str, warmup: int, seed: int, scale: int, pdf: bool, outpu
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Render an SVG (or PDF) screenshot of one or more JAXAtari games."
+        description="Render an SVG (or PDF) screenshot of one or more Jaxtari games."
     )
     game_group = parser.add_mutually_exclusive_group(required=True)
     game_group.add_argument("-g", "--game", type=str, help="Single game name (e.g. 'seaquest')")
@@ -262,9 +262,9 @@ def main():
     game_group.add_argument(
         "--all-jax-ale-pairs",
         action="store_true",
-        help="Generate one ALE-vs-JAXAtari pair image for every game in the global mapping.",
+        help="Generate one ALE-vs-Jaxtari pair image for every game in the global mapping.",
     )
-    parser.add_argument("--warmup", type=int, default=0, help="NOOP steps before capture (JAXAtari and ALE)")
+    parser.add_argument("--warmup", type=int, default=0, help="NOOP steps before capture (Jaxtari and ALE)")
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--scale", type=int, default=1, help="Pixel size in output units (default: 1)")
     parser.add_argument(
@@ -318,12 +318,12 @@ def main():
         pair_out_dir = args.output if args.output else DEFAULT_OUT_DIR
         os.makedirs(pair_out_dir, exist_ok=True)
         errors = []
-        mapped_games = sorted(JAXATARI_TO_ALE_GAMES.items())
-        available = set(jaxatari_list_games())
-        print(f"Generating ALE/JAXAtari pair images for {len(mapped_games)} mapped games...")
+        mapped_games = sorted(JAXTARI_TO_ALE_GAMES.items())
+        available = set(jaxtari_list_games())
+        print(f"Generating ALE/Jaxtari pair images for {len(mapped_games)} mapped games...")
         for jax_game, ale_game in mapped_games:
             if jax_game not in available:
-                print(f"[{jax_game}] ERROR: game not registered in jaxatari.core")
+                print(f"[{jax_game}] ERROR: game not registered in jaxtari.core")
                 errors.append(jax_game)
                 continue
             if not ale_env_exists(ale_game):

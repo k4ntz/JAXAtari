@@ -104,7 +104,7 @@ Worst-run per-object L1@end: diver_2=∞, player=43.00, shark_0=∞, shark_6=∞
 Worst run: t0=922  L1@0=17.86  L1@end=126.20  gif=`worst_gifs/skiing_worst.gif`
 Worst-run per-object L1@end: flag_0=119.87, flag_1=20.87, flag_2=∞, flag_3=∞, mogul_0=119.87, mogul_1=∞, skier=14.76, tree_0=153.13, tree_1=186.13, tree_2=201.13, tree_3=193.87
 
-Reports: `/home/paul/Documents/JAXAtari/data/oc_parity_corpus/reports_rebuttal`
-Gallery: `/home/paul/Documents/JAXAtari/data/oc_parity_corpus/final_report/rebuttal/start_end_gallery`
-Worst GIFs: `/home/paul/Documents/JAXAtari/data/oc_parity_corpus/final_report/rebuttal/worst_gifs`
+Reports: `/home/paul/Documents/Jaxtari/data/oc_parity_corpus/reports_rebuttal`
+Gallery: `/home/paul/Documents/Jaxtari/data/oc_parity_corpus/final_report/rebuttal/start_end_gallery`
+Worst GIFs: `/home/paul/Documents/Jaxtari/data/oc_parity_corpus/final_report/rebuttal/worst_gifs`
 

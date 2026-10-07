@@ -13,7 +13,7 @@ Description
 
 Maze shooter: the player fights Burwors (and later Garwors / Thorwors / Worluk /
 Wizard) in a shared dungeon, using side teleporters and a bottom radar to track
-enemies. JAXAtari currently focuses on the first dungeon layout.
+enemies. Jaxtari currently focuses on the first dungeon layout.
 
 Actions
 -------

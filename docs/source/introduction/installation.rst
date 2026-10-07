@@ -4,7 +4,7 @@ Installation
 Install
 -------
 
-Create a virtual environment and install JAXAtari:
+Create a virtual environment and install Jaxtari:
 
 .. code-block:: bash
 

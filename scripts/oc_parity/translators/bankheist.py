@@ -1,4 +1,4 @@
-"""Translate OCAtari BankHeist object snapshots into JAXAtari BankHeistState."""
+"""Translate OCAtari BankHeist object snapshots into Jaxtari BankHeistState."""
 
 from __future__ import annotations
 
@@ -8,8 +8,8 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 
-from jaxatari.environment import JAXAtariAction as Action
-from jaxatari.games.jax_bankheist import (
+from jaxtari.environment import JaxtariAction as Action
+from jaxtari.games.jax_bankheist import (
     BankHeistConstants,
     BankHeistState,
     Entity,
@@ -68,7 +68,7 @@ def _action_name(action: Optional[int], meanings: Optional[Sequence[str]]) -> st
     a = int(action)
     if meanings is not None and 0 <= a < len(meanings):
         return str(meanings[a]).upper()
-    # ALE / JAXAtariAction index names when meanings missing.
+    # ALE / JaxtariAction index names when meanings missing.
     names = [
         "NOOP",
         "FIRE",
@@ -97,7 +97,7 @@ def _dir_from_action_name(name: str, *, fallback: int) -> int:
 
 
 def _atari_action_value(action: Optional[int], meanings: Optional[Sequence[str]]) -> int:
-    """Map OC action index → JAXAtariAction enum int (stored in latched_action)."""
+    """Map OC action index → JaxtariAction enum int (stored in latched_action)."""
     name = _action_name(action, meanings)
     return int(getattr(Action, name, Action.NOOP))
 

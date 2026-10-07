@@ -9,7 +9,7 @@ def test_collect_key(montezuma_env):
     initial_keys = state.inventory[0]
     
     # Teleport to Room 14, where there is a key at (128, 7)
-    from jaxatari.games.montezuma_revenge.rooms import load_room
+    from jaxtari.games.montezuma_revenge.rooms import load_room
     state = load_room(jnp.array(14, dtype=jnp.int32), state, env.consts)
     
     # Place player at the key
@@ -31,7 +31,7 @@ def test_open_door(montezuma_env):
     obs, state = env.reset(key)
     
     # Room 12 has doors at (56, 86) and (100, 86)
-    from jaxatari.games.montezuma_revenge.rooms import load_room
+    from jaxtari.games.montezuma_revenge.rooms import load_room
     state = load_room(jnp.array(12, dtype=jnp.int32), state, env.consts)
     
     # Place player in front of a door
@@ -57,7 +57,7 @@ def test_collect_sword(montezuma_env):
     obs, state = env.reset(key)
     
     # Sword is in Room 13 at (12, 7)
-    from jaxatari.games.montezuma_revenge.rooms import load_room
+    from jaxtari.games.montezuma_revenge.rooms import load_room
     state = load_room(jnp.array(13, dtype=jnp.int32), state, env.consts)
     
     state = state.replace(
@@ -115,7 +115,7 @@ def test_door_without_key(montezuma_env):
     )
     
     # Place player in front of the door in Room 12 (56, 86)
-    from jaxatari.games.montezuma_revenge.rooms import load_room
+    from jaxtari.games.montezuma_revenge.rooms import load_room
     state = load_room(jnp.array(12, dtype=jnp.int32), state, env.consts)
     
     state = state.replace(
@@ -136,7 +136,7 @@ def test_collect_torch(montezuma_env):
     obs, state = env.reset(key)
     
     # Torch is in Room 12 at (77, 7)
-    from jaxatari.games.montezuma_revenge.rooms import load_room
+    from jaxtari.games.montezuma_revenge.rooms import load_room
     state = load_room(jnp.array(12, dtype=jnp.int32), state, env.consts)
     
     state = state.replace(

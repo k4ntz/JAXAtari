@@ -1,4 +1,4 @@
-"""Translate OCAtari BeamRider object snapshots into JAXAtari BeamriderState.
+"""Translate OCAtari BeamRider object snapshots into Jaxtari BeamriderState.
 
 OC coverage is thin (Player + Saucer only). Soft survival is mostly player-lane.
 """
@@ -11,7 +11,7 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 
-from jaxatari.games.jax_beamrider import (
+from jaxtari.games.jax_beamrider import (
     BLUE_LINE_INIT_TABLE,
     BLUE_LINE_LOOP_TABLE,
     BeamriderState,
@@ -139,7 +139,7 @@ def extract_jax_compare_entities(state: BeamriderState, env: JaxBeamrider) -> di
 
 def _get_screen_x(player_pos, env) -> float:
     try:
-        from jaxatari.games.jax_beamrider import _get_player_screen_x
+        from jaxtari.games.jax_beamrider import _get_player_screen_x
 
         return float(_get_player_screen_x(jnp.asarray(player_pos)))
     except Exception:
