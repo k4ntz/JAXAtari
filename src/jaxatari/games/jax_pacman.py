@@ -415,6 +415,8 @@ class PacmanObservation:
     fruit: ObjectObservation  # visual_id=fruit type; active while spawned
     power_pellets: ObjectObservation  # n=4
     pellets: ObjectObservation  # n=144, index = grid_x * 8 + grid_y; active while not eaten
+    score: chex.Array
+    lives: chex.Array
 
 @struct.dataclass
 class PacmanInfo:
@@ -1220,6 +1222,8 @@ class JaxPacman(JaxEnvironment[PacmanState, PacmanObservation, PacmanInfo, Pacma
             fruit=fruit,
             power_pellets=power_pellets,
             pellets=pellets,
+            score=state.score.astype(jnp.int32),
+            lives=state.lives.astype(jnp.int32),
         )
 
     @staticmethod
@@ -1247,6 +1251,8 @@ class JaxPacman(JaxEnvironment[PacmanState, PacmanObservation, PacmanInfo, Pacma
             "fruit": spaces.get_object_space(n=None, screen_size=screen_size),
             "power_pellets": spaces.get_object_space(n=4, screen_size=screen_size),
             "pellets": spaces.get_object_space(n=PacmanMaze.BASE_PELLETS.size, screen_size=screen_size),
+            "score": spaces.Box(low=0, high=jnp.iinfo(jnp.int32).max, shape=(), dtype=jnp.int32),
+            "lives": spaces.Box(low=0, high=10, shape=(), dtype=jnp.int32),
         })
 
     def image_space(self) -> spaces.Box:

@@ -90,10 +90,16 @@ For other accelerators see the [JAX installation guide](https://docs.jax.dev/en/
 Before running any environment for the first time you will be asked to confirm ROM ownership of the original Atari ROMs. This is necessary to download sprites that look similar to the original ALE sprites.
 
 If you do not have ownership of the original Atari ROMs, you can continue with replacement/custom sprites. In that case, please decline the ownership and the installer will download the alternative sprites package.
-You can also use your own sprites by placing them in the ~/.local/share/jaxatari/sprites directory.
+You can also use your own sprites by placing them in the `~/.local/share/jaxtari/sprites` directory
+(legacy installs under `~/.local/share/jaxatari/sprites` are still detected).
+
+Sprite packs ship a `.version` file. When a newer pack is required, JaxAtari will
+ask once whether to download it (opt-in). You can always refresh manually with:
 
 ```bash
-python3 src/jaxatari/install_sprites.py
+python3 -m jaxatari.install_sprites
+# or
+.venv/bin/install-sprites
 ```
 
 ---

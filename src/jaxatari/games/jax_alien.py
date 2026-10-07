@@ -188,6 +188,7 @@ class AlienObservation(struct.PyTreeNode):
     eggs: ObjectObservation
     kill_items: ObjectObservation
     score_items: ObjectObservation
+    score: jnp.ndarray
     #collision_map: jnp.ndarray
 
 #Defines the Info of Alien, which is score, step counter and all rewards
@@ -1489,6 +1490,7 @@ class JaxAlien(JaxEnvironment[AlienState, AlienObservation, AlienInfo, AlienCons
             "eggs": spaces.get_object_space(n=self.consts.EGG_ARRAY.shape[0] * self.consts.EGG_ARRAY.shape[1], screen_size=(self.consts.HEIGHT, self.consts.WIDTH)),
             "kill_items": spaces.get_object_space(n=self.consts.ITEM_ARRAY.shape[0] - 1, screen_size=(self.consts.HEIGHT, self.consts.WIDTH)),
             "score_items": spaces.get_object_space(n=2, screen_size=(self.consts.HEIGHT, self.consts.WIDTH)),
+            "score": spaces.Box(low=0, high=jnp.iinfo(jnp.int32).max, shape=(), dtype=jnp.int32),
             #"collision_map":
             #    spaces.Box(low=0, high=1, shape=(152, 188), dtype=jnp.bool_),
         })
@@ -1592,6 +1594,7 @@ class JaxAlien(JaxEnvironment[AlienState, AlienObservation, AlienInfo, AlienCons
             eggs=eggs_obj,
             kill_items=kill_items_obj,
             score_items=score_items_obj,
+            score=state.level.score.astype(jnp.int32),
             #collision_map=BACKGROUND_COLLISION_MAP,
         )
 

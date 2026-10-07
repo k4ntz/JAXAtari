@@ -1,26 +1,51 @@
-import sys
-import requests
-import zipfile
 import io
 import os
-import tempfile
 import shutil
+import sys
+import tempfile
+import zipfile
 from pathlib import Path
-from platformdirs import user_data_dir
+
+import requests
+
+from jaxatari.paths import (
+    ALT_SPRITES_MARKER_NAME,
+    OWNERSHIP_MARKER_NAME,
+    REQUIRED_SPRITE_VERSION,
+    canonical_storage_dir,
+    clear_declined_update,
+    env_flag,
+    write_sprite_version,
+)
 
 # 1. Configuration
 SPRITES_URL = os.environ.get(
     "JAXATARI_SPRITES_URL",
-    "https://drive.google.com/uc?export=download&id=1HX2TS8ulXGSnjrzUCAV83cINj0usBTvM",
+    os.environ.get(
+        "JAXTARI_SPRITES_URL",
+        "https://drive.google.com/uc?export=download&id=18H6G-xOOrpGujiwKTs4K5LaFh4W9pmVK",
+    ),
 )
-ALT_SPRITES_URL = os.environ.get("JAXATARI_ALT_SPRITES_URL", "https://drive.google.com/uc?export=download&id=1qZ7mber7tcCrOxFsALk7V8_PYoq9HHSr")
+ALT_SPRITES_URL = os.environ.get(
+    "JAXATARI_ALT_SPRITES_URL",
+    os.environ.get(
+        "JAXTARI_ALT_SPRITES_URL",
+        "https://drive.google.com/uc?export=download&id=1yODhHqXMvSbMlVeCM8vfekU1lPbkgbCb",
+    ),
+)
 STATES_URL = os.environ.get(
     "JAXATARI_STATES_URL",
-    "https://drive.google.com/uc?export=download&id=1GRFPXwVJcUhSRTvwWsIUoOMSygmCSrdM",
+    os.environ.get(
+        "JAXTARI_STATES_URL",
+        "https://drive.google.com/uc?export=download&id=1GRFPXwVJcUhSRTvwWsIUoOMSygmCSrdM",
+    ),
 )
-STORAGE_DIR = Path(user_data_dir("jaxatari"))
-OWNERSHIP_MARKER_FILE = STORAGE_DIR / ".ownership_confirmed"
-ALT_SPRITES_MARKER_FILE = STORAGE_DIR / ".alternative_sprites_installed"
+
+# Always install into the canonical jaxtari appdir.
+STORAGE_DIR = canonical_storage_dir()
+OWNERSHIP_MARKER_FILE = STORAGE_DIR / OWNERSHIP_MARKER_NAME
+ALT_SPRITES_MARKER_FILE = STORAGE_DIR / ALT_SPRITES_MARKER_NAME
+
 LICENSE_TEXT = """
 OWNERSHIP CONFIRMATION
 ------------------------------------------
@@ -32,13 +57,16 @@ NOTE
 ------------------------------------------
 If you do not have ownership of the original Atari 2600 ROMs, JaxAtari can still be used with replacement/custom sprites.
 In that case, the installer will download the alternative sprites package.
-You can also use your own sprites by placing them in the ~/.local/share/jaxatari/sprites directory.
+You can also use your own sprites by placing them in the ~/.local/share/jaxtari/sprites directory
+(legacy path ~/.local/share/jaxatari/sprites is still detected if present).
 """
+
 
 def _download_archive(url: str) -> bytes:
     response = requests.get(url, stream=True)
     response.raise_for_status()
     return response.content
+
 
 def _extract_named_dir(archive_bytes: bytes, folder_name: str, dest_dir: Path) -> None:
     with tempfile.TemporaryDirectory() as tmp_dir:
@@ -54,6 +82,7 @@ def _extract_named_dir(archive_bytes: bytes, folder_name: str, dest_dir: Path) -
         target_dir = dest_dir / folder_name
         for src in sources:
             shutil.copytree(src, target_dir, dirs_exist_ok=True)
+
 
 def _extract_first_existing_dir(
     archive_bytes: bytes,
@@ -80,34 +109,43 @@ def _extract_first_existing_dir(
         expected = ", ".join(f"'{name}/'" for name in folder_names)
         raise RuntimeError(f"Invalid archive: missing one of {expected} directories.")
 
-def download_and_extract():
-    auto_accept = os.environ.get("JAXATARI_CONFIRM_OWNERSHIP", "0") == "1"
-    accepted_ownership = auto_accept
 
-    if not auto_accept:
-        print(FALLBACK_NOTICE_TEXT)
-        # A. Display the Gate
-        print(LICENSE_TEXT)
-        response = input("Do you confirm ownership ? [y/N]: ").strip().lower()
-        
-        if response not in ('y', 'yes'):
-            accepted_ownership = False
-            if not ALT_SPRITES_URL:
-                print("Declined. Installation aborted.")
-                print("Set JAXATARI_ALT_SPRITES_URL to install alternate sprites instead.")
-                sys.exit(1)
-            print("Ownership declined. Installing alternate sprites instead.")
-        else:
+def download_and_extract(*, accepted_ownership: bool | None = None) -> None:
+    """Download and install sprite (and optional state) archives.
+
+    Args:
+        accepted_ownership: When ``None``, prompt (unless auto-confirm env is set).
+            When ``True``/``False``, skip the ownership prompt and install the
+            corresponding pack. Used for opt-in version refreshes.
+    """
+    auto_accept = env_flag("JAXATARI_CONFIRM_OWNERSHIP") or env_flag(
+        "JAXTARI_CONFIRM_OWNERSHIP"
+    )
+
+    if accepted_ownership is None:
+        if auto_accept:
+            print("Auto-confirming ownership confirmation via environment variable.")
             accepted_ownership = True
-    else:
-        print("Auto-confirming ownership confirmation via environment variable.")
-        accepted_ownership = True
+        else:
+            print(FALLBACK_NOTICE_TEXT)
+            print(LICENSE_TEXT)
+            response = input("Do you confirm ownership ? [y/N]: ").strip().lower()
+            if response not in ("y", "yes"):
+                accepted_ownership = False
+                if not ALT_SPRITES_URL:
+                    print("Declined. Installation aborted.")
+                    print(
+                        "Set JAXATARI_ALT_SPRITES_URL / JAXTARI_ALT_SPRITES_URL "
+                        "to install alternate sprites instead."
+                    )
+                    sys.exit(1)
+                print("Ownership declined. Installing alternate sprites instead.")
+            else:
+                accepted_ownership = True
 
-    # B. The Download (Only happens if accepted)
     sprites_url = SPRITES_URL if accepted_ownership else ALT_SPRITES_URL
     print(f"Downloading sprites from {sprites_url}...")
     try:
-        # Create destination directory
         STORAGE_DIR.mkdir(parents=True, exist_ok=True)
 
         sprites_archive = _download_archive(sprites_url)
@@ -124,7 +162,10 @@ def download_and_extract():
                 "sprites",
             )
 
-        # Optional for backward compatibility: install states if available.
+        # Stamp the package-required version even if the zip omitted .version.
+        write_sprite_version(STORAGE_DIR, REQUIRED_SPRITE_VERSION)
+        clear_declined_update(STORAGE_DIR)
+
         if accepted_ownership:
             try:
                 print(f"Downloading states from {STATES_URL}...")
@@ -134,8 +175,7 @@ def download_and_extract():
             except Exception as states_exc:
                 print(f"⚠️ States were not installed: {states_exc}")
                 print("Continuing with sprites only for backward compatibility.")
-        
-        # D. Persist install mode so runtime checks can skip prompting.
+
         if accepted_ownership:
             OWNERSHIP_MARKER_FILE.touch()
             if ALT_SPRITES_MARKER_FILE.exists():
@@ -144,12 +184,16 @@ def download_and_extract():
             ALT_SPRITES_MARKER_FILE.touch()
             if OWNERSHIP_MARKER_FILE.exists():
                 OWNERSHIP_MARKER_FILE.unlink()
-        
-        print(f"✅ Success! Assets installed to: {STORAGE_DIR}")
-        
+
+        print(
+            f"✅ Success! Assets installed to: {STORAGE_DIR} "
+            f"(sprite pack version {REQUIRED_SPRITE_VERSION})"
+        )
+
     except Exception as e:
         print(f"❌ Error downloading/installing assets: {e}")
         sys.exit(1)
+
 
 if __name__ == "__main__":
     download_and_extract()

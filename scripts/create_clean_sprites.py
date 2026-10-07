@@ -11,8 +11,8 @@ Usage:
                                            [--src DIR] [--dst DIR]
 
 Defaults:
-    --src  ~/.local/share/jaxatari/sprites
-    --dst  ~/.local/share/jaxatari/clean_sprites
+    --src  ~/.local/share/jaxtari/sprites  (falls back to ~/.local/share/jaxatari/sprites)
+    --dst  ~/.local/share/jaxtari/clean_sprites
     --hue-shift        137   (degrees, golden-angle-ish so colours stay spread out)
     --saturation-scale 0.55  (compress saturation toward grey)
 """
@@ -22,10 +22,26 @@ import shutil
 from pathlib import Path
 
 import numpy as np
-from platformdirs import user_data_dir
 
-DEFAULT_SRC = Path(user_data_dir("jaxatari")) / "sprites"
-DEFAULT_DST = Path(user_data_dir("jaxatari")) / "clean_sprites"
+try:
+    from jaxatari.paths import get_base_sprite_dir, canonical_storage_dir
+except ImportError:
+    from platformdirs import user_data_dir
+
+    def get_base_sprite_dir() -> str:
+        preferred = Path(user_data_dir("jaxtari")) / "sprites"
+        legacy = Path(user_data_dir("jaxatari")) / "sprites"
+        if preferred.is_dir():
+            return str(preferred)
+        if legacy.is_dir():
+            return str(legacy)
+        return str(preferred)
+
+    def canonical_storage_dir() -> Path:
+        return Path(user_data_dir("jaxtari"))
+
+DEFAULT_SRC = Path(get_base_sprite_dir())
+DEFAULT_DST = canonical_storage_dir() / "clean_sprites"
 
 
 # ---------------------------------------------------------------------------
