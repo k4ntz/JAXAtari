@@ -23,14 +23,14 @@ SPRITES_URL = os.environ.get(
     "JAXATARI_SPRITES_URL",
     os.environ.get(
         "JAXTARI_SPRITES_URL",
-        "https://drive.google.com/uc?export=download&id=1HX2TS8ulXGSnjrzUCAV83cINj0usBTvM",
+        "https://drive.google.com/uc?export=download&id=18H6G-xOOrpGujiwKTs4K5LaFh4W9pmVK",
     ),
 )
 ALT_SPRITES_URL = os.environ.get(
     "JAXATARI_ALT_SPRITES_URL",
     os.environ.get(
         "JAXTARI_ALT_SPRITES_URL",
-        "https://drive.google.com/uc?export=download&id=1qZ7mber7tcCrOxFsALk7V8_PYoq9HHSr",
+        "https://drive.google.com/uc?export=download&id=1yODhHqXMvSbMlVeCM8vfekU1lPbkgbCb",
     ),
 )
 STATES_URL = os.environ.get(
