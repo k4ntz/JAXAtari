@@ -67,6 +67,8 @@ markers = [
   "ale_comparison: tests that compare Jaxtari behavior against ALE reference values",
   "serial: tests that must run without xdist parallel workers",
 ]
+
+[dependency-groups]
 dev = [
     "pytest>=8.4.2",
 ]

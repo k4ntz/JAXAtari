@@ -11,7 +11,7 @@ from jaxtari import paths
 
 def test_prefers_canonical_when_present(tmp_path, monkeypatch):
     canonical = tmp_path / "jaxtari"
-    legacy = tmp_path / "jaxtari"
+    legacy = tmp_path / "jaxatari"
     (canonical / "sprites" / "pong").mkdir(parents=True)
     (canonical / "sprites" / "pong" / "x.npy").write_bytes(b"x")
     (legacy / "sprites" / "pong").mkdir(parents=True)
@@ -26,7 +26,7 @@ def test_prefers_canonical_when_present(tmp_path, monkeypatch):
 
 def test_falls_back_to_legacy(tmp_path, monkeypatch):
     canonical = tmp_path / "jaxtari"
-    legacy = tmp_path / "jaxtari"
+    legacy = tmp_path / "jaxatari"
     (legacy / "sprites" / "pong").mkdir(parents=True)
     (legacy / "sprites" / "pong" / "x.npy").write_bytes(b"y")
     (legacy / paths.OWNERSHIP_MARKER_NAME).write_text("", encoding="utf-8")
@@ -40,7 +40,7 @@ def test_falls_back_to_legacy(tmp_path, monkeypatch):
 
 def test_new_install_targets_canonical(tmp_path, monkeypatch):
     canonical = tmp_path / "jaxtari"
-    legacy = tmp_path / "jaxtari"
+    legacy = tmp_path / "jaxatari"
     monkeypatch.setattr(paths, "canonical_storage_dir", lambda: canonical)
     monkeypatch.setattr(paths, "legacy_storage_dir", lambda: legacy)
     assert paths.get_storage_dir() == canonical
