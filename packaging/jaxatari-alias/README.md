@@ -1,13 +1,22 @@
-# jaxatari
+# jaxatari (temporary alias)
 
-This is an alias package for [JAXtari](https://pypi.org/project/JAXtari/). Installing it installs `JAXtari`:
+**Prefer the canonical package:**
 
 ```
-pip install jaxatari   # same as: pip install jaxtari
+pip install jaxtari
 ```
 
 ```python
-import jaxatari
+import jaxtari
+```
+
+This `jaxatari` distribution is a **short-lived compatibility shim**. It installs
+[JAXtari](https://pypi.org/project/JAXtari/) and re-exports it under
+`import jaxatari` with a `DeprecationWarning`. It will be **removed soon** —
+update your installs and imports to `jaxtari`.
+
+```
+pip install jaxatari   # temporary; same code as jaxtari, old import name
 ```
 
 See https://github.com/k4ntz/JAXAtari for documentation.

@@ -40,11 +40,46 @@ def _mini_repo(tmp_path: Path) -> Path:
         root / "pyproject.toml",
         """
         [project]
-        name = "jaxatari"
+        name = "JAXtari"
         version = "0.1.0"
 
         [project.scripts]
         install-sprites = "jaxatari.install_sprites:download_and_extract"
+
+        [tool.hatch.build.targets.wheel]
+        packages = ["src/jaxatari"]
+
+        [tool.hatch.build.targets.sdist]
+        include = ["/src/jaxatari", "/README.md", "/LICENSE", "/pyproject.toml"]
+        """,
+    )
+    _write(
+        root / "packaging" / "jaxatari-alias" / "pyproject.toml",
+        """
+        [project]
+        name = "jaxatari"
+        version = "0.1.0"
+        dependencies = ["JAXtari==0.1.0"]
+
+        [tool.hatch.build.targets.wheel]
+        packages = ["src/jaxatari"]
+        """,
+    )
+    _write(
+        root / "packaging" / "jaxatari-alias" / "README.md",
+        """
+        # jaxatari
+        Temporary shim — prefer pip install jaxtari / import jaxtari.
+        pip install jaxatari
+        import jaxatari
+        """,
+    )
+    _write(
+        root / "packaging" / "jaxatari-alias" / "src" / "jaxatari" / "__init__.py",
+        """
+        import warnings
+        warnings.warn("temporary", DeprecationWarning, stacklevel=2)
+        from jaxtari import make
         """,
     )
     _write(
@@ -238,9 +273,12 @@ def test_apply_moves_package_and_rewrites_imports(repo: Path):
     rename.run_rename(repo, apply=True)
 
     assert (repo / "src" / "jaxtari" / "modification.py").exists()
-    assert not (repo / "src" / "jaxatari" / "modification.py").exists()
     assert (repo / "src" / "jaxtari" / "__init__.py").exists()
-    assert (repo / "src" / "jaxatari" / "__init__.py").exists()  # shim
+    # In-tree jaxatari is a raising hint only (not a working re-export).
+    hint = (repo / "src" / "jaxatari" / "__init__.py").read_text(encoding="utf-8")
+    assert "raise ImportError" in hint
+    assert "renamed to 'jaxtari'" in hint
+    assert "from jaxtari import" not in hint
 
     init = (repo / "src" / "jaxtari" / "__init__.py").read_text(encoding="utf-8")
     assert 'APP_NAME = "jaxtari"' in init
@@ -298,6 +336,60 @@ def test_transform_text_unit_cases():
     assert "JAXTARI_CONFIRM_OWNERSHIP=1" in text
 
 
+def test_content_occurrences_include_file_line_and_token(repo: Path):
+    report = rename.run_rename(repo, apply=False)
+    assert report.content_occurrences
+    # Exact token + location for a known import line in the mini-repo.
+    match = next(
+        o
+        for o in report.content_occurrences
+        if o.path.endswith("pong_mods.py") and o.old == "jaxatari"
+    )
+    assert match.new == "jaxtari"
+    assert match.line >= 1
+    assert match.column >= 1
+    assert "jaxatari" in match.line_text
+    # Longer identifiers win over embedded shorter ones on the same match.
+    controller = next(
+        o
+        for o in report.content_occurrences
+        if o.old == "JaxAtariModController"
+    )
+    assert controller.new == "JaxtariModController"
+    assert not any(
+        o.path == controller.path
+        and o.line == controller.line
+        and o.old == "JaxAtari"
+        and o.column == controller.column
+        for o in report.content_occurrences
+    )
+    # Protected WandB entity must not appear as a rewrite.
+    assert not any(
+        o.path.endswith("config.yaml") and o.old == "jaxatari"
+        for o in report.content_occurrences
+    )
+
+
+def test_cli_writes_occurrence_log(repo: Path, tmp_path: Path):
+    log_path = tmp_path / "out" / "occurrences.log"
+    assert (
+        rename.main(
+            ["--root", str(repo), "--dry-run", "--log", str(log_path)]
+        )
+        == 0
+    )
+    text = log_path.read_text(encoding="utf-8")
+    assert "## Content replacements" in text
+    assert "jaxatari → jaxtari" in text
+    assert "JaxAtariModController → JaxtariModController" in text
+    assert "pong_mods.py:" in text
+    assert "## Path renames" in text
+    assert "ppo_jaxatari_scan.py →" in text
+    # Dry-run must not mutate sources; only the log is written.
+    assert (repo / "src" / "jaxatari" / "__init__.py").exists()
+    assert not (repo / "src" / "jaxtari").exists()
+
+
 def test_renames_benchmark_scripts_and_configs(repo: Path):
     rename.run_rename(repo, apply=True)
     assert (repo / "scripts" / "benchmarks" / "ppo_jaxtari_scan.py").exists()
@@ -332,8 +424,45 @@ def test_rewrites_ci_paths_and_env_vars(repo: Path):
 def test_rewrites_pyproject(repo: Path):
     rename.run_rename(repo, apply=True)
     toml = (repo / "pyproject.toml").read_text(encoding="utf-8")
-    assert 'name = "jaxtari"' in toml
+    # Display name JAXtari is already the post-rename PyPI name; leave it.
+    assert 'name = "JAXtari"' in toml
     assert "jaxtari.install_sprites:download_and_extract" in toml
+    # Main wheel ships jaxtari + the raising removal hint.
+    assert 'packages = ["src/jaxtari", "src/jaxatari"]' in toml
+    assert '"/src/jaxtari", "/src/jaxatari"' in toml
+
+
+def test_removal_hint_raises_helpful_import_error(repo: Path):
+    rename.run_rename(repo, apply=True)
+    hint_path = repo / "src" / "jaxatari" / "__init__.py"
+    # Load the stub the same way an import would execute it.
+    ns: dict = {}
+    try:
+        exec(compile(hint_path.read_text(encoding="utf-8"), str(hint_path), "exec"), ns)
+    except ImportError as exc:
+        msg = str(exc)
+        assert "jaxtari" in msg
+        assert "jaxatari" in msg
+    else:
+        raise AssertionError("removal hint should raise ImportError")
+
+
+def test_leaves_pypi_alias_package_untouched(repo: Path):
+    rename.run_rename(repo, apply=True)
+    alias_dir = repo / "packaging" / "jaxatari-alias"
+    assert alias_dir.is_dir()
+    assert not (repo / "packaging" / "jaxtari-alias").exists()
+    toml = (alias_dir / "pyproject.toml").read_text(encoding="utf-8")
+    assert 'name = "jaxatari"' in toml
+    assert 'dependencies = ["JAXtari==0.1.0"]' in toml
+    assert 'packages = ["src/jaxatari"]' in toml
+    readme = (alias_dir / "README.md").read_text(encoding="utf-8")
+    assert "# jaxatari" in readme
+    assert "pip install jaxatari" in readme
+    assert "import jaxatari" in readme
+    shim = (alias_dir / "src" / "jaxatari" / "__init__.py").read_text(encoding="utf-8")
+    assert "from jaxtari import make" in shim
+    assert "DeprecationWarning" in shim
 
 
 def test_class_aliases_are_appended(repo: Path):
@@ -352,14 +481,6 @@ def test_class_aliases_are_appended(repo: Path):
     assert "class JaxtariAction" in env
     assert "JAXAtariAction = JaxtariAction" in env
     assert "JaxAtariAction = JaxtariAction" in env
-
-
-def test_shim_warns_and_reexports(repo: Path):
-    rename.run_rename(repo, apply=True)
-    shim = (repo / "src" / "jaxatari" / "__init__.py").read_text(encoding="utf-8")
-    assert "deprecated" in shim.lower()
-    assert "from jaxtari import" in shim
-    assert "DeprecationWarning" in shim
 
 
 def test_renames_binary_filename_without_touching_bytes(repo: Path):
@@ -410,9 +531,9 @@ def test_rewrite_filename_leaves_jax_game_prefix():
 
 
 def test_cli_check_and_dry_run(repo: Path, capsys):
-    assert rename.main(["--root", str(repo), "--dry-run"]) == 0
+    assert rename.main(["--root", str(repo), "--dry-run", "--no-log"]) == 0
     assert (repo / "src" / "jaxatari" / "__init__.py").exists()
-    assert rename.main(["--root", str(repo), "--apply"]) == 0
+    assert rename.main(["--root", str(repo), "--apply", "--no-log"]) == 0
     assert rename.main(["--root", str(repo), "--check"]) == 0
     (repo / "oops.md").write_text("JAXAtari\n", encoding="utf-8")
     assert rename.main(["--root", str(repo), "--check"]) == 1
