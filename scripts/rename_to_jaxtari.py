@@ -213,42 +213,6 @@ _ALIAS_LINE_RE = re.compile(
     re.MULTILINE,
 )
 
-# Deprecated import shim shipped by the main wheel. The separate ``jaxatari``
-# PyPI distribution depends on the main wheel and therefore gets this same shim.
-COMPATIBILITY_INIT = '''\
-"""Deprecated compatibility import for the renamed :mod:`jaxtari` package."""
-
-from __future__ import annotations
-
-import warnings
-
-warnings.warn(
-    "'jaxatari' was renamed to 'jaxtari' and will be removed in a future "
-    "release. Use 'pip install jaxtari' and 'import jaxtari'.",
-    DeprecationWarning,
-    stacklevel=2,
-)
-
-from jaxtari import *  # noqa: F403
-from jaxtari import (  # noqa: F401
-    ALT_SPRITES_MARKER_FILE,
-    DATA_DIR,
-    MARKER_FILE,
-    check_ownership,
-    list_available_games,
-    make,
-)
-
-__all__ = [
-    "ALT_SPRITES_MARKER_FILE",
-    "DATA_DIR",
-    "MARKER_FILE",
-    "check_ownership",
-    "list_available_games",
-    "make",
-]
-'''
-
 # Placeholders protect strings that contain "jaxatari" but must NOT change.
 # Order matters: apply before content rewrite, restore after.
 PROTECT_PATTERNS: tuple[tuple[str, str], ...] = (
@@ -266,15 +230,6 @@ PROTECT_PATTERNS: tuple[tuple[str, str], ...] = (
     ("ENTITY: 'jaxatari'", "__JAXTARI_PROTECT_WANDB_ENTITY_SQ__"),
     # Alias banner written by this script (contains the old name on purpose).
     (ALIAS_BANNER.strip("\n"), "__JAXTARI_PROTECT_ALIAS_BANNER__"),
-    # Hatch keeps shipping the in-tree removal-hint package next to jaxtari.
-    (
-        'packages = ["src/jaxtari", "src/jaxatari"]',
-        "__JAXTARI_PROTECT_HATCH_WHEEL_PACKAGES__",
-    ),
-    (
-        'include = ["/src/jaxtari", "/src/jaxatari", "/README.md", "/LICENSE", "/pyproject.toml"]',
-        "__JAXTARI_PROTECT_HATCH_SDIST_INCLUDE__",
-    ),
 )
 
 
@@ -306,7 +261,6 @@ class RenameReport:
     package_moved: bool = False
     aliases_updated: list[str] = field(default_factory=list)
     skipped_protected_hits: int = 0
-    removal_hint_written: bool = False
 
     def summarize(self) -> str:
         lines = [
@@ -316,7 +270,6 @@ class RenameReport:
             f"package moved:         {self.package_moved}",
             f"alias modules updated: {len(self.aliases_updated)}",
             f"protected hits kept:   {self.skipped_protected_hits}",
-            f"removal hint written:  {self.removal_hint_written}",
         ]
         return "\n".join(lines)
 
@@ -547,40 +500,6 @@ def ensure_aliases(module_text: str, aliases: tuple[tuple[str, str], ...]) -> st
     return module_text + block
 
 
-def ensure_hatch_ships_removal_hint(text: str) -> str:
-    """Ship the in-tree ``jaxatari`` removal-hint package beside ``jaxtari``."""
-    if 'packages = ["src/jaxtari", "src/jaxatari"]' not in text:
-        text = text.replace(
-            'packages = ["src/jaxtari"]',
-            'packages = ["src/jaxtari", "src/jaxatari"]',
-        )
-    if '"/src/jaxtari", "/src/jaxatari"' not in text:
-        text = text.replace(
-            'include = ["/src/jaxtari", "/README.md", "/LICENSE", "/pyproject.toml"]',
-            'include = ["/src/jaxtari", "/src/jaxatari", "/README.md", "/LICENSE", "/pyproject.toml"]',
-        )
-    return text
-
-
-def is_removal_hint_init(path: Path, root: Path) -> bool:
-    return path.relative_to(root).as_posix() == f"src/{OLD_DIR_NAME}/__init__.py"
-
-
-def _is_removal_hint_text(text: str) -> bool:
-    return (
-        "raise ImportError" in text and "renamed to 'jaxtari'" in text
-    ) or (
-        "DeprecationWarning" in text and "from jaxtari import *" in text
-    )
-
-
-def _is_legacy_reexport_shim_text(text: str) -> bool:
-    lowered = text.lower()
-    return "deprecated" in lowered and (
-        f"import {NEW_PKG}" in lowered or f"from {NEW_PKG}" in lowered
-    )
-
-
 REMAINING_OLD_NAME = re.compile(
     r"JAXAtari|JaxAtari|Jaxatari|JAXATARI|(?<![A-Za-z0-9_])jaxatari(?![A-Za-z0-9_])"
 )
@@ -596,14 +515,6 @@ def step_rewrite_file_contents(root: Path, *, apply: bool, report: RenameReport)
     for path in iter_files(root):
         if not should_rewrite_content(path):
             continue
-        # Post-rename removal hint must keep saying ``jaxatari``.
-        if is_removal_hint_init(path, root):
-            try:
-                existing = path.read_text(encoding="utf-8")
-            except UnicodeDecodeError:
-                continue
-            if _is_removal_hint_text(existing):
-                continue
         try:
             original = path.read_text(encoding="utf-8")
         except UnicodeDecodeError:
@@ -613,8 +524,6 @@ def step_rewrite_file_contents(root: Path, *, apply: bool, report: RenameReport)
             original, rel_path=rel
         )
         report.skipped_protected_hits += hits
-        if rel == "pyproject.toml":
-            updated = ensure_hatch_ships_removal_hint(updated)
         if updated == original:
             continue
         report.content_files.append(rel)
@@ -659,7 +568,7 @@ def step_rename_paths(root: Path, *, apply: bool, report: RenameReport) -> None:
 
 
 def _is_hint_only_package(pkg_dir: Path) -> bool:
-    """True if ``pkg_dir`` is only a single ``__init__.py`` (hint or old re-export)."""
+    """True if ``pkg_dir`` is only a stale compatibility ``__init__.py``."""
     if not pkg_dir.is_dir():
         return False
     leftover_modules = [p for p in pkg_dir.glob("*.py") if p.name != "__init__.py"]
@@ -673,8 +582,10 @@ def step_move_package(root: Path, *, apply: bool, report: RenameReport) -> None:
     if new_pkg.exists() and not old_pkg.exists():
         return
     if new_pkg.exists() and old_pkg.exists():
-        # Expected post-rename layout: real package + removal-hint stub.
+        # Clean up a compatibility stub created by an older script version.
         if _is_hint_only_package(old_pkg):
+            if apply:
+                shutil.rmtree(old_pkg)
             return
         raise FileExistsError(
             f"Both src/{OLD_DIR_NAME} and src/{NEW_DIR_NAME} exist; resolve manually."
@@ -684,33 +595,6 @@ def step_move_package(root: Path, *, apply: bool, report: RenameReport) -> None:
     report.package_moved = True
     report.renamed_paths.append((f"src/{OLD_DIR_NAME}", f"src/{NEW_DIR_NAME}"))
     move_path(root, old_pkg, new_pkg, apply=apply)
-
-
-def step_write_removal_hint(root: Path, *, apply: bool, report: RenameReport) -> None:
-    """Write the deprecated ``src/jaxatari/__init__.py`` compatibility shim."""
-    new_pkg = root / "src" / NEW_DIR_NAME
-    if not new_pkg.exists():
-        return
-    hint_dir = root / "src" / OLD_DIR_NAME
-    hint_init = hint_dir / "__init__.py"
-    if hint_init.exists():
-        current = hint_init.read_text(encoding="utf-8")
-        if _is_removal_hint_text(current):
-            return
-        # Replace a leftover re-export shim with the standardized shim.
-        if not _is_hint_only_package(hint_dir) and not _is_legacy_reexport_shim_text(
-            current
-        ):
-            return
-    report.removal_hint_written = True
-    if apply:
-        if hint_dir.exists() and not _is_hint_only_package(hint_dir):
-            # Should not happen after a clean move; refuse to clobber a full tree.
-            return
-        if hint_dir.exists():
-            shutil.rmtree(hint_dir)
-        hint_dir.mkdir(parents=True, exist_ok=True)
-        hint_init.write_text(COMPATIBILITY_INIT, encoding="utf-8")
 
 
 def step_add_aliases(root: Path, *, apply: bool, report: RenameReport) -> None:
@@ -756,15 +640,13 @@ def run_rename(root: Path, *, apply: bool) -> RenameReport:
     step_move_package(root, apply=apply, report=report)
     # 3) Rename other files/dirs that embed the old name.
     step_rename_paths(root, apply=apply, report=report)
-    # 4) Deprecated import shim + class aliases for one release cycle.
+    # 4) Preserve class aliases for one release cycle.
     if apply:
-        step_write_removal_hint(root, apply=True, report=report)
         step_add_aliases(root, apply=True, report=report)
     else:
         old_pkg = root / "src" / OLD_DIR_NAME
         new_pkg = root / "src" / NEW_DIR_NAME
         if new_pkg.exists() or old_pkg.exists():
-            report.removal_hint_written = True
             probe_pkg = new_pkg if new_pkg.exists() else old_pkg
             report.aliases_updated.extend(_alias_modules_needing_update(probe_pkg))
     return report
