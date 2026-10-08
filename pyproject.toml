@@ -74,10 +74,10 @@ dev = [
 ]
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/jaxtari", "src/jaxatari"]
+packages = ["src/jaxtari"]
 
 [tool.hatch.build.targets.sdist]
-include = ["/src/jaxtari", "/src/jaxatari", "/README.md", "/LICENSE", "/pyproject.toml"]
+include = ["/src/jaxtari", "/README.md", "/LICENSE", "/pyproject.toml"]
 exclude = ["**/__pycache__"]
 
 [project.urls]
