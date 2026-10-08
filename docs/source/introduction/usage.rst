@@ -9,42 +9,46 @@ The main entry point is the ``make()`` function:
 .. code-block:: python
 
    import jax
-   import jaxatari
+   import jaxtari
 
    # Create an environment
-   env = jaxatari.make("pong")  # or "seaquest", "kangaroo", "freeway", etc.
+   env = jaxtari.make("pong")  # or "seaquest", "kangaroo", "freeway", etc.
 
    # Get available games
-   available_games = jaxatari.list_available_games()
+   available_games = jaxtari.list_available_games()
    print(f"Available games: {available_games}")
+
+The Atari *Casino* cartridge is registered as three separate environments
+(``casinoblackjack``, ``casinofivestudpoker``, ``casinopokersolitaire``)
+rather than a single ``casino`` ID with a mode switch. See :doc:`Environments/casino`.
 
 Using Modifications
 -------------------
 
-JAXAtari provides pre-implemented game modifications to test agent generalization:
+Jaxtari provides pre-implemented game modifications to test agent generalization:
 
 .. code-block:: python
 
-   import jaxatari
+   import jaxtari
 
    # Pong environment with the lazy_enemy mod
-   mod_env = jaxatari.make("pong", mods=["lazy_enemy"])
+   mod_env = jaxtari.make("pong", mods=["lazy_enemy"])
 
    # Multiple mods can be applied simultaneously
-   mod_env = jaxatari.make("pong", mods=["lazy_enemy", "shift_enemy"])
+   mod_env = jaxtari.make("pong", mods=["lazy_enemy", "shift_enemy"])
 
-Custom modifications are well supported via the ``JaxAtariModController``.
+Custom modifications are well supported via the ``JaxtariModController``.
 Feel free to share them by opening a PR.
 
 Using Wrappers
 --------------
 
-JAXAtari provides a comprehensive wrapper system for different observation types:
+Jaxtari provides a comprehensive wrapper system for different observation types:
 
 .. code-block:: python
 
-   import jaxatari
-   from jaxatari.wrappers import (
+   import jaxtari
+   from jaxtari.wrappers import (
        AtariWrapper,
        ObjectCentricWrapper,
        PixelObsWrapper,
@@ -53,7 +57,7 @@ JAXAtari provides a comprehensive wrapper system for different observation types
        LogWrapper,
    )
 
-   base_env = jaxatari.make("pong")
+   base_env = jaxtari.make("pong")
    atari_env = AtariWrapper(base_env)
 
    env = ObjectCentricWrapper(atari_env)          # object-centric features
@@ -70,15 +74,15 @@ JAXAtari provides a comprehensive wrapper system for different observation types
 Vectorized Stepping
 -------------------
 
-JAXAtari is designed for massive parallelization via ``jax.vmap`` and ``jax.lax.scan``:
+Jaxtari is designed for massive parallelization via ``jax.vmap`` and ``jax.lax.scan``:
 
 .. code-block:: python
 
    import jax
-   import jaxatari
-   from jaxatari.wrappers import AtariWrapper, ObjectCentricWrapper, FlattenObservationWrapper
+   import jaxtari
+   from jaxtari.wrappers import AtariWrapper, ObjectCentricWrapper, FlattenObservationWrapper
 
-   base_env = jaxatari.make("pong")
+   base_env = jaxtari.make("pong")
    env = FlattenObservationWrapper(ObjectCentricWrapper(AtariWrapper(base_env)))
 
    n_envs = 1024

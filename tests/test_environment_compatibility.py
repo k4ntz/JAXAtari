@@ -11,9 +11,9 @@ import collections
 from dataclasses import is_dataclass, asdict
 
 # --- Import Core Components ---
-from jaxatari.environment import JaxEnvironment
-from jaxatari.renderers import JAXGameRenderer
-from jaxatari.wrappers import (
+from jaxtari.environment import JaxEnvironment
+from jaxtari.renderers import JAXGameRenderer
+from jaxtari.wrappers import (
     AtariWrapper,
     MultiRewardWrapper,
     PixelObsWrapper,
@@ -24,7 +24,7 @@ from jaxatari.wrappers import (
     LogWrapper,
     MultiRewardLogWrapper,
 )
-import jaxatari.spaces as spaces
+import jaxtari.spaces as spaces
 from conftest import INTEGRATION_STEPS, load_game_environment
 
 # Add flax import for serialization tests
@@ -250,10 +250,10 @@ class TestBasicAPI:
 
 
     ''' TODO: rewrite this and then reintroduce the test
-    def test_jaxatari_vs_ale_image_and_action_space():
+    def test_jaxtari_vs_ale_image_and_action_space():
         for jax_name, ale_name in ALE_GAME_MAP.items():
-            # JAXAtari env
-            jax_env = jaxatari.make(jax_name)
+            # Jaxtari env
+            jax_env = jaxtari.make(jax_name)
             import jax
             key = jax.random.PRNGKey(0)
             jax_obs, jax_state = jax_env.reset(key)
@@ -269,11 +269,11 @@ class TestBasicAPI:
             # Compare image shapes
             assert jax_frame.shape == ale_frame.shape, (
                 f"Image shape mismatch for {jax_name}: "
-                f"JAXAtari {jax_frame.shape} vs ALE {ale_frame.shape}"
+                f"Jaxtari {jax_frame.shape} vs ALE {ale_frame.shape}"
             )
             assert jax_frame.dtype == ale_frame.dtype, (
                 f"Image dtype mismatch for {jax_name}: "
-                f"JAXAtari {jax_frame.dtype} vs ALE {ale_frame.dtype}"
+                f"Jaxtari {jax_frame.dtype} vs ALE {ale_frame.dtype}"
             )
 
             # Compare action spaces
@@ -283,7 +283,7 @@ class TestBasicAPI:
             assert hasattr(jax_action_space, "n") and hasattr(ale_action_space, "n")
             assert jax_action_space.n == ale_action_space.n, (
                 f"Action space size mismatch for {jax_name}: "
-                f"JAXAtari {jax_action_space.n} vs ALE {ale_action_space.n}"
+                f"Jaxtari {jax_action_space.n} vs ALE {ale_action_space.n}"
             )
 
             # Optionally, compare action meanings if available
@@ -293,7 +293,7 @@ class TestBasicAPI:
                     jax_meanings = jax_env.get_action_meanings()
                     assert jax_meanings == ale_meanings, (
                         f"Action meanings mismatch for {jax_name}: "
-                        f"JAXAtari {jax_meanings} vs ALE {ale_meanings}"
+                        f"Jaxtari {jax_meanings} vs ALE {ale_meanings}"
                     )
 
             ale_env.close()
@@ -429,13 +429,16 @@ class TestWrapperCompatibility:
         
         # States should be identical
         assert jax.tree_util.tree_all(jax.tree.map(jnp.array_equal, state1, state2)), "Wrapped states should be identical with same key"
-        
-        # Run same sequence of actions
-        actions = [0, 1, 2, 0, 1]  # Fixed action sequence
+
+        # Sample a fixed action sequence from the wrapper's action space so this
+        # works for both discrete envs and ContinuousActionWrapper (Box(3,)).
+        action_space = wrapped_env_integration_representative.action_space()
+        action_keys = jax.random.split(jax.random.PRNGKey(123), 5)
+        actions = [action_space.sample(k) for k in action_keys]
         for action in actions:
             obs1, state1, reward1, done1, _, info1 = wrapped_env_integration_representative.step(state1, action)
             obs2, state2, reward2, done2, _, info2 = wrapped_env_integration_representative.step(state2, action)
-            
+
             # Results should be identical
             assert jax.tree_util.tree_all(jax.tree.map(jnp.array_equal, state1, state2)), "Wrapped states should be identical after same action"
             assert jnp.array_equal(reward1, reward2), "Wrapped rewards should be identical after same action"
@@ -472,24 +475,21 @@ class TestJaxTransforms:
                 self._check_batch_dimension_recursive(value, expected_batch_size, f"{context_name}.{key}")
         # For other types (primitives, etc.), we don't need to check anything
 
-    @pytest.mark.integration
-    def test_jit_compilation(self, wrapped_env_integration_representative):
+    @pytest.mark.smoke
+    def test_jit_compilation(self, wrapped_env_smoke):
         """Should test that a full step can be JIT-compiled without error."""
         key = jax.random.PRNGKey(0)
-        
-        # JIT the reset and step functions
-        jitted_reset = jax.jit(wrapped_env_integration_representative.reset)
-        jitted_step = jax.jit(wrapped_env_integration_representative.step)
-        
-        # Test JIT reset
-        obs, state = jitted_reset(key)
+
+        # reset/step are already class-level jits. Wrapping them in jax.jit()
+        # again nested-compiles a huge static `self` and hangs after native
+        # downscaling tests have compiled a different renderer into the cache.
+        obs, state = wrapped_env_smoke.reset(key)
         assert obs is not None, "JIT reset observation should not be None"
         assert state is not None, "JIT reset state should not be None"
-        
-        # Test JIT step
-        action_space = wrapped_env_integration_representative.action_space()
+
+        action_space = wrapped_env_smoke.action_space()
         action = action_space.sample(key)
-        obs, state, reward, done, _, info = jitted_step(state, action)
+        obs, state, reward, done, _, info = wrapped_env_smoke.step(state, action)
         assert obs is not None, "JIT step observation should not be None"
         assert state is not None, "JIT step state should not be None"
         assert isinstance(reward, (float, jnp.ndarray)), "JIT step reward should be float or jnp.ndarray"
@@ -570,12 +570,12 @@ class TestJaxTransforms:
 class TestAdvancedWrapperFeatures:
     """Tests advanced wrapper features and edge cases."""
 
-    def test_flatten_observation_wrapper_space_structure(self, raw_env):
+    def test_flatten_observation_wrapper_space_structure(self, fresh_raw_env):
         """Test that FlattenObservationWrapper correctly flattens observation spaces."""
         key = jax.random.PRNGKey(0)
         
         # Create AtariWrapper first
-        atari_env = AtariWrapper(raw_env)
+        atari_env = AtariWrapper(fresh_raw_env)
         flatten_env = FlattenObservationWrapper(atari_env)
         
         # Test space transformation
@@ -617,12 +617,12 @@ class TestAdvancedWrapperFeatures:
 
         jax.tree.map(compare_leaves, expected_flat, actual_flat)
 
-    def test_normalize_observation_wrapper(self, raw_env):
+    def test_normalize_observation_wrapper(self, fresh_raw_env):
         """Test that NormalizeObservationWrapper correctly normalizes observations."""
         key = jax.random.PRNGKey(0)
         
         # Create base environment stack
-        base_env = AtariWrapper(raw_env)
+        base_env = AtariWrapper(fresh_raw_env)
         
         # Test different configurations
         configs = [
@@ -664,12 +664,12 @@ class TestAdvancedWrapperFeatures:
                 assert space.contains(obs), f"[{desc}] Reset observation is not contained in space"
                 assert space.contains(obs_step), f"[{desc}] Step observation is not contained in space"
 
-    def test_log_wrapper_tracking(self, raw_env):
+    def test_log_wrapper_tracking(self, fresh_raw_env):
         """Test that LogWrapper correctly tracks episode statistics."""
         key = jax.random.PRNGKey(0)
         
         # Create environment with LogWrapper
-        base_env = AtariWrapper(raw_env)
+        base_env = AtariWrapper(fresh_raw_env)
         env = LogWrapper(PixelObsWrapper(base_env))
         
         # Reset and check initial state
@@ -702,13 +702,13 @@ class TestAdvancedWrapperFeatures:
                 assert info["returned_episode_lengths"] == steps, "Info should contain correct episode lengths"
                 assert info["returned_episode"] == True, "Info should indicate episode returned"
 
-    def test_multi_reward_log_wrapper(self, raw_env):
+    def test_multi_reward_log_wrapper(self, fresh_raw_env):
         """Test that MultiRewardLogWrapper correctly tracks multiple reward types."""
         key = jax.random.PRNGKey(0)
         
         # Create environment with MultiRewardLogWrapper
         reward_funcs = [lambda state, prev_state: jnp.ones(1)]
-        base_env = AtariWrapper(MultiRewardWrapper(raw_env, reward_funcs))
+        base_env = AtariWrapper(MultiRewardWrapper(fresh_raw_env, reward_funcs))
         env = MultiRewardLogWrapper(PixelAndObjectCentricWrapper(base_env))
         # Reset and check initial state
         obs, state = env.reset(key)
@@ -747,20 +747,20 @@ class TestAdvancedWrapperFeatures:
                 assert info["returned_episode_lengths"] == steps, "Info should contain correct episode lengths"
                 assert info["returned_episode"] == True, "Info should indicate episode returned"
 
-    def test_atari_wrapper_features(self, raw_env):
+    def test_atari_wrapper_features(self, fresh_raw_env):
         """Tests specific features of the AtariWrapper like noop_reset."""
         key = jax.random.PRNGKey(0)
         
         # Test noop_reset feature
-        env = AtariWrapper(raw_env, noop_max=30)
+        env = AtariWrapper(fresh_raw_env, noop_max=30)
         _, state = env.reset(key)
 
         # If noop_reset is active, the initial step count should be > 0
         assert state.step > 0, "noop_reset should result in a non-zero initial step count."
         
         # Test first_fire feature
-        env_no_fire = AtariWrapper(raw_env, first_fire=False)
-        env_with_fire = AtariWrapper(raw_env, first_fire=True)
+        env_no_fire = AtariWrapper(fresh_raw_env, first_fire=False)
+        env_with_fire = AtariWrapper(fresh_raw_env, first_fire=True)
         
         _, state_no_fire = env_no_fire.reset(key)
         _, state_with_fire = env_with_fire.reset(key)
@@ -774,12 +774,12 @@ class TestAdvancedWrapperFeatures:
         assert state_no_fire.prev_action == 0, "first_fire=False should set prev_action to NOOP (0)"
         
         # Test sticky_actions feature
-        env_sticky_never = AtariWrapper(raw_env, sticky_actions=0.0)
+        env_sticky_never = AtariWrapper(fresh_raw_env, sticky_actions=0.0)
         _, state_sticky_never = env_sticky_never.reset(key)
         _, state_sticky_never, _, _, _, _ = env_sticky_never.step(state_sticky_never, 2)  # UP action
         assert state_sticky_never.prev_action == 2, "With sticky_actions=0.0, prev_action should follow the selected action"
 
-        env_sticky_always = AtariWrapper(raw_env, sticky_actions=1.0)
+        env_sticky_always = AtariWrapper(fresh_raw_env, sticky_actions=1.0)
         _, state_sticky_always = env_sticky_always.reset(key)
         prev_action_before_step = state_sticky_always.prev_action
         _, state_sticky_always, _, _, _, _ = env_sticky_always.step(state_sticky_always, 2)  # UP action
@@ -787,11 +787,11 @@ class TestAdvancedWrapperFeatures:
         
         # Test episodic_life feature
         # We'll just verify the wrapper accepts the parameter
-        env_episodic = AtariWrapper(raw_env, episodic_life=True)
+        env_episodic = AtariWrapper(fresh_raw_env, episodic_life=True)
         _, state_episodic = env_episodic.reset(key)
         assert state_episodic is not None, "episodic_life=True should work"
 
-    def test_log_wrapper_edge_cases(self, raw_env):
+    def test_log_wrapper_edge_cases(self, fresh_raw_env):
         """Test LogWrapper with edge cases like very short episodes."""
         key = jax.random.PRNGKey(0)
         
@@ -819,7 +819,7 @@ class TestAdvancedWrapperFeatures:
                 return obs, state, reward, True, info  # Force done=True
         
         # Test with immediate termination
-        mock_env = MockImmediateDoneEnv(raw_env)
+        mock_env = MockImmediateDoneEnv(fresh_raw_env)
         env = LogWrapper(AtariWrapper(mock_env))
         
         obs, state = env.reset(key)

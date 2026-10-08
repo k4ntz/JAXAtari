@@ -64,9 +64,9 @@ def _normalize_mods(mods):
 def _load_env(game_name: str, mods: list[str] | None, allow_conflicts: bool = False):
     """Load environment via core.make or scripts.utils fallback (same as play.py)."""
     try:
-        from jaxatari.core import make as jaxatari_make
+        from jaxtari.core import make as jaxtari_make
 
-        env = jaxatari_make(
+        env = jaxtari_make(
             game_name=game_name,
             mods=mods,
             allow_conflicts=allow_conflicts,
@@ -88,7 +88,7 @@ def _load_env(game_name: str, mods: list[str] | None, allow_conflicts: bool = Fa
 
 def _load_env_with_obs(game_name: str, mods: list[str] | None, allow_conflicts: bool = False):
     """Load base env and wrap with AtariWrapper + PixelAndObjectCentricWrapper to get (pixel, object-centric) observations."""
-    from jaxatari.wrappers import AtariWrapper, PixelAndObjectCentricWrapper
+    from jaxtari.wrappers import AtariWrapper, PixelAndObjectCentricWrapper
 
     base_env = _load_env(game_name, mods, allow_conflicts)
     return PixelAndObjectCentricWrapper(AtariWrapper(base_env, frame_skip=1))
@@ -397,7 +397,7 @@ def run_save_baseline(
         # manual: need pygame and get_human_action, quit on 'q'
         import pygame
         from utils import get_human_action, update_pygame
-        from jaxatari.environment import JAXAtariAction
+        from jaxtari.environment import JaxtariAction
 
         # With obs we use wrapped env: state is PixelAndObjectCentricState; use its image_stack for display.
         # env.render(state) would receive wrapped state and break (base renderer expects raw game state).

@@ -1,32 +1,31 @@
-from pathlib import Path
-from platformdirs import user_data_dir
+"""Deprecated compatibility import for the renamed :mod:`jaxtari` package."""
 
-# 1. Define the path (Must match the installer script exactly)
-# appname="jaxatari", appauthor="mycompany" (or whatever you used)
-DATA_DIR = Path(user_data_dir("jaxatari"))
-MARKER_FILE = DATA_DIR / ".ownership_confirmed"
-ALT_SPRITES_MARKER_FILE = DATA_DIR / ".alternative_sprites_installed"
+from __future__ import annotations
 
-def check_ownership():
-    """
-    Verifies that the user has accepted the license and confirmed ownership
-    of the original hardware/software by looking for the marker file.
-    """
-    if not (MARKER_FILE.exists() or ALT_SPRITES_MARKER_FILE.exists()):
-        # Raise a clear, blocking error
-        raise RuntimeError(
-            "\n"
-            "❌  SPRITES NOT INSTALLED\n"
-            "----------------------------------------------------\n"
-            "JaxAtari needs sprite assets before environments can start.\n"
-            "You can either confirm your ownership of the original Atari 2600 ROMs and install sprites,\n"
-            "or continue with replacement/custom sprites.\n\n"
-            "Please run the following command in your terminal:\n\n"
-            "    .venv/bin/install-sprites\n"
-            "    or\n"
-            "    python3 scripts/install_sprites.py\n"
-            "----------------------------------------------------\n"
-        )
+import warnings
 
-# ... rest of your package imports ...
-from jaxatari.core import make, list_available_games
+warnings.warn(
+    "'jaxatari' was renamed to 'jaxtari' and will be removed in a future "
+    "release. Use 'pip install jaxtari' and 'import jaxtari'.",
+    DeprecationWarning,
+    stacklevel=2,
+)
+
+from jaxtari import *  # noqa: F403
+from jaxtari import (  # noqa: F401
+    ALT_SPRITES_MARKER_FILE,
+    DATA_DIR,
+    MARKER_FILE,
+    check_ownership,
+    list_available_games,
+    make,
+)
+
+__all__ = [
+    "ALT_SPRITES_MARKER_FILE",
+    "DATA_DIR",
+    "MARKER_FILE",
+    "check_ownership",
+    "list_available_games",
+    "make",
+]

@@ -1,7 +1,7 @@
 Wrappers
 ====================
 
-.. automodule:: jaxatari.wrappers
+.. automodule:: jaxtari.wrappers
    :members:
    :show-inheritance:
    :undoc-members:

@@ -14,7 +14,7 @@ import jax.numpy as jnp
 import jax.random as jrandom
 import numpy as np
 
-from jaxatari.environment import JAXAtariAction
+from jaxtari.environment import JaxtariAction
 from utils import (
     get_human_action,
     load_game_environment,
@@ -24,7 +24,7 @@ from utils import (
     save_env_state_json,
     update_pygame,
 )
-from jaxatari.core import make as jaxatari_make
+from jaxtari.core import make as jaxtari_make
 
 UPSCALE_FACTOR = 4
 
@@ -97,20 +97,20 @@ def _normalize_mods(mods):
 # Map action names to their integer values
 ACTION_NAMES = {
     v: k
-    for k, v in vars(JAXAtariAction).items()
+    for k, v in vars(JaxtariAction).items()
     if not k.startswith("_") and isinstance(v, int)
 }
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Play a JAXAtari game, record your actions or replay them."
+        description="Play a Jaxtari game, record your actions or replay them."
     )
     parser.add_argument(
         "-g",
         "--game",
         type=str,
         required=True,
-        help="Name of the game to play (e.g. 'freeway', 'pong'). The game must be in the src/jaxatari/games directory.",
+        help="Name of the game to play (e.g. 'freeway', 'pong'). The game must be in the src/jaxtari/games directory.",
     )
     parser.add_argument(
         "-m", "--mods",
@@ -180,8 +180,8 @@ def main():
     parser.add_argument(
         "--save-state-path",
         type=str,
-        default="jaxatari_play_state.json",
-        help="Path written when pressing S during play (default: jaxatari_play_state.json).",
+        default="jaxtari_play_state.json",
+        help="Path written when pressing S during play (default: jaxtari_play_state.json).",
     )
 
     parser.add_argument(
@@ -199,7 +199,7 @@ def main():
 
     try:
         # 1. Try the registered path (core.make)
-        env = jaxatari_make(
+        env = jaxtari_make(
             game_name=args.game,
             mods=args.mods,
             allow_conflicts=args.allow_conflicts
@@ -276,7 +276,7 @@ def main():
     # setup pygame if we are rendering
     if not execute_without_rendering:
         pygame.init()
-        pygame.display.set_caption(f"JAXAtari Game {args.game}")
+        pygame.display.set_caption(f"Jaxtari Game {args.game}")
         env_render_shape = jitted_render(state).shape[:2]
         window = pygame.display.set_mode(
             (env_render_shape[1] * UPSCALE_FACTOR, env_render_shape[0] * UPSCALE_FACTOR)

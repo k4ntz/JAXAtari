@@ -70,12 +70,6 @@ Environments
        <div class="env-name">Q*bert</div>
      </a>
 
-     <a class="env-card" href="battlezone.html">
-       <img src="../../_static/gifs/battlezone.gif" alt="Battlezone" onerror="this.style.display='none';this.nextElementSibling.style.display='flex'">
-       <div class="env-placeholder" style="display:none">🕹</div>
-       <div class="env-name">Battlezone</div>
-     </a>
-
    </div>
    <div class="env-load-more" id="env-load-more">
      <button onclick="var g=document.getElementById('env-grid-extra');g.querySelectorAll('img[data-src]').forEach(function(i){i.src=i.dataset.src});g.classList.remove('env-grid-extra');this.parentElement.style.display='none'">Show all environments</button>
@@ -100,6 +94,12 @@ Environments
        <div class="env-name">Amidar</div>
      </a>
 
+     <a class="env-card" href="assault.html">
+       <img data-src="../../_static/gifs/assault.gif" alt="Assault" onerror="this.style.display='none';this.nextElementSibling.style.display='flex'">
+       <div class="env-placeholder" style="display:none">🕹</div>
+       <div class="env-name">Assault</div>
+     </a>
+
      <a class="env-card" href="asterix.html">
        <img data-src="../../_static/gifs/asterix.gif" alt="Asterix" onerror="this.style.display='none';this.nextElementSibling.style.display='flex'">
        <div class="env-placeholder" style="display:none">🕹</div>
@@ -118,10 +118,22 @@ Environments
        <div class="env-name">Atlantis</div>
      </a>
 
+     <a class="env-card" href="backgammon.html">
+       <img data-src="../../_static/gifs/backgammon.gif" alt="Backgammon" onerror="this.style.display='none';this.nextElementSibling.style.display='flex'">
+       <div class="env-placeholder" style="display:none">🕹</div>
+       <div class="env-name">Backgammon</div>
+     </a>
+
      <a class="env-card" href="bankheist.html">
        <img data-src="../../_static/gifs/bankheist.gif" alt="Bank Heist" onerror="this.style.display='none';this.nextElementSibling.style.display='flex'">
        <div class="env-placeholder" style="display:none">🕹</div>
        <div class="env-name">Bank Heist</div>
+     </a>
+
+     <a class="env-card" href="basicmath.html">
+       <img data-src="../../_static/gifs/basicmath.gif" alt="Basic Math" onerror="this.style.display='none';this.nextElementSibling.style.display='flex'">
+       <div class="env-placeholder" style="display:none">🕹</div>
+       <div class="env-name">Basic Math</div>
      </a>
 
      <a class="env-card" href="berzerk.html">
@@ -142,10 +154,22 @@ Environments
        <div class="env-name">Breakout</div>
      </a>
 
-     <a class="env-card" href="casino.html">
-       <img data-src="../../_static/gifs/casino.gif" alt="Casino" onerror="this.style.display='none';this.nextElementSibling.style.display='flex'">
+     <a class="env-card" href="casino.html#casino-blackjack">
+       <img data-src="../../_static/gifs/casino.gif" alt="Casino Blackjack" onerror="this.style.display='none';this.nextElementSibling.style.display='flex'">
        <div class="env-placeholder" style="display:none">🕹</div>
-       <div class="env-name">Casino</div>
+       <div class="env-name">Casino Blackjack</div>
+     </a>
+
+     <a class="env-card" href="casino.html#casino-five-stud-poker">
+       <img data-src="../../_static/gifs/casino.gif" alt="Casino Five Stud Poker" onerror="this.style.display='none';this.nextElementSibling.style.display='flex'">
+       <div class="env-placeholder" style="display:none">🕹</div>
+       <div class="env-name">Casino Five Stud Poker</div>
+     </a>
+
+     <a class="env-card" href="casino.html#casino-poker-solitaire">
+       <img data-src="../../_static/gifs/casino.gif" alt="Casino Poker Solitaire" onerror="this.style.display='none';this.nextElementSibling.style.display='flex'">
+       <div class="env-placeholder" style="display:none">🕹</div>
+       <div class="env-name">Casino Poker Solitaire</div>
      </a>
 
      <a class="env-card" href="centipede.html">
@@ -155,9 +179,15 @@ Environments
      </a>
 
      <a class="env-card" href="choppercommand.html">
-       <img data-src="../../_static/gifs/choppercommand.gif" alt="Chopper Command" onerror="this.style.display='none';this.nextElementSibling.style.display='flex'">
+       <img data-src="../../_static/gifs/chopper_command.gif" alt="Chopper Command" onerror="this.style.display='none';this.nextElementSibling.style.display='flex'">
        <div class="env-placeholder" style="display:none">🕹</div>
        <div class="env-name">Chopper Command</div>
+     </a>
+
+     <a class="env-card" href="donkeykong.html">
+       <img data-src="../../_static/gifs/donkey_kong.gif" alt="Donkey Kong" onerror="this.style.display='none';this.nextElementSibling.style.display='flex'">
+       <div class="env-placeholder" style="display:none">🕹</div>
+       <div class="env-name">Donkey Kong</div>
      </a>
 
      <a class="env-card" href="enduro.html">
@@ -167,13 +197,13 @@ Environments
      </a>
 
      <a class="env-card" href="fishingderby.html">
-       <img data-src="../../_static/gifs/fishingderby.gif" alt="Fishing Derby" onerror="this.style.display='none';this.nextElementSibling.style.display='flex'">
+       <img data-src="../../_static/gifs/fishing_derby.gif" alt="Fishing Derby" onerror="this.style.display='none';this.nextElementSibling.style.display='flex'">
        <div class="env-placeholder" style="display:none">🕹</div>
        <div class="env-name">Fishing Derby</div>
      </a>
 
      <a class="env-card" href="flagcapture.html">
-       <img data-src="../../_static/gifs/flagcapture.gif" alt="Flag Capture" onerror="this.style.display='none';this.nextElementSibling.style.display='flex'">
+       <img data-src="../../_static/gifs/flag_capture.gif" alt="Flag Capture" onerror="this.style.display='none';this.nextElementSibling.style.display='flex'">
        <div class="env-placeholder" style="display:none">🕹</div>
        <div class="env-name">Flag Capture</div>
      </a>
@@ -184,6 +214,18 @@ Environments
        <div class="env-name">Galaxian</div>
      </a>
 
+     <a class="env-card" href="gopher.html">
+       <img data-src="../../_static/gifs/gopher.gif" alt="Gopher" onerror="this.style.display='none';this.nextElementSibling.style.display='flex'">
+       <div class="env-placeholder" style="display:none">🕹</div>
+       <div class="env-name">Gopher</div>
+     </a>
+
+     <a class="env-card" href="gravitar.html">
+       <img data-src="../../_static/gifs/gravitar.gif" alt="Gravitar" onerror="this.style.display='none';this.nextElementSibling.style.display='flex'">
+       <div class="env-placeholder" style="display:none">🕹</div>
+       <div class="env-name">Gravitar</div>
+     </a>
+
      <a class="env-card" href="hangman.html">
        <img data-src="../../_static/gifs/hangman.gif" alt="Hangman" onerror="this.style.display='none';this.nextElementSibling.style.display='flex'">
        <div class="env-placeholder" style="display:none">🕹</div>
@@ -191,19 +233,31 @@ Environments
      </a>
 
      <a class="env-card" href="hauntedhouse.html">
-       <img data-src="../../_static/gifs/hauntedhouse.gif" alt="Haunted House" onerror="this.style.display='none';this.nextElementSibling.style.display='flex'">
+       <img data-src="../../_static/gifs/haunted_house.gif" alt="Haunted House" onerror="this.style.display='none';this.nextElementSibling.style.display='flex'">
        <div class="env-placeholder" style="display:none">🕹</div>
        <div class="env-name">Haunted House</div>
      </a>
 
      <a class="env-card" href="humancannonball.html">
-       <img data-src="../../_static/gifs/humancannonball.gif" alt="Human Cannonball" onerror="this.style.display='none';this.nextElementSibling.style.display='flex'">
+       <img data-src="../../_static/gifs/human_cannonball.gif" alt="Human Cannonball" onerror="this.style.display='none';this.nextElementSibling.style.display='flex'">
        <div class="env-placeholder" style="display:none">🕹</div>
        <div class="env-name">Human Cannonball</div>
      </a>
 
+     <a class="env-card" href="journeyescape.html">
+       <img data-src="../../_static/gifs/journeyescape.gif" alt="Journey Escape" onerror="this.style.display='none';this.nextElementSibling.style.display='flex'">
+       <div class="env-placeholder" style="display:none">🕹</div>
+       <div class="env-name">Journey Escape</div>
+     </a>
+
+     <a class="env-card" href="kaboom.html">
+       <img data-src="../../_static/gifs/kaboom.gif" alt="Kaboom" onerror="this.style.display='none';this.nextElementSibling.style.display='flex'">
+       <div class="env-placeholder" style="display:none">🕹</div>
+       <div class="env-name">Kaboom</div>
+     </a>
+
      <a class="env-card" href="kingkong.html">
-       <img data-src="../../_static/gifs/kingkong.gif" alt="King Kong" onerror="this.style.display='none';this.nextElementSibling.style.display='flex'">
+       <img data-src="../../_static/gifs/king_kong.gif" alt="King Kong" onerror="this.style.display='none';this.nextElementSibling.style.display='flex'">
        <div class="env-placeholder" style="display:none">🕹</div>
        <div class="env-name">King Kong</div>
      </a>
@@ -215,15 +269,39 @@ Environments
      </a>
 
      <a class="env-card" href="lasergates.html">
-       <img data-src="../../_static/gifs/lasergates.gif" alt="Laser Gates" onerror="this.style.display='none';this.nextElementSibling.style.display='flex'">
+       <img data-src="../../_static/gifs/laser_gates.gif" alt="Laser Gates" onerror="this.style.display='none';this.nextElementSibling.style.display='flex'">
        <div class="env-placeholder" style="display:none">🕹</div>
        <div class="env-name">Laser Gates</div>
      </a>
 
+     <a class="env-card" href="miniaturegolf.html">
+       <img data-src="../../_static/gifs/miniaturegolf.gif" alt="Miniature Golf" onerror="this.style.display='none';this.nextElementSibling.style.display='flex'">
+       <div class="env-placeholder" style="display:none">🕹</div>
+       <div class="env-name">Miniature Golf</div>
+     </a>
+
+     <a class="env-card" href="mspacman.html">
+       <img data-src="../../_static/gifs/mspacman.gif" alt="Ms. Pac-Man" onerror="this.style.display='none';this.nextElementSibling.style.display='flex'">
+       <div class="env-placeholder" style="display:none">🕹</div>
+       <div class="env-name">Ms. Pac-Man</div>
+     </a>
+
      <a class="env-card" href="namethisgame.html">
-       <img data-src="../../_static/gifs/namethisgame.gif" alt="Name This Game" onerror="this.style.display='none';this.nextElementSibling.style.display='flex'">
+       <img data-src="../../_static/gifs/name_this_game.gif" alt="Name This Game" onerror="this.style.display='none';this.nextElementSibling.style.display='flex'">
        <div class="env-placeholder" style="display:none">🕹</div>
        <div class="env-name">Name This Game</div>
+     </a>
+
+     <a class="env-card" href="othello.html">
+       <img data-src="../../_static/gifs/othello.gif" alt="Othello" onerror="this.style.display='none';this.nextElementSibling.style.display='flex'">
+       <div class="env-placeholder" style="display:none">🕹</div>
+       <div class="env-name">Othello</div>
+     </a>
+
+     <a class="env-card" href="pacman.html">
+       <img data-src="../../_static/gifs/pacman.gif" alt="Pac-Man" onerror="this.style.display='none';this.nextElementSibling.style.display='flex'">
+       <div class="env-placeholder" style="display:none">🕹</div>
+       <div class="env-name">Pac-Man</div>
      </a>
 
      <a class="env-card" href="riverraid.html">
@@ -232,26 +310,32 @@ Environments
        <div class="env-name">River Raid</div>
      </a>
 
+     <a class="env-card" href="roadrunner.html">
+       <img data-src="../../_static/gifs/roadrunner.gif" alt="Road Runner" onerror="this.style.display='none';this.nextElementSibling.style.display='flex'">
+       <div class="env-placeholder" style="display:none">🕹</div>
+       <div class="env-name">Road Runner</div>
+     </a>
+
      <a class="env-card" href="sirlancelot.html">
-       <img data-src="../../_static/gifs/sirlancelot.gif" alt="Sir Lancelot" onerror="this.style.display='none';this.nextElementSibling.style.display='flex'">
+       <img data-src="../../_static/gifs/sir_lancelot.gif" alt="Sir Lancelot" onerror="this.style.display='none';this.nextElementSibling.style.display='flex'">
        <div class="env-placeholder" style="display:none">🕹</div>
        <div class="env-name">Sir Lancelot</div>
      </a>
 
      <a class="env-card" href="slotmachine.html">
-       <img data-src="../../_static/gifs/slotmachine.gif" alt="Slot Machine" onerror="this.style.display='none';this.nextElementSibling.style.display='flex'">
+       <img data-src="../../_static/gifs/slot_machine.gif" alt="Slot Machine" onerror="this.style.display='none';this.nextElementSibling.style.display='flex'">
        <div class="env-placeholder" style="display:none">🕹</div>
        <div class="env-name">Slot Machine</div>
      </a>
 
      <a class="env-card" href="spaceinvaders.html">
-       <img data-src="../../_static/gifs/spaceinvaders.gif" alt="Space Invaders" onerror="this.style.display='none';this.nextElementSibling.style.display='flex'">
+       <img data-src="../../_static/gifs/space_invaders.gif" alt="Space Invaders" onerror="this.style.display='none';this.nextElementSibling.style.display='flex'">
        <div class="env-placeholder" style="display:none">🕹</div>
        <div class="env-name">Space Invaders</div>
      </a>
 
      <a class="env-card" href="spacewar.html">
-       <img data-src="../../_static/gifs/spacewar.gif" alt="Spacewar" onerror="this.style.display='none';this.nextElementSibling.style.display='flex'">
+       <img data-src="../../_static/gifs/space_war.gif" alt="Spacewar" onerror="this.style.display='none';this.nextElementSibling.style.display='flex'">
        <div class="env-placeholder" style="display:none">🕹</div>
        <div class="env-name">Spacewar</div>
      </a>
@@ -275,7 +359,7 @@ Environments
      </a>
 
      <a class="env-card" href="timepilot.html">
-       <img data-src="../../_static/gifs/timepilot.gif" alt="Time Pilot" onerror="this.style.display='none';this.nextElementSibling.style.display='flex'">
+       <img data-src="../../_static/gifs/time_pilot.gif" alt="Time Pilot" onerror="this.style.display='none';this.nextElementSibling.style.display='flex'">
        <div class="env-placeholder" style="display:none">🕹</div>
        <div class="env-name">Time Pilot</div>
      </a>
@@ -292,28 +376,52 @@ Environments
        <div class="env-name">Turmoil</div>
      </a>
 
+     <a class="env-card" href="upndown.html">
+       <img data-src="../../_static/gifs/upndown.gif" alt="Up N Down" onerror="this.style.display='none';this.nextElementSibling.style.display='flex'">
+       <div class="env-placeholder" style="display:none">🕹</div>
+       <div class="env-name">Up N Down</div>
+     </a>
+
      <a class="env-card" href="videocheckers.html">
-       <img data-src="../../_static/gifs/videocheckers.gif" alt="Video Checkers" onerror="this.style.display='none';this.nextElementSibling.style.display='flex'">
+       <img data-src="../../_static/gifs/video_checkers.gif" alt="Video Checkers" onerror="this.style.display='none';this.nextElementSibling.style.display='flex'">
        <div class="env-placeholder" style="display:none">🕹</div>
        <div class="env-name">Video Checkers</div>
      </a>
 
+     <a class="env-card" href="videochess.html">
+       <img data-src="../../_static/gifs/videochess.gif" alt="Video Chess" onerror="this.style.display='none';this.nextElementSibling.style.display='flex'">
+       <div class="env-placeholder" style="display:none">🕹</div>
+       <div class="env-name">Video Chess</div>
+     </a>
+
      <a class="env-card" href="videocube.html">
-       <img data-src="../../_static/gifs/videocube.gif" alt="Video Cube" onerror="this.style.display='none';this.nextElementSibling.style.display='flex'">
+       <img data-src="../../_static/gifs/video_cube.gif" alt="Video Cube" onerror="this.style.display='none';this.nextElementSibling.style.display='flex'">
        <div class="env-placeholder" style="display:none">🕹</div>
        <div class="env-name">Video Cube</div>
      </a>
 
      <a class="env-card" href="videopinball.html">
-       <img data-src="../../_static/gifs/videopinball.gif" alt="Video Pinball" onerror="this.style.display='none';this.nextElementSibling.style.display='flex'">
+       <img data-src="../../_static/gifs/video_pinball.gif" alt="Video Pinball" onerror="this.style.display='none';this.nextElementSibling.style.display='flex'">
        <div class="env-placeholder" style="display:none">🕹</div>
        <div class="env-name">Video Pinball</div>
      </a>
 
+     <a class="env-card" href="wizardofwor.html">
+       <img data-src="../../_static/gifs/wizardofwor.gif" alt="Wizard of Wor" onerror="this.style.display='none';this.nextElementSibling.style.display='flex'">
+       <div class="env-placeholder" style="display:none">🕹</div>
+       <div class="env-name">Wizard of Wor</div>
+     </a>
+
      <a class="env-card" href="wordzapper.html">
-       <img data-src="../../_static/gifs/wordzapper.gif" alt="Word Zapper" onerror="this.style.display='none';this.nextElementSibling.style.display='flex'">
+       <img data-src="../../_static/gifs/word_zapper.gif" alt="Word Zapper" onerror="this.style.display='none';this.nextElementSibling.style.display='flex'">
        <div class="env-placeholder" style="display:none">🕹</div>
        <div class="env-name">Word Zapper</div>
+     </a>
+
+     <a class="env-card" href="yarsrevenge.html">
+       <img data-src="../../_static/gifs/yarsrevenge.gif" alt="Yar's Revenge" onerror="this.style.display='none';this.nextElementSibling.style.display='flex'">
+       <div class="env-placeholder" style="display:none">🕹</div>
+       <div class="env-name">Yar's Revenge</div>
      </a>
 
    </div>
@@ -322,4 +430,70 @@ Environments
    :maxdepth: 1
    :hidden:
 
+   airraid
+   alien
+   amidar
+   assault
+   asterix
+   asteroids
+   atlantis
+   backgammon
+   bankheist
+   basicmath
+   beamrider
+   berzerk
+   blackjack
+   breakout
+   casino
+   centipede
+   choppercommand
+   donkeykong
+   enduro
+   fishingderby
+   flagcapture
+   freeway
+   frostbite
+   galaxian
+   gopher
+   gravitar
+   hangman
+   hauntedhouse
+   humancannonball
+   journeyescape
+   kaboom
+   kangaroo
+   kingkong
+   klax
+   lasergates
+   miniaturegolf
+   montezuma
+   mspacman
+   namethisgame
+   othello
+   pacman
+   phoenix
+   pong
+   qbert
+   riverraid
+   roadrunner
    seaquest
+   sirlancelot
+   skiing
+   slotmachine
+   spaceinvaders
+   spacewar
+   surround
+   tennis
+   tetris
+   timepilot
+   tron
+   turmoil
+   upndown
+   venture
+   videocheckers
+   videochess
+   videocube
+   videopinball
+   wizardofwor
+   wordzapper
+   yarsrevenge

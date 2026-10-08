@@ -1,16 +1,15 @@
 import jax
 import jax.numpy as jnp
-from jaxatari.games.jax_montezumarevenge import JaxMontezumaRevenge
 
-def test_collect_key():
-    env = JaxMontezumaRevenge()
+def test_collect_key(montezuma_env):
+    env = montezuma_env
     key = jax.random.PRNGKey(0)
     obs, state = env.reset(key)
     
     initial_keys = state.inventory[0]
     
     # Teleport to Room 14, where there is a key at (128, 7)
-    from jaxatari.games.montezuma_revenge.rooms import load_room
+    from jaxtari.games.montezuma_revenge.rooms import load_room
     state = load_room(jnp.array(14, dtype=jnp.int32), state, env.consts)
     
     # Place player at the key
@@ -26,13 +25,13 @@ def test_collect_key():
     assert state.items_active[0] == 0
     assert reward == 100
 
-def test_open_door():
-    env = JaxMontezumaRevenge()
+def test_open_door(montezuma_env):
+    env = montezuma_env
     key = jax.random.PRNGKey(0)
     obs, state = env.reset(key)
     
     # Room 12 has doors at (56, 86) and (100, 86)
-    from jaxatari.games.montezuma_revenge.rooms import load_room
+    from jaxtari.games.montezuma_revenge.rooms import load_room
     state = load_room(jnp.array(12, dtype=jnp.int32), state, env.consts)
     
     # Place player in front of a door
@@ -52,13 +51,13 @@ def test_open_door():
     assert state.doors_active[0] == 0
     assert reward == 300
 
-def test_collect_sword():
-    env = JaxMontezumaRevenge()
+def test_collect_sword(montezuma_env):
+    env = montezuma_env
     key = jax.random.PRNGKey(0)
     obs, state = env.reset(key)
     
     # Sword is in Room 13 at (12, 7)
-    from jaxatari.games.montezuma_revenge.rooms import load_room
+    from jaxtari.games.montezuma_revenge.rooms import load_room
     state = load_room(jnp.array(13, dtype=jnp.int32), state, env.consts)
     
     state = state.replace(
@@ -71,8 +70,8 @@ def test_collect_sword():
     assert state.inventory[1] == 1
     assert reward == 1000
 
-def test_kill_enemy_with_sword():
-    env = JaxMontezumaRevenge()
+def test_kill_enemy_with_sword(montezuma_env):
+    env = montezuma_env
     key = jax.random.PRNGKey(0)
     obs, state = env.reset(key)
     
@@ -105,8 +104,8 @@ def test_kill_enemy_with_sword():
     # Score should INCREASE
     assert reward >= 100
 
-def test_door_without_key():
-    env = JaxMontezumaRevenge()
+def test_door_without_key(montezuma_env):
+    env = montezuma_env
     key = jax.random.PRNGKey(0)
     obs, state = env.reset(key)
     
@@ -116,7 +115,7 @@ def test_door_without_key():
     )
     
     # Place player in front of the door in Room 12 (56, 86)
-    from jaxatari.games.montezuma_revenge.rooms import load_room
+    from jaxtari.games.montezuma_revenge.rooms import load_room
     state = load_room(jnp.array(12, dtype=jnp.int32), state, env.consts)
     
     state = state.replace(
@@ -131,13 +130,13 @@ def test_door_without_key():
     assert state.doors_active[0] == 1
     assert state.player_x == 50 # Blocked by wall logic
 
-def test_collect_torch():
-    env = JaxMontezumaRevenge()
+def test_collect_torch(montezuma_env):
+    env = montezuma_env
     key = jax.random.PRNGKey(0)
     obs, state = env.reset(key)
     
     # Torch is in Room 12 at (77, 7)
-    from jaxatari.games.montezuma_revenge.rooms import load_room
+    from jaxtari.games.montezuma_revenge.rooms import load_room
     state = load_room(jnp.array(12, dtype=jnp.int32), state, env.consts)
     
     state = state.replace(

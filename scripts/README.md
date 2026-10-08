@@ -1,6 +1,6 @@
 # Scripts
 
-Utility and development scripts for JAXAtari. Most scripts accept a `--help` flag for full usage.
+Utility and development scripts for Jaxtari. Most scripts accept a `--help` flag for full usage.
 
 ---
 
@@ -8,18 +8,18 @@ Utility and development scripts for JAXAtari. Most scripts accept a `--help` fla
 
 | Script | Description |
 |--------|-------------|
-| `play.py` | Play any JAXAtari environment with keyboard input. Requires `pip install -e ".[dev]"` (pygame). `python scripts/play.py -g Pong` |
+| `play.py` | Play any Jaxtari environment with keyboard input. Requires `pip install -e ".[dev]"` (pygame). `python scripts/play.py -g Pong` |
 
 ---
 
 ## Development & debugging
 
-These scripts help during active environment development — comparing JAXAtari output against ALE, recording baselines, and inspecting object state.
+These scripts help during active environment development — comparing Jaxtari output against ALE, recording baselines, and inspecting object state.
 
 | Script | Description |
 |--------|-------------|
-| `gameplay_comparison.py` | Play JAXAtari and ALE side-by-side with mirrored input. Useful for spotting visual or behavioural divergences. Supports `parallel` and `record_replay` modes. |
-| `compare_renders.py` | Compare the first rendered frame of a JAXAtari implementation against the ALE equivalent. Reports shape and pixel-level differences. |
+| `gameplay_comparison.py` | Play Jaxtari and ALE side-by-side with mirrored input. Useful for spotting visual or behavioural divergences. Supports `parallel` and `record_replay` modes. |
+| `compare_renders.py` | Compare the first rendered frame of a Jaxtari implementation against the ALE equivalent. Reports shape and pixel-level differences. |
 | `trajectory_regression.py` | Record a baseline trajectory (states, pixel obs, OC obs) and replay it to verify a refactor did not change behaviour. Run with `--record` to create a baseline, then without to check. |
 | `RAMStateDeltas.py` | Play an OCAtari environment and print object state changes between frames. Useful for figuring out which RAM addresses encode which game objects (currently the visuals are bugged and RAM states are not rendered correctly). |
 | `ALE_RAMStateDeltas.py` | Same as `RAMStateDeltas.py` but uses the ALE directly (no OCAtari dependency). |

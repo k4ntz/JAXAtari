@@ -1,15 +1,14 @@
 import jax
 import jax.numpy as jnp
-from jaxatari.games.jax_montezumarevenge import JaxMontezumaRevenge
 
-def test_laser_inactive_cycle():
-    env = JaxMontezumaRevenge()
+def test_laser_inactive_cycle(montezuma_env):
+    env = montezuma_env
     key = jax.random.PRNGKey(0)
     obs, state = env.reset(key)
     
     # Laser is inactive when laser_cycle >= 92
     # Laser room is room 14
-    from jaxatari.games.montezuma_revenge.rooms import load_room
+    from jaxtari.games.montezuma_revenge.rooms import load_room
     state = load_room(jnp.array(14, dtype=jnp.int32), state, env.consts)
     
     state = state.replace(

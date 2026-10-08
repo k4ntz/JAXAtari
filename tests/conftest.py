@@ -6,13 +6,13 @@ import inspect
 import gc
 from pathlib import Path
 
-# Force CPU before any JAX import (jaxatari pulls JAX in transitively).
+# Force CPU before any JAX import (jaxtari pulls JAX in transitively).
 # Overrides a user/shell JAX_PLATFORMS so pytest never tries to init a missing GPU.
 os.environ["JAX_PLATFORMS"] = "cpu"
 os.environ.setdefault("XLA_PYTHON_CLIENT_PREALLOCATE", "false")
 
-from jaxatari.environment import JaxEnvironment
-from jaxatari.wrappers import (
+from jaxtari.environment import JaxEnvironment
+from jaxtari.wrappers import (
     AtariWrapper,
     PixelObsWrapper,
     ObjectCentricWrapper,
@@ -21,7 +21,9 @@ from jaxatari.wrappers import (
     NormalizeObservationWrapper,
     LogWrapper,
     MultiRewardLogWrapper,
+    ContinuousActionWrapper,
 )
+import jax
 
 CORE_INFRA_GAMES = ("seaquest", "kangaroo", "montezumarevenge", "pong", "phoenix")
 SMOKE_STEPS = 5
@@ -58,7 +60,7 @@ def pytest_addoption(parser):
 def pytest_configure(config):
     """Registers the 'requires_snapshot' marker."""
     config.addinivalue_line("markers", "requires_snapshot: mark test as requiring a snapshot")
-    config.addinivalue_line("markers", "smoke: fast checks for PR validation")
+    config.addinivalue_line("markers", "smoke: required PR checks (native downscaling, mod contracts, etc.)")
     config.addinivalue_line("markers", "integration: broader integration checks")
     config.addinivalue_line("markers", "slow: expensive checks for exhaustive validation")
     config.addinivalue_line("markers", "wrapper_full: runs only with full wrapper matrix")
@@ -143,9 +145,9 @@ def pytest_collection_modifyitems(config, items):
 def discover_games() -> list[str]:
     """Scans the games directory and returns a list of all available game names."""
     try:
-        games_dir = Path(__file__).parent.parent / "src" / "jaxatari" / "games"
+        games_dir = Path(__file__).parent.parent / "src" / "jaxtari" / "games"
         game_files = games_dir.glob("jax_*.py")
-        # Extracts 'breakout' from a path like '.../src/jaxatari/games/jax_breakout.py'
+        # Extracts 'breakout' from a path like '.../src/jaxtari/games/jax_breakout.py'
         game_names = [p.stem.replace('jax_', '') for p in game_files if p.name!= 'jax___init__.py']
         if not game_names:
             raise FileNotFoundError("No game files found in the games directory.")
@@ -153,6 +155,7 @@ def discover_games() -> list[str]:
     except FileNotFoundError as e:
         print(f"Could not discover games: {e}", file=sys.stderr)
         return
+
 
 def parse_game_list(option_value: str | None) -> list[str] | None:
     """
@@ -244,34 +247,57 @@ def pytest_generate_tests(metafunc):
         if required_games:
             game_list = [game for game in game_list if normalize_game_name(game) in required_games]
 
-        metafunc.parametrize("game_name", game_list)
+        metafunc.parametrize("game_name", game_list, scope="session")
     
-def load_game_environment(game_name: str) -> JaxEnvironment:
-    """Dynamically loads a game environment from a.py file."""
-    test_file_dir = Path(__file__).parent.resolve()
-    project_root = test_file_dir.parent
-    game_file_path = project_root / "src" / "jaxatari" / "games" / f"jax_{game_name.lower()}.py"
+_GAME_CLASS_CACHE: dict[str, type[JaxEnvironment]] = {}
 
-    if not game_file_path.is_file():
-        raise FileNotFoundError(f"Game file not found: {game_file_path}")
 
-    module_name = game_file_path.stem
-    spec = importlib.util.spec_from_file_location(module_name, game_file_path)
-    if spec is None:
-        raise ImportError(f"Could not load spec for module {module_name} from {game_file_path}")
+def _load_game_class(game_name: str) -> type[JaxEnvironment]:
+    """Import the JaxEnvironment subclass for a game, caching the class (not instances)."""
+    cached = _GAME_CLASS_CACHE.get(game_name)
+    if cached is not None:
+        return cached
 
-    game_module = importlib.util.module_from_spec(spec)
-    sys.path.insert(0, str(game_file_path.parent))
+    module_name = f"jaxtari.games.jax_{game_name.lower()}"
     try:
-        spec.loader.exec_module(game_module)
-    finally:
-        sys.path.pop(0)
+        game_module = importlib.import_module(module_name)
+    except ImportError:
+        # Fallback for games that exist as files but are not a package import.
+        test_file_dir = Path(__file__).parent.resolve()
+        project_root = test_file_dir.parent
+        game_file_path = project_root / "src" / "jaxtari" / "games" / f"jax_{game_name.lower()}.py"
+        if not game_file_path.is_file():
+            raise FileNotFoundError(f"Game file not found: {game_file_path}") from None
+        spec = importlib.util.spec_from_file_location(game_file_path.stem, game_file_path)
+        if spec is None or spec.loader is None:
+            raise ImportError(f"Could not load spec for module {game_file_path.stem} from {game_file_path}")
+        game_module = importlib.util.module_from_spec(spec)
+        sys.path.insert(0, str(game_file_path.parent))
+        try:
+            spec.loader.exec_module(game_module)
+        finally:
+            sys.path.pop(0)
 
-    for name, obj in inspect.getmembers(game_module):
+    for _, obj in inspect.getmembers(game_module):
         if inspect.isclass(obj) and issubclass(obj, JaxEnvironment) and obj is not JaxEnvironment:
-            return obj()
+            _GAME_CLASS_CACHE[game_name] = obj
+            return obj
 
-    raise ImportError(f"No class inheriting from JaxEnvironment found in {game_file_path}")
+    raise ImportError(f"No class inheriting from JaxEnvironment found for '{game_name}'")
+
+
+def load_game_environment(game_name: str) -> JaxEnvironment:
+    """Instantiate a game environment. Reuses the imported class; each call is a new instance."""
+    return _load_game_class(game_name)()
+
+
+def skip_unless_game_selected(request, game_name: str) -> None:
+    """Skip a hardcoded-game test when --game selects a different environment."""
+    specified_games = parse_game_list(request.config.getoption("--game", default=None))
+    if specified_games and normalize_game_name(game_name) not in {
+        normalize_game_name(game) for game in specified_games
+    }:
+        pytest.skip(f"Skipping '{game_name}'-only test because --game={specified_games}")
 
 
 # ==============================================================================
@@ -283,16 +309,42 @@ def force_gc_between_tests():
     yield
     gc.collect()
 
-# This fixture is now just a placeholder; its values are injected by pytest_generate_tests.
-@pytest.fixture
+# Parametrized by pytest_generate_tests. Session-scoped so each xdist worker
+# constructs one env instance per selected game and reuses it across tests.
+@pytest.fixture(scope="session")
 def game_name(request):
     """A fixture that receives the game name from the dynamic parametrization."""
     return request.param
 
-@pytest.fixture
+@pytest.fixture(scope="session")
 def raw_env(game_name):
-    """Provides a single, raw, unwrapped instance of the specified game environment."""
+    """Shared raw environment. Safe for functional reset/step tests that do not mutate the instance."""
     return load_game_environment(game_name)
+
+@pytest.fixture
+def isolate_jit_cache():
+    """Drop JAX compiles before and after tests that swap renderers.
+
+    Env/wrapper reset and step are class-level jits with static `self`. Native
+    downscaling retraces a huge renderer; leaving that compile in the process
+    cache makes later tests (or a second jax.jit over an already-jitted
+    method) hang. xdist workers keep this cache for every file they run.
+    """
+    jax.clear_caches()
+    yield
+    jax.clear_caches()
+
+
+@pytest.fixture
+def fresh_raw_env(game_name):
+    """New environment instance for tests that wrap or mutate renderer/config."""
+    return load_game_environment(game_name)
+
+@pytest.fixture(scope="session")
+def montezuma_env():
+    """Shared Montezuma instance for tests/games/montezuma_revenge (state is passed through reset/step)."""
+    from jaxtari.games.jax_montezumarevenge import JaxMontezumaRevenge
+    return JaxMontezumaRevenge()
 
 @pytest.fixture
 def raw_env_representative(raw_env, request):
@@ -324,6 +376,16 @@ WRAPPER_RECIPES = {
     "MultiRewardLogged": lambda env: MultiRewardLogWrapper(
         PixelAndObjectCentricWrapper(AtariWrapper(env))
     ),
+    "ContinuousAction": lambda env: ContinuousActionWrapper(
+        AtariWrapper(env, full_action_space=True)
+    ),
+    "ContinuousActionLoggedFlattenedPixelAndObject": lambda env: ContinuousActionWrapper(
+        LogWrapper(
+            FlattenObservationWrapper(
+                PixelAndObjectCentricWrapper(AtariWrapper(env, full_action_space=True))
+            )
+        )
+    ),
 }
 
 SMOKE_WRAPPER_RECIPE_NAMES = (
@@ -335,23 +397,27 @@ INTEGRATION_WRAPPER_RECIPE_NAMES = (
     "Pixel",
     "ObjectCentric",
     "LoggedFlattenedPixelAndObject",
+    "ContinuousAction",
 )
 
 def _build_wrapped_env(game_name, wrapper_recipe):
-    fresh_raw_env = load_game_environment(game_name)
-    return wrapper_recipe(fresh_raw_env)
+    # Wrappers hold the inner env; always wrap a dedicated instance.
+    # Clear JIT caches first: class-level wrapper/env jits retrace a huge static
+    # `self` (MsPacman-style renderers) and can hang after a prior compile.
+    jax.clear_caches()
+    return wrapper_recipe(load_game_environment(game_name))
 
-@pytest.fixture(params=[WRAPPER_RECIPES[name] for name in SMOKE_WRAPPER_RECIPE_NAMES], ids=SMOKE_WRAPPER_RECIPE_NAMES)
+@pytest.fixture(scope="session", params=[WRAPPER_RECIPES[name] for name in SMOKE_WRAPPER_RECIPE_NAMES], ids=SMOKE_WRAPPER_RECIPE_NAMES)
 def wrapped_env_smoke(game_name, request):
     """Wrapper fixture for fast PR lanes."""
     return _build_wrapped_env(game_name, request.param)
 
-@pytest.fixture(params=WRAPPER_RECIPES.values(), ids=WRAPPER_RECIPES.keys())
+@pytest.fixture(scope="session", params=WRAPPER_RECIPES.values(), ids=WRAPPER_RECIPES.keys())
 def wrapped_env_full(game_name, request):
     """Wrapper fixture for exhaustive lanes."""
     return _build_wrapped_env(game_name, request.param)
 
-@pytest.fixture(params=[WRAPPER_RECIPES[name] for name in INTEGRATION_WRAPPER_RECIPE_NAMES], ids=INTEGRATION_WRAPPER_RECIPE_NAMES)
+@pytest.fixture(scope="session", params=[WRAPPER_RECIPES[name] for name in INTEGRATION_WRAPPER_RECIPE_NAMES], ids=INTEGRATION_WRAPPER_RECIPE_NAMES)
 def wrapped_env_integration(game_name, request):
     """Reduced wrapper fixture for integration lanes."""
     return _build_wrapped_env(game_name, request.param)
@@ -382,12 +448,12 @@ def wrapped_env_integration_representative(wrapped_env_integration, game_name, r
         pytest.skip(f"Skipping non-representative game '{game_name}' for heavy checks")
     return wrapped_env_integration
 
-@pytest.fixture
+@pytest.fixture(scope="session")
 def wrapped_env_single(game_name):
     """Single stable wrapper for tests that do not need wrapper fanout."""
     return _build_wrapped_env(game_name, WRAPPER_RECIPES["Pixel"])
 
-@pytest.fixture(params=[WRAPPER_RECIPES[name] for name in SMOKE_WRAPPER_RECIPE_NAMES], ids=SMOKE_WRAPPER_RECIPE_NAMES)
+@pytest.fixture(scope="session", params=[WRAPPER_RECIPES[name] for name in SMOKE_WRAPPER_RECIPE_NAMES], ids=SMOKE_WRAPPER_RECIPE_NAMES)
 def wrapped_env(game_name, request):
     """Default wrapper fixture used in PR lanes."""
     return _build_wrapped_env(game_name, request.param)

@@ -13,8 +13,8 @@ Usage:
                                             [--src DIR] [--dst DIR]
 
 Defaults:
-    --src  ~/.local/share/jaxatari/sprites
-    --dst  ~/.local/share/jaxatari/custom_sprites
+    --src  ~/.local/share/jaxtari/sprites  (falls back to ~/.local/share/jaxatari/sprites)
+    --dst  ~/.local/share/jaxtari/custom_sprites
     --hue-shift        137   (degrees, golden-angle-ish so colours stay spread out)
     --saturation-scale 0.55  (compress saturation toward grey)
     --shift-regular-sprites disabled by default
@@ -26,10 +26,26 @@ import shutil
 from pathlib import Path
 
 import numpy as np
-from platformdirs import user_data_dir
 
-DEFAULT_SRC = Path(user_data_dir("jaxatari")) / "sprites"
-DEFAULT_DST = Path(user_data_dir("jaxatari")) / "custom_sprites"
+try:
+    from jaxtari.paths import get_base_sprite_dir, canonical_storage_dir
+except ImportError:  # running as a loose script without the package installed
+    from platformdirs import user_data_dir
+
+    def get_base_sprite_dir() -> str:
+        preferred = Path(user_data_dir("jaxtari")) / "sprites"
+        legacy = Path(user_data_dir("jaxatari")) / "sprites"
+        if preferred.is_dir():
+            return str(preferred)
+        if legacy.is_dir():
+            return str(legacy)
+        return str(preferred)
+
+    def canonical_storage_dir() -> Path:
+        return Path(user_data_dir("jaxtari"))
+
+DEFAULT_SRC = Path(get_base_sprite_dir())
+DEFAULT_DST = canonical_storage_dir() / "custom_sprites"
 
 
 # ---------------------------------------------------------------------------
@@ -272,7 +288,7 @@ def main():
 
     if not args.src.exists():
         raise SystemExit(f"Source directory not found: {args.src}\n"
-                         "Run `python -m jaxatari.install_sprites` first.")
+                         "Run `python -m jaxtari.install_sprites` first.")
 
     if args.dst.exists():
         print(f"Destination {args.dst} already exists — overwriting changed files.")

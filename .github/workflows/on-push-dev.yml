@@ -23,17 +23,17 @@ jobs:
           CHANGED_FILES=$(git diff --name-only "${{ github.event.before }}"...${{ github.sha }})
 
           CORE_INFRA_CHANGED=$(echo "$CHANGED_FILES" | sed '/^$/d' | awk '
-            /^src\/jaxatari\/core\.py$/ {print; next}
-            /^src\/jaxatari\/modification\.py$/ {print; next}
-            /^src\/jaxatari\/spaces\.py$/ {print; next}
-            /^src\/jaxatari\/gym_wrapper\.py$/ {print; next}
-            /^src\/jaxatari\/renderers\/rendering_utils\.py$/ {print; next}
-            /^src\/jaxatari\/wrappers\// {print; next}
+            /^src\/jaxtari\/core\.py$/ {print; next}
+            /^src\/jaxtari\/modification\.py$/ {print; next}
+            /^src\/jaxtari\/spaces\.py$/ {print; next}
+            /^src\/jaxtari\/gym_wrapper\.py$/ {print; next}
+            /^src\/jaxtari\/renderers\/rendering_utils\.py$/ {print; next}
+            /^src\/jaxtari\/wrappers\// {print; next}
           ')
 
-          CHANGED_GAME_FILES=$(echo "$CHANGED_FILES" | awk '/^src\/jaxatari\/games\/jax_.*\.py$/ {print}')
+          CHANGED_GAME_FILES=$(echo "$CHANGED_FILES" | awk '/^src\/jaxtari\/games\/jax_.*\.py$/ {print}')
           if [[ -n "$CHANGED_GAME_FILES" ]]; then
-            CHANGED_GAME_MATRIX=$(echo "$CHANGED_GAME_FILES" | sed -e 's|src/jaxatari/games/jax_||' | sed -e 's|\.py||' | jq -R . | jq -cs .)
+            CHANGED_GAME_MATRIX=$(echo "$CHANGED_GAME_FILES" | sed -e 's|src/jaxtari/games/jax_||' | sed -e 's|\.py||' | jq -R . | jq -cs .)
           else
             CHANGED_GAME_MATRIX="[]"
           fi

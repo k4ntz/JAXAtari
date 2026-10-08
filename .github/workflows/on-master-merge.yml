@@ -31,14 +31,14 @@ jobs:
             GAME_FILTER=$(echo "${GAME_FILTER}" | tr -d ' _-')
             echo "Manual dispatch with single game filter: ${GAME_FILTER}"
 
-            if [[ -f "src/jaxatari/games/jax_${GAME_FILTER}.py" ]]; then
+            if [[ -f "src/jaxtari/games/jax_${GAME_FILTER}.py" ]]; then
               MATRIX=$(printf '["%s"]' "${GAME_FILTER}")
             else
               echo "Requested game jax_${GAME_FILTER}.py not found."
               exit 1
             fi
           else
-            MATRIX=$(ls src/jaxatari/games/jax_*.py | sed -e 's|src/jaxatari/games/jax_||' -e 's|\.py$||' | jq -R . | jq -cs .)
+            MATRIX=$(ls src/jaxtari/games/jax_*.py | sed -e 's|src/jaxtari/games/jax_||' -e 's|\.py$||' | jq -R . | jq -cs .)
           fi
 
           echo "matrix=$MATRIX" >> $GITHUB_OUTPUT

@@ -19,10 +19,10 @@ from dataclasses import fields, is_dataclass
 
 from functools import partial
 
-from jaxatari.environment import JaxEnvironment, ObjectObservation, JAXAtariAction as Action
-from jaxatari.wrappers import JaxatariWrapper
-from jaxatari.renderers import JAXGameRenderer
-from jaxatari.modification import JaxAtariModController, JaxAtariModWrapper
+from jaxtari.environment import JaxEnvironment, ObjectObservation, JaxtariAction as Action
+from jaxtari.wrappers import JaxtariWrapper
+from jaxtari.renderers import JAXGameRenderer
+from jaxtari.modification import JaxtariModController, JaxtariModWrapper
 
 
 def _warn_deprecated_obs_to_flat_array(env: JaxEnvironment) -> None:
@@ -159,12 +159,12 @@ def load_game_environment(game: str) -> Tuple[JaxEnvironment, JAXGameRenderer]:
     # Get the project root directory (parent of scripts directory)
     script_dir = os.path.dirname(os.path.abspath(__file__))
     project_root = os.path.dirname(script_dir)
-    game_file_path = os.path.join(project_root, "src", "jaxatari", "games", f"jax_{game.lower()}.py")
+    game_file_path = os.path.join(project_root, "src", "jaxtari", "games", f"jax_{game.lower()}.py")
     
     # Get the project root directory (parent of scripts directory)
     script_dir = os.path.dirname(os.path.abspath(__file__))
     project_root = os.path.dirname(script_dir)
-    game_file_path = os.path.join(project_root, "src", "jaxatari", "games", f"jax_{game.lower()}.py")
+    game_file_path = os.path.join(project_root, "src", "jaxtari", "games", f"jax_{game.lower()}.py")
     
     if not os.path.exists(game_file_path):
         raise FileNotFoundError(f"Game file not found: {game_file_path}")
@@ -262,7 +262,7 @@ def load_game_mods(game_name: str, mods_config: List[str], allow_conflicts: bool
             script_dir = os.path.dirname(os.path.abspath(__file__))
             project_root = os.path.dirname(script_dir)
             controller_path = os.path.join(
-                project_root, "src", "jaxatari", "games", "mods", f"{game_name.lower()}_mods.py"
+                project_root, "src", "jaxtari", "games", "mods", f"{game_name.lower()}_mods.py"
             )
             
             # 2. Load the Controller Class (e.g., PongEnvMod)
@@ -323,7 +323,7 @@ def load_game_mods(game_name: str, mods_config: List[str], allow_conflicts: bool
             
             # 5. BUILD STAGE 2 (Post-Step Wrapper)
             # The wrapper gets the registry from the controller
-            final_env = JaxAtariModWrapper(
+            final_env = JaxtariModWrapper(
                 env=modded_env,
                 mods_config=mods_config,
                 allow_conflicts=allow_conflicts
@@ -343,7 +343,7 @@ def load_game_mods(game_name: str, mods_config: List[str], allow_conflicts: bool
 
 def print_observation_tree(observation, title="Observation", indent=0):
     """
-    Recursively prints a JAXAtari observation tree with nice formatting.
+    Recursively prints a Jaxtari observation tree with nice formatting.
     """
     prefix = "  " * indent
     
@@ -445,7 +445,7 @@ def print_observation_tree(observation, title="Observation", indent=0):
 #
 # ---------------------------------------------------------------------------
 
-STATE_JSON_FORMAT = "jaxatari_play_state_v1"
+STATE_JSON_FORMAT = "jaxtari_play_state_v1"
 
 _ENV_STATE_JSON_TOP_KEYS = frozenset(
     {"format", "game", "mods", "treedef_b64", "leaves", "state_tree"}
@@ -886,7 +886,7 @@ def _strip_trailing_commas_json(text: str) -> str:
 
 
 def read_env_state_json_file(path: str) -> dict:
-    """Parse a JAXAtari env state JSON file. Use this instead of raw ``json.load``.
+    """Parse a Jaxtari env state JSON file. Use this instead of raw ``json.load``.
 
     Tries strict JSON first, then a relaxed pass (strips trailing commas), which
     fixes common hand-edit mistakes that would otherwise skip merge entirely.

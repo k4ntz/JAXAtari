@@ -1,16 +1,15 @@
 import jax
 import jax.numpy as jnp
-from jaxatari.games.jax_montezumarevenge import JaxMontezumaRevenge
 
-def test_death_by_falling():
-    env = JaxMontezumaRevenge()
+def test_death_by_falling(montezuma_env):
+    env = montezuma_env
     key = jax.random.PRNGKey(0)
     obs, state = env.reset(key)
     
     # Use Room 12 (index 5)
     # Middle platform is at y=26 (feet at 45). Next floor is at 88 (feet at 87).
     # Distance = 87 - 20 + 1 - 26 = 68 - 26 = 42. 42 > 33.
-    from jaxatari.games.montezuma_revenge.rooms import load_room
+    from jaxtari.games.montezuma_revenge.rooms import load_room
     state = load_room(jnp.array(12, dtype=jnp.int32), state, env.consts)
     
     initial_lives = state.lives
@@ -35,8 +34,8 @@ def test_death_by_falling():
     assert state.death_type == 1 # died_from_fall
     assert state.lives == initial_lives - 1
 
-def test_death_by_enemy():
-    env = JaxMontezumaRevenge()
+def test_death_by_enemy(montezuma_env):
+    env = montezuma_env
     key = jax.random.PRNGKey(0)
     obs, state = env.reset(key)
     
@@ -59,8 +58,8 @@ def test_death_by_enemy():
     assert state.death_type == 2 # died_from_enemy
     assert state.lives == initial_lives - 1
 
-def test_death_by_laser():
-    env = JaxMontezumaRevenge()
+def test_death_by_laser(montezuma_env):
+    env = montezuma_env
     key = jax.random.PRNGKey(0)
     obs, state = env.reset(key)
     
@@ -68,7 +67,7 @@ def test_death_by_laser():
     
     # Laser is active when laser_cycle is [0, 92)
     # Laser room is room 14
-    from jaxatari.games.montezuma_revenge.rooms import load_room
+    from jaxtari.games.montezuma_revenge.rooms import load_room
     state = load_room(jnp.array(14, dtype=jnp.int32), state, env.consts)
     
     state = state.replace(
@@ -85,8 +84,8 @@ def test_death_by_laser():
     assert state.death_type == 3 # died_from_laser
     assert state.lives == initial_lives - 1
 
-def test_respawn_after_death():
-    env = JaxMontezumaRevenge()
+def test_respawn_after_death(montezuma_env):
+    env = montezuma_env
     key = jax.random.PRNGKey(0)
     obs, state = env.reset(key)
     

@@ -89,10 +89,16 @@ For other accelerators see the [JAX installation guide](https://docs.jax.dev/en/
 Before running any environment for the first time you will be asked to confirm ROM ownership of the original Atari ROMs. This is necessary to download sprites that look similar to the original ALE sprites.
 
 If you do not have ownership of the original Atari ROMs, you can continue with replacement/custom sprites. In that case, please decline the ownership and the installer will download the alternative sprites package.
-You can also use your own sprites by placing them in the ~/.local/share/jaxatari/sprites directory.
+You can also use your own sprites by placing them in the `~/.local/share/jaxtari/sprites` directory
+(legacy installs under `~/.local/share/jaxatari/sprites` are still detected).
+
+Sprite packs ship a `.version` file. When a newer pack is required, Jaxtari will
+ask once whether to download it (opt-in). You can always refresh manually with:
 
 ```bash
-python3 src/jaxatari/install_sprites.py
+python3 -m jaxtari.install_sprites
+# or
+.venv/bin/install-sprites
 ```
 
 ---
@@ -103,12 +109,12 @@ python3 src/jaxatari/install_sprites.py
 
 ```python
 import jax
-import jaxatari
+import jaxtari
 
-env = jaxatari.make("pong")
+env = jaxtari.make("pong")
 
 # List all available games
-print(jaxatari.list_available_games())
+print(jaxtari.list_available_games())
 ```
 
 ### Game modifications
@@ -116,13 +122,13 @@ print(jaxatari.list_available_games())
 JAXtari ships with pre-built modifications for testing generalization:
 
 ```python
-import jaxatari
+import jaxtari
 
 # Single mod
-env = jaxatari.make("pong", mods=["lazy_enemy"])
+env = jaxtari.make("pong", mods=["lazy_enemy"])
 
 # Multiple mods simultaneously
-env = jaxatari.make("pong", mods=["lazy_enemy", "shift_enemy"])
+env = jaxtari.make("pong", mods=["lazy_enemy", "shift_enemy"])
 ```
 
 ### Applying wrappers
@@ -130,8 +136,8 @@ env = jaxatari.make("pong", mods=["lazy_enemy", "shift_enemy"])
 Wrappers must be applied in order: `AtariWrapper` first, then an observation wrapper, then optional utility wrappers.
 
 ```python
-import jaxatari
-from jaxatari.wrappers import (
+import jaxtari
+from jaxtari.wrappers import (
     AtariWrapper,
     ObjectCentricWrapper,
     PixelObsWrapper,
@@ -141,7 +147,7 @@ from jaxatari.wrappers import (
     LogWrapper,
 )
 
-base_env = jaxatari.make("pong")
+base_env = jaxtari.make("pong")
 atari_env = AtariWrapper(base_env)
 
 # Choose one observation type:
@@ -163,10 +169,10 @@ env = LogWrapper(env)
 
 ```python
 import jax
-import jaxatari
-from jaxatari.wrappers import AtariWrapper, ObjectCentricWrapper, FlattenObservationWrapper
+import jaxtari
+from jaxtari.wrappers import AtariWrapper, ObjectCentricWrapper, FlattenObservationWrapper
 
-env = FlattenObservationWrapper(ObjectCentricWrapper(AtariWrapper(jaxatari.make("pong"))))
+env = FlattenObservationWrapper(ObjectCentricWrapper(AtariWrapper(jaxtari.make("pong"))))
 
 n_envs = 1024
 rng = jax.random.PRNGKey(0)
@@ -195,11 +201,11 @@ _, (rewards, terminations, truncations, infos) = jax.lax.scan(
 > **Note:** This wrapper is currently work in progress and supports interoperability with CPU-based Gymnasium pipelines (e.g. stable-baselines3). It currently only exposes pixel observations and does not accept JAXtari wrappers. For JAX-native training use the wrapper stack above instead.
 
 ```python
-from jaxatari.gym_wrapper import GymnasiumJaxAtariWrapper
-import jaxatari
+from jaxtari.gym_wrapper import GymnasiumJaxtariWrapper
+import jaxtari
 
-base_env = jaxatari.make("pong")
-gym_env = GymnasiumJaxAtariWrapper(base_env)
+base_env = jaxtari.make("pong")
+gym_env = GymnasiumJaxtariWrapper(base_env)
 
 obs, info = gym_env.reset()
 obs, reward, terminated, truncated, info = gym_env.step(gym_env.action_space.sample())
@@ -210,8 +216,8 @@ obs, reward, terminated, truncated, info = gym_env.step(gym_env.action_space.sam
 Use `MultiRewardWrapper` to compute several reward signals in parallel (apply it directly after the base environment, before any other wrapper):
 
 ```python
-import jaxatari
-from jaxatari.wrappers import MultiRewardWrapper, AtariWrapper, ObjectCentricWrapper, MultiRewardLogWrapper
+import jaxtari
+from jaxtari.wrappers import MultiRewardWrapper, AtariWrapper, ObjectCentricWrapper, MultiRewardLogWrapper
 
 def survival_reward(prev_state, state):
     return 1.0  # reward every surviving step
@@ -219,7 +225,7 @@ def survival_reward(prev_state, state):
 def score_delta(prev_state, state):
     return state.score - prev_state.score
 
-base_env = jaxatari.make("pong")
+base_env = jaxtari.make("pong")
 env = MultiRewardWrapper(base_env, reward_funcs=[survival_reward, score_delta])
 env = ObjectCentricWrapper(AtariWrapper(env))
 env = MultiRewardLogWrapper(env)
@@ -236,33 +242,34 @@ python3 scripts/play.py -g Pong --mods lazy_enemy
 
 ## Wrapper Reference
 
-All wrappers live in `src/jaxatari/wrappers.py`. The standard stack is:
+All wrappers live in `src/jaxtari/wrappers.py`. The standard stack is:
 
 ```
 base env  →  [MultiRewardWrapper]  →  AtariWrapper  →  <obs wrapper>  →  [utility wrappers]
 ```
 
 
-| Wrapper                        | Description                                                                                                                            |
-| ------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------- |
-| `AtariWrapper`                 | Atari-specific pre-processing: sticky actions, episodic life, noop reset, frame-skip config. Must come before any observation wrapper. |
-| `ObjectCentricWrapper`         | Stacked object-centric features. Output shape: `(frame_stack, features)`.                                                              |
-| `PixelObsWrapper`              | Stacked pixel frames with max-pooling. Output shape: `(frame_stack, H, W, C)`.                                                         |
+| Wrapper                       | Description                                                                                                                            |
+|-------------------------------|----------------------------------------------------------------------------------------------------------------------------------------|
+| `AtariWrapper`                | Atari-specific pre-processing: sticky actions, episodic life, noop reset, frame-skip config. Must come before any observation wrapper. |
+| `ObjectCentricWrapper`        | Stacked object-centric features. Output shape: `(frame_stack, features)`.                                                              |
+| `PixelObsWrapper`             | Stacked pixel frames with max-pooling. Output shape: `(frame_stack, H, W, C)`.                                                         |
 | `PixelAndObjectCentricWrapper` | Both pixel and object-centric observations as a tuple.                                                                                 |
-| `PixelAndObjectObsWrapper`     | Same as above but returns structured (non-flattened) OC observations.                                                                  |
-| `FlattenObservationWrapper`    | Flattens any observation pytree to a single 1D array.                                                                                  |
-| `NormalizeObservationWrapper`  | Normalizes observations to `[0, 1]` (or `[-1, 1]` with `to_neg_one=True`). Compatible with any pytree structure.                       |
-| `LogWrapper`                   | Tracks episode returns and lengths.                                                                                                    |
-| `MultiRewardWrapper`           | Computes multiple reward functions at every step. Apply before `AtariWrapper`.                                                         |
-| `MultiRewardLogWrapper`        | Tracks multiple reward components separately. Use with `MultiRewardWrapper`.                                                           |
+| `PixelAndObjectObsWrapper`    | Same as above but returns structured (non-flattened) OC observations.                                                                  |
+| `FlattenObservationWrapper`   | Flattens any observation pytree to a single 1D array.                                                                                  |
+| `NormalizeObservationWrapper` | Normalizes observations to `[0, 1]` (or `[-1, 1]` with `to_neg_one=True`). Compatible with any pytree structure.                       |
+| `LogWrapper`                  | Tracks episode returns and lengths.                                                                                                    |
+| `MultiRewardWrapper`          | Computes multiple reward functions at every step. Apply before `AtariWrapper`.                                                         |
+| `MultiRewardLogWrapper`       | Tracks multiple reward components separately. Use with `MultiRewardWrapper`.                                                           |
+| `ContinuousActionWrapper`     | Converts a 3D continuous action (r, theta, fire) into discrete Atari actions. Requires full_action_space=True in AtariWrapper. Place this wrapper after all other wrappers (i.e., at the outermost layer)        |
 
 ---
 
 ## Project Structure
 
 ```
-JAXAtari/
-├── src/jaxatari/
+Jaxtari/
+├── src/jaxtari/
 │   ├── core.py              # make() factory, game and mod registries
 │   ├── environment.py       # JaxEnvironment base class
 │   ├── wrappers.py          # all wrappers
@@ -294,22 +301,22 @@ Contributions are welcome! See [CONTRIBUTING.md](CONTRIBUTING.md) for detailed g
 
 ### Adding a new environment
 
-1. Create `src/jaxatari/games/jax_<game>.py` implementing `JaxEnvironment`
-2. Register it in `GAME_MODULES` in `src/jaxatari/core.py`
+1. Create `src/jaxtari/games/jax_<game>.py` implementing `JaxEnvironment`
+2. Register it in `GAME_MODULES` in `src/jaxtari/core.py`
 3. Add a test in `tests/games/`
 4. Update your game's status in [games_covered.md](games_covered.md)
 
 ### Adding a mod
 
-1. Create `src/jaxatari/games/mods/<game>/<game>_mod_plugins.py` with your plugin class(es) extending `JaxAtariInternalModPlugin` or `JaxAtariPostStepModPlugin`
-2. Create or update `src/jaxatari/games/mods/<game>_mods.py` — add your mod key to the `REGISTRY` dict
-3. Register the controller in `MOD_MODULES` in `src/jaxatari/core.py` (if not already present)
+1. Create `src/jaxtari/games/mods/<game>/<game>_mod_plugins.py` with your plugin class(es) extending `JaxtariInternalModPlugin` or `JaxtariPostStepModPlugin`
+2. Create or update `src/jaxtari/games/mods/<game>_mods.py` — add your mod key to the `REGISTRY` dict
+3. Register the controller in `MOD_MODULES` in `src/jaxtari/core.py` (if not already present)
 
 ### Adding a wrapper
 
-1. Subclass `JaxatariWrapper` in `src/jaxatari/wrappers.py`
+1. Subclass `JaxtariWrapper` in `src/jaxtari/wrappers.py`
 2. Implement `reset()`, `step()`, and `observation_space()` / `action_space()`
-3. Export it from `src/jaxatari/__init__.py`
+3. Export it from `src/jaxtari/__init__.py`
 
 ### General
 
@@ -330,7 +337,7 @@ Feel free to share new mods or environments by opening a PR!
   year = {2026},
   publisher = {GitHub},
   journal = {GitHub repository},
-  howpublished = {https://github.com/k4ntz/JAXAtari/},
+  howpublished = {https://github.com/k4ntz/Jaxtari/},
 }
 ```
 

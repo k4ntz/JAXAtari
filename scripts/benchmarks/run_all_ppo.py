@@ -5,35 +5,100 @@ import subprocess
 from concurrent.futures import ThreadPoolExecutor
 
 # You can modify this list to include the exact environments you want to run.
-ATARI_ENVS = [
-    "bankheist",
-    "beamrider", # still missing pixel runs
-    "enduro", 
-    "freeway", "frostbite", 
-    "kangaroo",
-    "montezumarevenge",
-    "phoenix", "pong", "qbert",
-    "seaquest", "skiing",
-    "tennis",
-    "venture",
-    "timepilot", "asteroids", "breakout", 
-    "gravitar",
-    "mspacman",
+ATARI_15_ENVS = [
+     "bankheist",
+     "beamrider", # still missing pixel runs
+     "enduro", 
+     "freeway", "frostbite", 
+     "kangaroo",
+     "montezumarevenge",
+     "phoenix", "pong", "qbert",
+     "seaquest", "skiing",
+     "tennis",
+     "venture",
+     "timepilot", "asteroids", "breakout", 
+     "gravitar",
+     "mspacman",
+     "pong"
 ]
 
+ALL_ATARI_ENVS = [
+    "amidar",
+    "airraid",
+    "alien",
+    "asterix",
+    "asteroids",
+    "atlantis",
+    "bankheist",
+    "beamrider",
+    "berzerk",
+    "blackjack",
+    "breakout",
+    "casinoblackjack",
+    "casinofivestudpoker",
+    "casinopokersolitaire",
+    "centipede",
+    "choppercommand",
+    "donkeykong",
+    "enduro",
+    "fishingderby",
+    "flagcapture",
+    "freeway",
+    "frostbite",
+    "galaxian",
+    "gravitar",
+    "hangman",
+    "hauntedhouse",
+    "humancannonball",
+    "kangaroo",
+    "kingkong",
+    "klax",
+    "lasergates",
+    "namethisgame",
+    "phoenix",
+    "pong",
+    "qbert",
+    "riverraid",
+    "seaquest",
+    "sirlancelot",
+    "skiing",
+    "slotmachine",
+    "spaceinvaders",
+    "spacewar",
+    "surround",
+    "tennis",
+    "tetris",
+    "timepilot",
+    "tron",
+    "turmoil",
+    "venture",
+    "videocheckers",
+    "videocube",
+    "videopinball",
+    "wordzapper",
+    "mspacman",
+    "montezumarevenge",
+    "pacman",
+]
+
+# Run on all or on subset?
+ATARI_ENVS = ATARI_15_ENVS 
+#ATARI_ENVS = ALL_ATARI_ENVS
+
 # Setting to control how often to rerun an exp (with different seeds)
-N_SEEDS = 1
+START_SEED = 3
+N_SEEDS = 2
 # Setting to control maximum concurrent processes per GPU
 WORKERS_PER_GPU = 1
 
 CONFIGS = [
-    "ppo_jaxatari_object_large",
-    "ppo_jaxatari_pixel_large",
+    "ppo_jaxtari_pixel",
+    "ppo_jaxtari_object",
 ]
 
 # game_specific_configs = {
-#     "kangaroo": ("ppo_jaxatari_pixel_large", [3]),
-#     "beamrider": ("ppo_jaxatari_pixel", [1,2,3])
+#     "kangaroo": ("ppo_jaxtari_pixel_large", [3]),
+#     "beamrider": ("ppo_jaxtari_pixel", [1,2,3])
 # }
 game_specific_configs = {}
 
@@ -55,10 +120,10 @@ def worker(gpu_id: str, worker_id: int, task_queue: queue.Queue, extra_args: lis
         env_vars["CUDA_VISIBLE_DEVICES"] = gpu_id
         
         cmd = [
-            "uv", "run", "scripts/benchmarks/ppo_jaxatari_scan.py",
+            "uv", "run", "scripts/benchmarks/ppo_jaxtari_scan.py",
             f"+alg={alg_config}",
             f"alg.ENV_ID={env_id}",
-            f"SEED={seed}"
+            f"SEED={seed}",
         ] + extra_args
         
         try:
@@ -71,7 +136,7 @@ def worker(gpu_id: str, worker_id: int, task_queue: queue.Queue, extra_args: lis
             task_queue.task_done()
 
 def main():
-    parser = argparse.ArgumentParser(description="Run PPO JaxAtari scan on multiple GPUs concurrently.")
+    parser = argparse.ArgumentParser(description="Run PPO Jaxtari scan on multiple GPUs concurrently.")
     parser.add_argument(
         "--gpus", 
         type=str, 
@@ -79,7 +144,7 @@ def main():
         help="Comma-separated list of GPU IDs to use (e.g., '0,1,2,3')."
     )
     
-    # Parse known args, anything else gets passed directly to the ppo_jaxatari_scan script
+    # Parse known args, anything else gets passed directly to the ppo_jaxtari_scan script
     args, extra_args = parser.parse_known_args()
     gpus = [g.strip() for g in args.gpus.split(",") if g.strip()]
     
@@ -95,12 +160,12 @@ def main():
             for seed in seeds:
                 task_queue.put((env, seed, alg_config))
         else:
-            for seed in range(1, N_SEEDS + 1):
+            for seed in range(START_SEED, START_SEED + N_SEEDS):
                 for alg_config in CONFIGS:
                     task_queue.put((env, seed, alg_config))
         
     print(f"Starting {task_queue.qsize()} jobs across {len(gpus)} GPU(s): {gpus} ({WORKERS_PER_GPU} workers per GPU)")
-    print(f"Extra args for ppo_jaxatari_scan.py: {' '.join(extra_args) if extra_args else 'None'}")
+    print(f"Extra args for ppo_jaxtari_scan.py: {' '.join(extra_args) if extra_args else 'None'}")
     
     total_workers = len(gpus) * WORKERS_PER_GPU
     # Launch multiple worker threads per GPU

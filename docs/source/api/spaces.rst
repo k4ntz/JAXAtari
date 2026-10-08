@@ -1,7 +1,7 @@
 Spaces
 ====================
 
-.. automodule:: jaxatari.spaces
+.. automodule:: jaxtari.spaces
    :members:
    :show-inheritance:
    :undoc-members:

@@ -43,7 +43,7 @@ jobs:
           git fetch origin pull/${{ github.event.pull_request.number }}/head:pr_head
           CHANGED_FILES=$(git diff --name-only ${{ github.event.pull_request.base.sha }}...pr_head || true)
           echo "$CHANGED_FILES" # debug
-          FORBIDDEN_CHANGES=$(echo "$CHANGED_FILES" | grep -v '^src/jaxatari/games/' || true)
+          FORBIDDEN_CHANGES=$(echo "$CHANGED_FILES" | grep -v '^src/jaxtari/games/' || true)
           if [[ -n "$FORBIDDEN_CHANGES" ]]; then
             echo "The following files were changed but should not be changed in a game update PR:"
             echo "$FORBIDDEN_CHANGES"
@@ -75,9 +75,9 @@ jobs:
         run: |
           echo "PR is from a fork. Calculating diff between base and head."
           git fetch origin pull/${{ github.event.pull_request.number }}/head:pr_head
-          CHANGED_GAME_FILES=$(git diff --name-only ${{ github.event.pull_request.base.sha }}...pr_head | grep 'src/jaxatari/games/jax_.*\.py' || true)
+          CHANGED_GAME_FILES=$(git diff --name-only ${{ github.event.pull_request.base.sha }}...pr_head | grep 'src/jaxtari/games/jax_.*\.py' || true)
           if [[ -n "$CHANGED_GAME_FILES" ]]; then
-            CHANGED_GAMES=$(echo "$CHANGED_GAME_FILES" | sed -e 's|src/jaxatari/games/jax_||' | sed -e 's|\.py||' | jq -R . | jq -cs .)
+            CHANGED_GAMES=$(echo "$CHANGED_GAME_FILES" | sed -e 's|src/jaxtari/games/jax_||' | sed -e 's|\.py||' | jq -R . | jq -cs .)
           else
             CHANGED_GAMES="[]"
           fi
