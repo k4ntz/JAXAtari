@@ -4,8 +4,7 @@
 This script only mutates the working tree. It does NOT rename the GitHub
 repository, publish PyPI packages, create remote branches, or edit
 ``packaging/jaxatari-alias/`` (temporary PyPI ``jaxatari`` import shim —
-canonical install/import is ``jaxtari``). Those steps live in
-docs/jaxtari_rename_checklist.md.
+canonical install/import is ``jaxtari``).
 
 Designed to be:
   * idempotent (safe to re-run)
@@ -47,7 +46,6 @@ NEW_DIR_NAME = "jaxtari"
 # encode the old→new mapping, or are the separate PyPI alias distribution).
 SCRIPT_REL = Path("scripts/rename_to_jaxtari.py")
 TEST_REL = Path("tests/test_rename_to_jaxtari.py")
-CHECKLIST_REL = Path("docs/jaxtari_rename_checklist.md")
 # Empty PyPI redirect package: must keep distribution name ``jaxatari`` and
 # directory name ``jaxatari-alias``. Touched only by hand / release process.
 PYPI_ALIAS_REL = Path("packaging/jaxatari-alias")
@@ -331,7 +329,6 @@ def is_tooling_file(rel: Path) -> bool:
     if posix in {
         SCRIPT_REL.as_posix(),
         TEST_REL.as_posix(),
-        CHECKLIST_REL.as_posix(),
     }:
         return True
     # Occurrence logs from prior runs (contain old→new on purpose).
@@ -1035,7 +1032,7 @@ def main(argv: list[str] | None = None) -> int:
     if args.apply:
         print(
             "\nNext: run `python scripts/rename_to_jaxtari.py --check`, then "
-            "follow docs/jaxtari_rename_checklist.md for remote / PyPI steps."
+            "handle remote / PyPI steps (repo rename, alias package) by hand."
         )
     return 0
 
