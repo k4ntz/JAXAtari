@@ -10,10 +10,10 @@ pip install jaxtari
 import jaxtari
 ```
 
-This `jaxatari` distribution is a **short-lived compatibility shim**. It installs
-[JAXtari](https://pypi.org/project/JAXtari/) and re-exports it under
-`import jaxatari` with a `DeprecationWarning`. It will be **removed soon** —
-update your installs and imports to `jaxtari`.
+This `jaxatari` distribution is a **short-lived compatibility alias**. It
+installs [JAXtari](https://pypi.org/project/JAXtari/), which temporarily
+provides `import jaxatari` with a `DeprecationWarning`. It will be **removed
+soon** — update your installs and imports to `jaxtari`.
 
 ```
 pip install jaxatari   # temporary; same code as jaxtari, old import name

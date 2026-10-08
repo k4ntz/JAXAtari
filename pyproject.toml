@@ -1,6 +1,6 @@
 [project]
 name = "JAXtari"
-version = "0.1.0"
+version = "0.2.0"
 description = "GPU-accelerated, object-centric Atari environments for reinforcement learning with JAX."
 readme = "README.md"
 requires-python = ">=3.10"

@@ -472,21 +472,56 @@ def _triangle_wave(values, period):
     return jnp.abs(phase - half_period)
 
 
+def _resolve_render_color_id(renderer, rgb):
+    """Return a palette ID for rgb.
+
+    Exact RGB keys can disappear from COLOR_TO_ID after native downscaling
+    rebuilds the palette from filtered sprites. Fall back to the nearest
+    remaining color (host-side lookup; safe to call under jax.jit tracing).
+    """
+    color_to_id = renderer.COLOR_TO_ID
+    if rgb in color_to_id:
+        return color_to_id[rgb]
+    rgba = (*rgb, 255)
+    if rgba in color_to_id:
+        return color_to_id[rgba]
+
+    best_id = 0
+    best_dist = None
+    for color, color_id in color_to_id.items():
+        if len(color) < 3:
+            continue
+        dist = (
+            (int(color[0]) - rgb[0]) ** 2
+            + (int(color[1]) - rgb[1]) ** 2
+            + (int(color[2]) - rgb[2]) ** 2
+        )
+        if best_dist is None or dist < best_dist:
+            best_dist = dist
+            best_id = color_id
+    return best_id
+
+
 def _apply_fog_of_war(renderer, raster, state):
+    hs = float(renderer.config.height_scaling)
+    ws = float(renderer.config.width_scaling)
     fog_top = _get_fog_of_war_top_y(state, renderer.consts)
     fog_cutoff = _get_fog_of_war_cutoff_y(fog_top, renderer.consts)
+    # Game logic stays at native resolution; scale into the (possibly downscaled) raster.
+    fog_top = jnp.round(fog_top.astype(jnp.float32) * hs).astype(jnp.int32)
+    fog_cutoff = jnp.round(fog_cutoff.astype(jnp.float32) * hs).astype(jnp.int32)
     fog_height = jnp.maximum(fog_cutoff - fog_top, 1)
-    fog_left = jnp.array(8, dtype=jnp.int32)
+    fog_left = jnp.array(int(round(8 * ws)), dtype=jnp.int32)
     fog_right = fog_left + jnp.array(renderer.SHAPE_MASKS["blue_line"].shape[1], dtype=jnp.int32)
     xx = renderer.jr._xx
     yy = renderer.jr._yy
     rel_y = jnp.clip(yy - fog_top, 0, fog_height)
     in_fog_band = (yy >= fog_top) & (yy < fog_cutoff) & (xx >= fog_left) & (xx < fog_right)
 
-    black_id = jnp.array(renderer.COLOR_TO_ID[(0, 0, 0)], dtype=raster.dtype)
-    shadow_id = jnp.array(renderer.COLOR_TO_ID[(80, 0, 132)], dtype=raster.dtype)
-    body_id = jnp.array(renderer.COLOR_TO_ID[(104, 25, 154)], dtype=raster.dtype)
-    edge_id = jnp.array(renderer.COLOR_TO_ID[(45, 109, 152)], dtype=raster.dtype)
+    black_id = jnp.array(_resolve_render_color_id(renderer, (0, 0, 0)), dtype=raster.dtype)
+    shadow_id = jnp.array(_resolve_render_color_id(renderer, (80, 0, 132)), dtype=raster.dtype)
+    body_id = jnp.array(_resolve_render_color_id(renderer, (104, 25, 154)), dtype=raster.dtype)
+    edge_id = jnp.array(_resolve_render_color_id(renderer, (45, 109, 152)), dtype=raster.dtype)
 
     local_x = xx - fog_left
     phase_fast = state.steps // 16

@@ -274,11 +274,11 @@ def test_apply_moves_package_and_rewrites_imports(repo: Path):
 
     assert (repo / "src" / "jaxtari" / "modification.py").exists()
     assert (repo / "src" / "jaxtari" / "__init__.py").exists()
-    # In-tree jaxatari is a raising hint only (not a working re-export).
+    # In-tree jaxatari remains a deprecated working re-export.
     hint = (repo / "src" / "jaxatari" / "__init__.py").read_text(encoding="utf-8")
-    assert "raise ImportError" in hint
-    assert "renamed to 'jaxtari'" in hint
-    assert "from jaxtari import" not in hint
+    assert "DeprecationWarning" in hint
+    assert "from jaxtari import" in hint
+    assert "raise ImportError" not in hint
 
     init = (repo / "src" / "jaxtari" / "__init__.py").read_text(encoding="utf-8")
     assert 'APP_NAME = "jaxtari"' in init
@@ -427,24 +427,19 @@ def test_rewrites_pyproject(repo: Path):
     # Display name JAXtari is already the post-rename PyPI name; leave it.
     assert 'name = "JAXtari"' in toml
     assert "jaxtari.install_sprites:download_and_extract" in toml
-    # Main wheel ships jaxtari + the raising removal hint.
+    # Main wheel ships jaxtari + the deprecated compatibility import.
     assert 'packages = ["src/jaxtari", "src/jaxatari"]' in toml
     assert '"/src/jaxtari", "/src/jaxatari"' in toml
 
 
-def test_removal_hint_raises_helpful_import_error(repo: Path):
+def test_compatibility_import_warns_and_reexports(repo: Path):
     rename.run_rename(repo, apply=True)
     hint_path = repo / "src" / "jaxatari" / "__init__.py"
-    # Load the stub the same way an import would execute it.
-    ns: dict = {}
-    try:
-        exec(compile(hint_path.read_text(encoding="utf-8"), str(hint_path), "exec"), ns)
-    except ImportError as exc:
-        msg = str(exc)
-        assert "jaxtari" in msg
-        assert "jaxatari" in msg
-    else:
-        raise AssertionError("removal hint should raise ImportError")
+    shim = hint_path.read_text(encoding="utf-8")
+    assert "DeprecationWarning" in shim
+    assert "from jaxtari import *" in shim
+    assert "from jaxtari import (" in shim
+    assert "raise ImportError" not in shim
 
 
 def test_leaves_pypi_alias_package_untouched(repo: Path):

@@ -451,21 +451,60 @@ class LadderPits(JaxtariInternalModPlugin):
     @partial(jax.jit, static_argnums=(0,))
     def _render_hook_post_ui(self, raster: jnp.ndarray, state: MontezumaRevengeState) -> jnp.ndarray:
         renderer = self._env.renderer
+        hs = float(renderer.config.height_scaling)
+        ws = float(renderer.config.width_scaling)
 
-        room_y = 47
+        # Native-resolution geometry, scaled for native downscaling.
+        room_y = int(round(47 * hs))
+        y48 = int(round(48 * hs))
+        y135 = int(round(135 * hs))
+        y53 = int(round(53 * hs))
+        y94 = int(round(94 * hs))
+        y95 = int(round(95 * hs))
+        x156 = int(round(156 * ws))
+        x160 = int(round(160 * ws))
+        x6 = max(1, int(round(6 * ws)))
+        hole_y0 = int(round(48 * hs))
+        hole_y1 = int(round(149 * hs))
+        hole_x0 = int(round(72 * ws))
+        hole_x1 = int(round(88 * ws))
+
+        mask_base = renderer.SHAPE_MASKS["room_bg_level2_base"]
+        H = int(raster.shape[0])
+        W = int(raster.shape[1])
+
+        def _fit_height(arr, target_h):
+            """Pad/truncate along axis 0 so arr has exactly target_h rows."""
+            cur_h = int(arr.shape[0])
+            if cur_h == target_h:
+                return arr
+            if cur_h > target_h:
+                return arr[:target_h]
+            if cur_h == 0:
+                return jnp.zeros((target_h, W), dtype=raster.dtype)
+            pad = jnp.repeat(arr[-1:], target_h - cur_h, axis=0)
+            return jnp.concatenate([arr, pad], axis=0)
+
+        def fill_room5_pit(r):
+            # Rebuild frame: keep UI/top, replace lower room with level-2 floor.
+            # Must match `r.shape` under both native and downscaled renderers
+            # (jax.lax.cond requires equal branch output types).
+            top_h = min(max(room_y + y48, 0), H)
+            mid = mask_base[min(y48, int(mask_base.shape[0])):]
+            bot = mask_base[min(y135, int(mask_base.shape[0])):]
+            body = jnp.concatenate([mid, bot], axis=0) if int(bot.shape[0]) > 0 else mid
+            body = _fit_height(body, H - top_h)
+            return jnp.concatenate([r[:top_h], body], axis=0)
 
         # fill pit in room five
         raster = jax.lax.cond(
             state.room_id == 5,
-            # lambda r: stamp_room(r, jnp.concatenate([renderer.SHAPE_MASKS["room_bg_0"][:48], renderer.SHAPE_MASKS["room_bg_level2_base"][48:]], axis=0)),
-            lambda r: jnp.concatenate([raster[:(room_y+48)], renderer.SHAPE_MASKS["room_bg_level2_base"][48:], renderer.SHAPE_MASKS["room_bg_level2_base"][135:]], axis=0),
+            fill_room5_pit,
             lambda r: r,
             raster,
         )
 
-        # jax.debug.print("{x}", x=raster[80, 80])
-
-        mask_l2 = jnp.where(renderer.SHAPE_MASKS["room_bg_level2_base"] == 1, renderer.LEVEL2_PLATFORM_ID, renderer.SHAPE_MASKS["room_bg_level2_base"])
+        mask_l2 = jnp.where(mask_base == 1, renderer.LEVEL2_PLATFORM_ID, mask_base)
 
         def draw_ladder(r_in):
             return jnp.where(raster == 20, raster, r_in)
@@ -475,32 +514,38 @@ class LadderPits(JaxtariInternalModPlugin):
 
         def clear_hole(r_in, y0, y1, x0, x1):
             pos = jnp.array([[x0, room_y + y0]])
-            size = jnp.array([[x1 - x0, y1 - y0]])
+            size = jnp.array([[max(x1 - x0, 1), max(y1 - y0, 1)]])
             return renderer.jr.draw_rects(r_in, pos, size, jnp.uint8(0))
-        
+
         def stamp_room(r_in, mask):
             return renderer.jr.render_at(r_in, 0, room_y, mask)
 
         def remove_wall(r_in, x_min, x_max):
-            return r_in.at[53:94, x_min:x_max].set(jnp.uint8(0))
+            return r_in.at[y53:y94, x_min:x_max].set(jnp.uint8(0))
 
         def add_wall(r_in):
-            return r_in.at[53:95, 156:160].set(jnp.uint8(20))
-        
+            return r_in.at[y53:y95, x156:x160].set(jnp.uint8(20))
+
         raster = jax.lax.cond(
             state.room_id == 18,
-            lambda r: redraw_player(remove_wall(draw_ladder(clear_hole(stamp_room(r, mask_l2), 48, 149, 72, 88)), 156, 160)),
+            lambda r: redraw_player(
+                remove_wall(
+                    draw_ladder(clear_hole(stamp_room(r, mask_l2), hole_y0, hole_y1, hole_x0, hole_x1)),
+                    x156,
+                    x160,
+                )
+            ),
             lambda r: r,
             raster,
         )
-        
+
         raster = jax.lax.cond(
             state.room_id == 19,
-            lambda r: redraw_player(remove_wall(add_wall(raster), 0, 6)),
+            lambda r: redraw_player(remove_wall(add_wall(raster), 0, x6)),
             lambda r: r,
             raster,
         )
-        
+
         raster = jax.lax.cond(
             state.room_id == 26,
             lambda r: add_wall(raster),

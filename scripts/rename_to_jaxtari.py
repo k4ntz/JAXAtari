@@ -213,31 +213,40 @@ _ALIAS_LINE_RE = re.compile(
     re.MULTILINE,
 )
 
-# In-tree stub shipped by the main wheel: ``import jaxatari`` fails with a
-# pointer at ``jaxtari``. A working re-export lives only in the temporary PyPI
-# alias at ``packaging/jaxatari-alias/``.
-REMOVAL_HINT_INIT = '''\
-"""Retired import name — use ``jaxtari``.
+# Deprecated import shim shipped by the main wheel. The separate ``jaxatari``
+# PyPI distribution depends on the main wheel and therefore gets this same shim.
+COMPATIBILITY_INIT = '''\
+"""Deprecated compatibility import for the renamed :mod:`jaxtari` package."""
 
-This module exists only so ``import jaxatari`` raises a clear ``ImportError``
-instead of a bare ``ModuleNotFoundError``. It does **not** load the library.
+from __future__ import annotations
 
-Canonical usage::
+import warnings
 
-    pip install jaxtari
-    import jaxtari
-
-A temporary PyPI distribution also named ``jaxatari`` still re-exports the
-library with a deprecation warning; that alias will be removed soon.
-"""
-
-raise ImportError(
-    "The 'jaxatari' import was renamed to 'jaxtari'. "
-    "Use `import jaxtari` after `pip install jaxtari` "
-    "(or `pip install -e .` from this repository). "
-    "If you still need the old import temporarily, `pip install jaxatari` "
-    "installs a short-lived alias package — it will be removed soon."
+warnings.warn(
+    "'jaxatari' was renamed to 'jaxtari' and will be removed in a future "
+    "release. Use 'pip install jaxtari' and 'import jaxtari'.",
+    DeprecationWarning,
+    stacklevel=2,
 )
+
+from jaxtari import *  # noqa: F403
+from jaxtari import (  # noqa: F401
+    ALT_SPRITES_MARKER_FILE,
+    DATA_DIR,
+    MARKER_FILE,
+    check_ownership,
+    list_available_games,
+    make,
+)
+
+__all__ = [
+    "ALT_SPRITES_MARKER_FILE",
+    "DATA_DIR",
+    "MARKER_FILE",
+    "check_ownership",
+    "list_available_games",
+    "make",
+]
 '''
 
 # Placeholders protect strings that contain "jaxatari" but must NOT change.
@@ -558,7 +567,11 @@ def is_removal_hint_init(path: Path, root: Path) -> bool:
 
 
 def _is_removal_hint_text(text: str) -> bool:
-    return "raise ImportError" in text and "renamed to 'jaxtari'" in text
+    return (
+        "raise ImportError" in text and "renamed to 'jaxtari'" in text
+    ) or (
+        "DeprecationWarning" in text and "from jaxtari import *" in text
+    )
 
 
 def _is_legacy_reexport_shim_text(text: str) -> bool:
@@ -674,7 +687,7 @@ def step_move_package(root: Path, *, apply: bool, report: RenameReport) -> None:
 
 
 def step_write_removal_hint(root: Path, *, apply: bool, report: RenameReport) -> None:
-    """Write ``src/jaxatari/__init__.py`` that raises a helpful ImportError."""
+    """Write the deprecated ``src/jaxatari/__init__.py`` compatibility shim."""
     new_pkg = root / "src" / NEW_DIR_NAME
     if not new_pkg.exists():
         return
@@ -684,7 +697,7 @@ def step_write_removal_hint(root: Path, *, apply: bool, report: RenameReport) ->
         current = hint_init.read_text(encoding="utf-8")
         if _is_removal_hint_text(current):
             return
-        # Replace a leftover working re-export shim with the raising hint.
+        # Replace a leftover re-export shim with the standardized shim.
         if not _is_hint_only_package(hint_dir) and not _is_legacy_reexport_shim_text(
             current
         ):
@@ -697,7 +710,7 @@ def step_write_removal_hint(root: Path, *, apply: bool, report: RenameReport) ->
         if hint_dir.exists():
             shutil.rmtree(hint_dir)
         hint_dir.mkdir(parents=True, exist_ok=True)
-        hint_init.write_text(REMOVAL_HINT_INIT, encoding="utf-8")
+        hint_init.write_text(COMPATIBILITY_INIT, encoding="utf-8")
 
 
 def step_add_aliases(root: Path, *, apply: bool, report: RenameReport) -> None:
@@ -743,7 +756,7 @@ def run_rename(root: Path, *, apply: bool) -> RenameReport:
     step_move_package(root, apply=apply, report=report)
     # 3) Rename other files/dirs that embed the old name.
     step_rename_paths(root, apply=apply, report=report)
-    # 4) Removal-hint stub + class aliases for one release cycle.
+    # 4) Deprecated import shim + class aliases for one release cycle.
     if apply:
         step_write_removal_hint(root, apply=True, report=report)
         step_add_aliases(root, apply=True, report=report)

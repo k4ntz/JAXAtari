@@ -1,21 +1,31 @@
-"""Retired import name — use ``jaxtari``.
+"""Deprecated compatibility import for the renamed :mod:`jaxtari` package."""
 
-This module exists only so ``import jaxatari`` raises a clear ``ImportError``
-instead of a bare ``ModuleNotFoundError``. It does **not** load the library.
+from __future__ import annotations
 
-Canonical usage::
+import warnings
 
-    pip install jaxtari
-    import jaxtari
-
-A temporary PyPI distribution also named ``jaxatari`` still re-exports the
-library with a deprecation warning; that alias will be removed soon.
-"""
-
-raise ImportError(
-    "The 'jaxatari' import was renamed to 'jaxtari'. "
-    "Use `import jaxtari` after `pip install jaxtari` "
-    "(or `pip install -e .` from this repository). "
-    "If you still need the old import temporarily, `pip install jaxatari` "
-    "installs a short-lived alias package — it will be removed soon."
+warnings.warn(
+    "'jaxatari' was renamed to 'jaxtari' and will be removed in a future "
+    "release. Use 'pip install jaxtari' and 'import jaxtari'.",
+    DeprecationWarning,
+    stacklevel=2,
 )
+
+from jaxtari import *  # noqa: F403
+from jaxtari import (  # noqa: F401
+    ALT_SPRITES_MARKER_FILE,
+    DATA_DIR,
+    MARKER_FILE,
+    check_ownership,
+    list_available_games,
+    make,
+)
+
+__all__ = [
+    "ALT_SPRITES_MARKER_FILE",
+    "DATA_DIR",
+    "MARKER_FILE",
+    "check_ownership",
+    "list_available_games",
+    "make",
+]
