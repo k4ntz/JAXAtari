@@ -32,8 +32,9 @@ def test_kill_spider_with_sword(montezuma_env):
     assert state.enemies_active[0] == 0
     # Sword should be GONE from inventory
     assert state.inventory[1] == 0
+    assert reward == 3000
 
-def test_kill_snake_with_sword(montezuma_env):
+def test_snake_cannot_be_killed_with_sword(montezuma_env):
     env = montezuma_env
     key = jax.random.PRNGKey(0)
     obs, state = env.reset(key)
@@ -57,14 +58,13 @@ def test_kill_snake_with_sword(montezuma_env):
     
     obs, state, reward, done, info = env.step(state, 0) # NOOP
     
-    # Player should NOT die
-    assert state.death_timer == 0
-    assert state.lives == initial_lives
-    # Enemy should be GONE
-    assert state.enemies_active[0] == 0
-    # Sword should be GONE from inventory
-    assert state.inventory[1] == 0
+    # The sword cannot protect against snakes and remains unused.
+    assert state.death_timer > 0
+    assert state.lives == initial_lives - 1
+    assert state.enemies_active[0] == 1
+    assert state.inventory[1] == 1
+    assert reward == 0
 
 if __name__ == "__main__":
     test_kill_spider_with_sword()
-    test_kill_snake_with_sword()
+    test_snake_cannot_be_killed_with_sword()

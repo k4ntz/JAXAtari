@@ -68,7 +68,7 @@ def test_collect_sword(montezuma_env):
     obs, state, reward, done, info = env.step(state, 0)
     
     assert state.inventory[1] == 1
-    assert reward == 1000
+    assert reward == 100
 
 def test_kill_enemy_with_sword(montezuma_env):
     env = montezuma_env
@@ -102,7 +102,7 @@ def test_kill_enemy_with_sword(montezuma_env):
     # Sword should be GONE from inventory
     assert state.inventory[1] == 0
     # Score should INCREASE
-    assert reward >= 100
+    assert reward == 2000
 
 def test_door_without_key(montezuma_env):
     env = montezuma_env

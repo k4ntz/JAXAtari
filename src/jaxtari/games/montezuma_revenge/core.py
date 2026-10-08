@@ -28,10 +28,14 @@ class MontezumaRevengeConstants(struct.PyTreeNode):
     HEIGHT: int = struct.field(pytree_node=False, default=210)
     PLAYER_WIDTH: int = struct.field(pytree_node=False, default=7)
     PLAYER_HEIGHT: int = struct.field(pytree_node=False, default=20)
-    INITIAL_PLAYER_X: int = struct.field(pytree_node=False, default=77)
+    INITIAL_PLAYER_X: int = struct.field(pytree_node=False, default=76)
     INITIAL_PLAYER_Y: int = struct.field(pytree_node=False, default=26)
     INITIAL_ROOM_ID: int = struct.field(pytree_node=False, default=4)
     PLAYER_SPEED: int = struct.field(pytree_node=False, default=1)
+    # Ladder centering uses the standing sprite anchor, independently of collision width.
+    LADDER_PLAYER_X_OFFSET: int = struct.field(pytree_node=False, default=4)
+    # Rope sprites use the same eight-pixel pose anchor, not collision width.
+    ROPE_PLAYER_X_OFFSET: int = struct.field(pytree_node=False, default=4)
     
     # Room Transition Coordinates
     ROOM_ENTRY_X_LEFT: int = struct.field(pytree_node=False, default=4)
@@ -59,11 +63,14 @@ class MontezumaRevengeConstants(struct.PyTreeNode):
     OUT_OF_LADDER_DELAY: int = struct.field(pytree_node=False, default=5)
     MAX_FALL_DISTANCE: int = struct.field(pytree_node=False, default=20) # ladder_height (39) - 6
     BOUNCE_OFFSETS: jnp.ndarray = struct.field(pytree_node=False, default_factory=lambda: jnp.array([0, 3, 6, 9, 12, 15, 18, 21, 24, 27, 27, 27, 27, 24, 21, 18, 15, 12, 9, 6, 3, 0], dtype=jnp.int32))
-    DEATH_TIMER_FRAMES: int = struct.field(pytree_node=False, default=70)
+    DEATH_TIMER_FRAMES: int = struct.field(pytree_node=False, default=50)
     PLATFORM_ACTIVE_DURATION: int = struct.field(pytree_node=False, default=90) # For spawning and disappearing platform
     PLATFORM_CYCLE_LENGTH: int = struct.field(pytree_node=False, default=128)
     AMULET_DURATION: int = struct.field(pytree_node=False, default=660)
-    KILL_ENEMY_REWARD: int = struct.field(pytree_node=False, default=100)
+    # None selects native rewards; mods may still override all kills uniformly.
+    KILL_ENEMY_REWARD: int | None = struct.field(pytree_node=False, default=None)
+    KILL_SKULL_REWARD: int = struct.field(pytree_node=False, default=2000)
+    KILL_SPIDER_REWARD: int = struct.field(pytree_node=False, default=3000)
 
 @struct.dataclass
 class MontezumaRevengeState:
@@ -153,6 +160,11 @@ class MontezumaRevengeState:
     bonus_room_timer: jnp.ndarray
     first_gem_pickup: jnp.ndarray
     key: jrandom.PRNGKey
+    # First-key pickup bookkeeping; elapsed native ticks include frozen poses.
+    pickup_timer: jnp.ndarray = struct.field(default_factory=lambda: jnp.int32(0))
+    pickup_item_idx: jnp.ndarray = struct.field(default_factory=lambda: jnp.int32(-1))
+    native_frame_count: jnp.ndarray = struct.field(default_factory=lambda: jnp.int32(0))
+    respawn_enemy_idx: jnp.ndarray = struct.field(default_factory=lambda: jnp.int32(-1))
 
 @struct.dataclass
 class MontezumaRevengeObservation:
