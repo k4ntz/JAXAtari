@@ -106,8 +106,8 @@ class TenSecondViolationPostStepMod(JaxAtariPostStepModPlugin):
         holder = new_state.ball.holder
         is_player_holding = jnp.logical_or(holder == PlayerID.PLAYER1_INSIDE, holder == PlayerID.PLAYER1_OUTSIDE)
         
-        # 10s = 600 frames
-        penalty = jnp.logical_and(is_player_holding, new_state.timers.possession > 200)
+        # 10s = 600 frames (at the game's 60fps step rate)
+        penalty = jnp.logical_and(is_player_holding, new_state.timers.possession > 600)
         
         def apply_turnover(s):
             # Reuse travel timer field to trigger penalty mode

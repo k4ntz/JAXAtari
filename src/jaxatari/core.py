@@ -40,6 +40,7 @@ GAME_MODULES = {
     "centipede": "jaxatari.games.jax_centipede",
     "choppercommand": "jaxatari.games.jax_choppercommand",
     "donkeykong": "jaxatari.games.jax_donkeykong",
+    "doubledunk": "jaxatari.games.jax_doubledunk",
     "enduro": "jaxatari.games.jax_enduro",
     "fishingderby": "jaxatari.games.jax_fishingderby",
     "flagcapture": "jaxatari.games.jax_flagcapture",
@@ -94,6 +95,7 @@ MOD_MODULES = {
     "bankheist": "jaxatari.games.mods.bankheist_mods.BankHeistEnvMod",
     "montezumarevenge": "jaxatari.games.mods.montezuma_revenge_mods.MontezumaRevengeEnvMod",
     "frostbite": "jaxatari.games.mods.frostbite_mods.FrostbiteEnvMod",
+    "doubledunk": "jaxatari.games.mods.doubledunk_mods.DoubleDunkEnvMod",
 }
 
 

@@ -54,11 +54,11 @@ class DunkConstants(struct.PyTreeNode):
     WINDOW_HEIGHT: int = 210
     BALL_SIZE: Tuple[int, int] = (3,3)
     JUMP_STRENGTH: int = 5
-    PLAYER_MAX_SPEED: int = 2
+    PLAYER_MAX_SPEED: int = 1
     PLAYER_Y_MIN: int = 57
-    PLAYER_Y_MAX: int = 160
-    PLAYER_X_MIN: int  = 3
-    PLAYER_X_MAX: int = 142
+    PLAYER_Y_MAX: int = 154
+    PLAYER_X_MIN: int  = 12
+    PLAYER_X_MAX: int = 140
     PLAYER_WIDTH: int = 10                         
     PLAYER_HEIGHT: int = 30
     PLAYER_BARRIER: int = 10  
@@ -438,6 +438,18 @@ class DoubleDunk(JaxEnvironment[DunkGameState, DunkObservation, DunkInfo, DunkCo
 
         return vel_x, vel_y
 
+    @staticmethod
+    def _in_two_point_zone(x: chex.Array, y: chex.Array) -> chex.Array:
+        """Checks whether a court position is within the 2-point shooting zone.
+
+        The boundary was traced from the court artwork (which matches the real
+        ALE background pixel-for-pixel): straight sides at +-48.5px from the
+        basket's x=80 centerline down to y=137, then tapering linearly inward
+        to +-32.5px by y=162.
+        """
+        half_width = jnp.where(y <= 137.0, 48.5, jnp.maximum(32.5, 48.5 - 0.64 * (y - 137.0)))
+        return jnp.abs(x - 80.0) <= half_width
+
     def _update_player_xy(self, player: PlayerState, action: int, constants: DunkConstants) -> PlayerState:
         """Updates the player's XY position based on an action."""
         vel_x, vel_y = self._get_player_xy_action_effects(action, constants)
@@ -448,16 +460,7 @@ class DoubleDunk(JaxEnvironment[DunkGameState, DunkObservation, DunkInfo, DunkCo
         touched_bound = jnp.logical_or(jnp.logical_or((updated_x <= constants.PLAYER_X_MIN), (updated_x >= constants.PLAYER_X_MAX)), (updated_y <= constants.PLAYER_Y_MIN))
 
         # Clearance Check: Check if player is "inside". If not, they have cleared the ball.
-        # Inside Zone definition based on scoring logic:
-        # 1. Rectangular Zone: x=[25, 135], y <= 100
-        in_rect_zone = jnp.logical_and(jnp.logical_and((new_x >= 25), (new_x <= 135)), (new_y <= 100))
-        # 2. Elliptical Zone: Center(80, 100), Rx=55, Ry=42
-        dx = new_x - 80.0
-        dy = new_y - 100.0
-        ellipse_val = (dx**2 / (55.0**2)) + (dy**2 / (42.0**2))
-        in_ellipse_zone = jnp.logical_and((ellipse_val <= 1.0), (new_y >= 100))
-        
-        is_inside = jnp.logical_or(in_rect_zone, in_ellipse_zone)
+        is_inside = self._in_two_point_zone(new_x, new_y)
         is_outside = jnp.logical_not(is_inside)
         
         new_clearance_needed = jax.lax.select(is_outside, False, player.clearance_needed)
@@ -1302,31 +1305,9 @@ class DoubleDunk(JaxEnvironment[DunkGameState, DunkObservation, DunkInfo, DunkCo
             is_p1_scorer = jnp.logical_or((s.ball.shooter == PlayerID.PLAYER1_INSIDE), (s.ball.shooter == PlayerID.PLAYER1_OUTSIDE))
 
             # --- 2 vs 3 Point Logic ---
-            # Based on the background generation script geometry:
-            # 1. Rectangular Zone: x=[25, 135], y <= 100
-            # 2. Elliptical Zone: Center(80, 100), Rx=55, Ry=42 (approx due to perspective)
-            
             sx = s.ball.shooter_pos_x
             sy = s.ball.shooter_pos_y
-
-            # Check 1: Rectangular Key Area
-            # The script draws vertical lines at x=25 and x=135 down to y=100
-            in_rect_zone = jnp.logical_and(jnp.logical_and((sx >= 25), (sx <= 135)), (sy <= 100))
-
-            # Check 2: Elliptical Top of Key
-            # Equation: ((x-h)/rx)^2 + ((y-k)/ry)^2 <= 1
-            # Center (h,k) = (80, 100)
-            dx = sx - 80.0
-            dy = sy - 100.0
-            
-            # We use float division for the ellipse calculation
-            ellipse_val = (dx**2 / (55.0**2)) + (dy**2 / (42.0**2))
-            
-            # We only care about the ellipse part that extends below the center (y >= 100)
-            in_ellipse_zone = jnp.logical_and((ellipse_val <= 1.0), (sy >= 100))
-
-            # A shot is 2 points if it is in EITHER zone. Otherwise, it's a 3-pointer.
-            is_2_point = jnp.logical_or(in_rect_zone, in_ellipse_zone)
+            is_2_point = self._in_two_point_zone(sx, sy)
             points = jax.lax.select(is_2_point, 2, 3)
 
             # --- Score Updates ---
