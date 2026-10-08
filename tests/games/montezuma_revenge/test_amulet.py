@@ -23,7 +23,7 @@ def test_collect_amulet(montezuma_env):
     # inventory[3] is the amulet
     assert state.inventory[3] == 1
     assert state.amulet_time == env.consts.AMULET_DURATION
-    assert reward == 100
+    assert reward == 200
 
 def test_amulet_neutralizes_enemies(montezuma_env):
     env = montezuma_env

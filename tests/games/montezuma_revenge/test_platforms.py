@@ -52,6 +52,8 @@ def test_jumping_on_platform(montezuma_env):
     obs, state, reward, done, info = env.step(state, 1)
     
     assert state.is_jumping == 1
+    assert state.player_y == 26  # FIRE prepares the jump before movement.
+    obs, state, reward, done, info = env.step(state, 0)
     assert state.player_y < 26
     
     # Continue jumping until landing

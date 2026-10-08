@@ -28,13 +28,10 @@ def test_jump_through_dynamic_platform(montezuma_env):
 
     # We want to jump through platform 1 (y=66).
     # We start at feet=75.
-    # Frame 0: dy=-3 -> feet=72
-    # Frame 1: dy=-3 -> feet=69
-    # Frame 2: dy=-3 -> feet=66
-    # Frame 3: dy=-2 -> feet=64
-    # At Frame 3, feet cross y=66. If not semi-permeable, hit_ceiling would stop the jump.
+    # The FIRE frame prepares the jump without moving. The subsequent frames
+    # move feet to 72, 69, 66, 64 and 62, passing through the upper platform.
 
-    for _ in range(4):
+    for _ in range(5):
         obs, state, reward, done, info = env.step(state, 0)
 
     # Should be at player_y = 56 - 13 = 43 (feet at 62)

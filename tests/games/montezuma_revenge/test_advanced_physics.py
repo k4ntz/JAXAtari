@@ -6,15 +6,15 @@ def test_conveyor_movement(montezuma_env):
     key = jax.random.PRNGKey(0)
     obs, state = env.reset(key)
     
-    # Room 4 has a conveyor at y=88 (surface), x=60, direction 1.
-    # Feet at 87 -> player_y = 87 - 20 + 1 = 68.
+    # Room 4 belt surface is y=89, x=60, direction -1.
+    # Feet at 88 -> standing player_y=69 (screen y=116).
     from jaxtari.games.montezuma_revenge.rooms import load_room
     state = state.replace(room_id=jnp.array(4, dtype=jnp.int32))
     state = load_room(state.room_id, state, env.consts)
     
     state = state.replace(
         player_x=jnp.array(65, dtype=jnp.int32),
-        player_y=jnp.array(68, dtype=jnp.int32)
+        player_y=jnp.array(69, dtype=jnp.int32)
     )
     
     initial_x = state.player_x
@@ -25,7 +25,7 @@ def test_conveyor_movement(montezuma_env):
         obs, state, reward, done, info = env.step(state, 0)
         
     assert state.player_x < initial_x
-    assert state.player_y == 68
+    assert state.player_y == 69
 
 def test_wall_collision(montezuma_env):
     env = montezuma_env
