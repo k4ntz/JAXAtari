@@ -837,42 +837,32 @@ class JaxSeaquest(JaxEnvironment[SeaquestState, SeaquestObservation, SeaquestInf
 
     @partial(jax.jit, static_argnums=(0,))
     def get_front_entity(self, i, lane_positions):
-        # check on the first submarine in the lane which direction they are going
-        direction = lane_positions[0][2]
+        """Return the lead entity in the travel direction (by X, not slot index).
 
+        Slot index ≠ geometric front: with lead-centric packing the native
+        ``lead_slot`` sits furthest off-screen, so index-based "slot 2 when
+        going right" picked the *rear* of top-lane formations. Missiles must
+        come from the foremost active X (max X when dir>0, min X when dir<0).
+        """
+        del i
+        active = lane_positions[:, 2] != 0
+        # Fallback direction if slot 0 is empty.
         direction = jnp.where(
-            lane_positions[0][2] == 0,
+            lane_positions[0, 2] == 0,
             jnp.where(
-                lane_positions[1][2] == 0, lane_positions[2][2], lane_positions[1][2]
+                lane_positions[1, 2] == 0, lane_positions[2, 2], lane_positions[1, 2]
             ),
-            lane_positions[0][2],
+            lane_positions[0, 2],
         )
-
-        # if direction is 1, go from right to left until an active entity is found
-        # if direction is -1, go from left to right until an active entity is found
-        front_entity = jnp.where(
-            direction == -1,
-            jnp.where(
-                lane_positions[0][2] != 0,
-                lane_positions[0],
-                jnp.where(
-                    lane_positions[1][2] != 0,
-                    lane_positions[1],
-                    jnp.where(lane_positions[2][2] != 0, lane_positions[2], jnp.zeros(3)),
-                ),
-            ),
-            jnp.where(
-                lane_positions[2][2] != 0,
-                lane_positions[2],
-                jnp.where(
-                    lane_positions[1][2] != 0,
-                    lane_positions[1],
-                    jnp.where(lane_positions[0][2] != 0, lane_positions[0], jnp.zeros(3)),
-                ),
-            ),
+        # Inactive slots: send X to ±inf so they lose the min/max race.
+        xs = jnp.where(
+            active,
+            lane_positions[:, 0],
+            jnp.where(direction > 0, jnp.full(3, -jnp.inf), jnp.full(3, jnp.inf)),
         )
-
-        return front_entity
+        front_idx = jnp.where(direction > 0, jnp.argmax(xs), jnp.argmin(xs))
+        any_active = jnp.any(active)
+        return jnp.where(any_active, lane_positions[front_idx], jnp.zeros(3))
 
     @partial(jax.jit, static_argnums=(0,))
     def get_pattern_for_difficulty(
@@ -1930,8 +1920,13 @@ class JaxSeaquest(JaxEnvironment[SeaquestState, SeaquestObservation, SeaquestInf
             # Escorts in the same lane (sharks only — divers never share with subs).
             all_shark_lane_pos = jax.lax.dynamic_slice(shark_positions, (i * 3, 0), (3, 3))
 
-            # Escort spacing: ALE locks ~5px. Soft-attach within 6px (≤1px nudge);
-            # outside that band divers keep their normal solo schedule.
+            # Escort spacing: sharks catch up to ~7–9px. Soft-attach by matching
+            # escort velocity only (any gap snap/nudge reads as a teleport).
+            #
+            # Sharks move before divers, so a lock band of ≤T yields a resting
+            # end-of-frame gap of T+1. On escort-idle frames that resting gap
+            # would drop the lock and the solo diver schedule takes a 1px hitch
+            # — add 1px slack while the escort is idle so the lock sticks.
             all_escorts = all_shark_lane_pos
             escort_alive = all_escorts[:, 2] != 0
             dists = jnp.where(
@@ -1943,10 +1938,12 @@ class JaxSeaquest(JaxEnvironment[SeaquestState, SeaquestObservation, SeaquestInf
             escort = all_escorts[nearest_idx]
             escort_active = escort_alive[nearest_idx]
             horiz_gap = jnp.abs(escort[0] - diver_pos[0])
-            escort_gap_target = jnp.int32(5)
+            lock_band = jnp.int32(8) + jnp.where(
+                escort_speed == 0, jnp.int32(1), jnp.int32(0)
+            )
             escort_lock = jnp.logical_and(
                 is_active,
-                jnp.logical_and(escort_active, horiz_gap <= jnp.int32(6)),
+                jnp.logical_and(escort_active, horiz_gap <= lock_band),
             )
 
             # Heading: follow live escort when locked; otherwise match the
@@ -1971,15 +1968,11 @@ class JaxSeaquest(JaxEnvironment[SeaquestState, SeaquestObservation, SeaquestInf
 
             movement_x = move_dir * movement_speed
 
-            attached_x = escort[0] + move_dir * escort_gap_target
+            # Pure velocity match: same Δx as the escort this frame.
             new_x = jnp.where(
-                escort_lock,
-                attached_x,
-                jnp.where(
-                    should_move,
-                    diver_pos[0] + movement_x,
-                    diver_pos[0],
-                ),
+                should_move,
+                diver_pos[0] + movement_x,
+                diver_pos[0],
             )
 
             # Divers despawn past the visible edges. Allow x=0 and x=160 for one
