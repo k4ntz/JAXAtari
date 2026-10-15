@@ -46,6 +46,12 @@ gh_ci = [
   "pytest-github-actions-annotate-failures",
   "syrupy==4.9.1",
 ]
+train_detection = [  # tooling for detector datasets / training / videos (the wrapper itself needs none of it)
+  "ultralytics",
+  "opencv-python-headless",
+  "imageio",
+  "imageio-ffmpeg",
+]
 training = [
   "tyro",
   "torch",

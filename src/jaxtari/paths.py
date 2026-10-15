@@ -78,6 +78,11 @@ def get_base_state_dir() -> str:
     return str(get_storage_dir() / "states")
 
 
+def get_base_detector_dir() -> str:
+    """Detector checkpoints: ``<storage>/detectors/<variant>/<game>.npz`` (e.g. ``gray96/pong.npz``)."""
+    return str(get_storage_dir() / "detectors")
+
+
 def get_game_state_dir(game_name: str) -> str:
     return str(Path(get_base_state_dir()) / game_name)
 
