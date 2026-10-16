@@ -10,6 +10,16 @@ Each script also supports `--help`.
 
 Record one OCAtari trajectory (actions + objects + RAM + frames) to `.npz`.
 
+New recordings also save `frame_indices` (emulated steps since the latest
+reset, including warmup). Montezuma transfer restores `native_frame_count`
+and the hazard phase from this count, and uses recent past
+skull motion, including a compact warmup history. Legacy phase recovery uses
+the saved warmup count and terminal flags; resets inside discarded warmup
+cannot be recovered from old files.
+Montezuma transfer still does not reconstruct an active jump/fall phase or
+collected-item history. Prefer grounded start snapshots; equal object positions
+at injection alone do not establish equivalent latent physics states.
+
 | Arg | Description |
 |-----|-------------|
 | `-g` / `--game` | Game name |
