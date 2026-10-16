@@ -6,7 +6,7 @@ import sys
 
 from jaxtari.renderers import JAXGameRenderer
 from jaxtari.rendering import jax_rendering_utils as render_utils
-from jaxtari.games.montezuma_revenge.core import MontezumaRevengeConstants, MontezumaRevengeState, rope_widths
+from jaxtari.games.montezuma_revenge.core import MontezumaRevengeConstants, MontezumaRevengeState, enemy_bounce_offsets, rope_widths
 from jaxtari.games.montezuma_revenge.rooms import load_room
 from jaxtari.games.mods.montezuma_revenge.custom_rooms import load_custom_room
 
@@ -770,9 +770,12 @@ class MontezumaRevengeRenderer(JAXGameRenderer):
         def render_door(i, raster):
             mask = self.SHAPE_MASKS["door"]
             is_active = jnp.logical_and(state.doors_active[i] == 1, jnp.logical_not(is_rendered_dark))
+            # The start-room door bars occupy the inner half of each opening.
+            door_inset = jnp.where(state.doors_x[i] < self.consts.WIDTH // 2, 4, -4)
+            door_x = state.doors_x[i] + jnp.where(state.room_id == 4, door_inset, 0)
             return jax.lax.cond(
                 is_active,
-                lambda r: self.jr.render_at(r, state.doors_x[i], state.doors_y[i] + 47, mask),
+                lambda r: self.jr.render_at(r, door_x, state.doors_y[i] + 47, mask),
                 lambda r: r,
                 raster
             )
@@ -781,7 +784,20 @@ class MontezumaRevengeRenderer(JAXGameRenderer):
         # Draw Enemies
         def render_enemy(i, raster):
             anim_idx = jax.lax.select(state.enemies_bouncing[i] == 1, 0, jnp.mod(state.enemies_x[i], 16))
-            bounce_offset = jax.lax.select(state.enemies_bouncing[i] == 1, self.consts.BOUNCE_OFFSETS[jnp.mod(state.frame_count // 4, 22)], 0)
+            # Native ALE room-4 traces rotate the left-moving skull by one
+            # sprite every two horizontal pixels (x=90/89: 8, x=88/87: 7).
+            # Keep the other rooms and bouncing animations on their existing
+            # path until their sprite phases have been measured separately.
+            start_room_skull = jnp.logical_and(
+                state.room_id == 4,
+                jnp.logical_and(state.enemies_direction[i] == -1, state.enemies_bouncing[i] == 0),
+            )
+            anim_idx = jnp.where(
+                start_room_skull,
+                jnp.mod(jnp.floor_divide(state.enemies_x[i] + 1, 2) + 11, 16),
+                anim_idx,
+            )
+            bounce_offset = enemy_bounce_offsets(state, self.consts)[i]
 
             spider_anim = jnp.mod(jnp.floor_divide(state.frame_count, 7), 2)
             spider_mask = jax.lax.cond(
@@ -800,7 +816,7 @@ class MontezumaRevengeRenderer(JAXGameRenderer):
                 None
             )
             
-            skull_mask = self.SHAPE_MASKS["skull"][anim_idx]
+            skull_mask = self.SHAPE_MASKS["skull"][jnp.where(state.enemies_bouncing[i] == 1, 0, anim_idx)]
             
             # Neutralize (gray out) enemies if amulet is active
             is_neutralized = state.amulet_time > 0

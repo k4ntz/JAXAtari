@@ -10,6 +10,7 @@ import jaxtari.spaces as spaces
 from jaxtari.rendering import jax_rendering_utils as render_utils
 
 from jaxtari.games.montezuma_revenge.core import (
+    enemy_bounce_offsets,
     rope_widths,
     MontezumaRevengeConstants,
     MontezumaRevengeState,
@@ -35,6 +36,19 @@ class JaxMontezumaRevenge(JaxEnvironment[MontezumaRevengeState, MontezumaRevenge
         consts = consts or MontezumaRevengeConstants()
         super().__init__(consts)
         self.renderer = MontezumaRevengeRenderer(self.consts)
+        transparent = self.renderer.jr.TRANSPARENT_ID
+        self._key_collision_mask = self.renderer.SHAPE_MASKS['key'] != transparent
+        item_shapes = [self.renderer.SHAPE_MASKS[name] for name in ('key', 'gem', 'amulet', 'sword')]
+        item_shapes.append(self.renderer.SHAPE_MASKS['torch'][0])
+        self._item_collision_masks = jnp.stack([
+            jnp.pad(mask != transparent, ((0, 20-mask.shape[0]), (0, 8-mask.shape[1])))
+            for mask in item_shapes])
+        self._key_player_stand_mask = self.renderer.SHAPE_MASKS['player'][0] != transparent
+        self._key_player_jump_mask = self.renderer.SHAPE_MASKS['player'][7] != transparent
+        self._player_collision_masks = self.renderer.SHAPE_MASKS['player'] != transparent
+        self._original_walk_1_collision_mask = self.renderer.ORIGINAL_WALK_1 != transparent
+        self._snake_collision_masks = self.renderer.SHAPE_MASKS['snake'] != transparent
+        self._skull_collision_masks = self.renderer.SHAPE_MASKS['skull'] != transparent
         sprite_path = os.path.join(render_utils.get_base_sprite_dir(), "montezuma")
         
         sprite_path_0 = os.path.join(sprite_path, "backgrounds", "base_collision_map.npy")
@@ -351,10 +365,25 @@ class JaxMontezumaRevenge(JaxEnvironment[MontezumaRevengeState, MontezumaRevenge
         state = state.replace(
             laser_cycle=jnp.where(self.consts.CUSTOM_ROOMS, state.laser_cycle, native_cycle),
             platform_cycle=jnp.where(self.consts.CUSTOM_ROOMS, state.platform_cycle, platform_cycle))
+        amulet_time = jnp.maximum(state.amulet_time - 1, 0)
+        bonus_time = jnp.where(state.room_id == 24,
+            jnp.where(state.transition_pending > 0,
+                jnp.mod(state.native_frame_count + 1 + 67, 8),
+                state.bonus_room_timer + 1), 0)
+        state = state.replace(amulet_time=amulet_time,
+            inventory=state.inventory.at[3].set(jnp.where(amulet_time > 0, 1, 0)),
+            bonus_room_timer=bonus_time)
+        def hold_pickup():
+            held = state.replace(pickup_timer=state.pickup_timer - 1,
+                                 native_mode=jnp.where(state.pickup_timer > 2, 6, jnp.where(state.pickup_timer == 2, 3, 4)),
+                                 frame_count=state.frame_count + 1)
+            return (self._get_observation(held), held,
+                    self._get_reward(state, held), self._get_done(held), self._get_info(held))
+
         def relocate():
             held = state.replace(player_x=state.transition_x, player_y=state.transition_y,
                 native_mode=jnp.int32(4),
-                transition_pending=jnp.int32(0),
+                transition_pending=jnp.int32(0), room5_skull_spawn_pending=jnp.bool_(False),
                 frame_count=state.frame_count + 1,
                 is_jumping=jnp.where(state.transition_pending == 1, 0, state.is_jumping),
                 is_falling=jnp.where(state.transition_pending == 1, 0, state.is_falling),
@@ -367,7 +396,8 @@ class JaxMontezumaRevenge(JaxEnvironment[MontezumaRevengeState, MontezumaRevenge
 
         obs, next_state, reward, done, info = jax.lax.cond(
             state.transition_pending > 0, relocate,
-            lambda: self._step_active(state, action))
+            lambda: jax.lax.cond(state.pickup_timer > 0, hold_pickup,
+                                lambda: self._step_active(state, action)))
         # ALE's RAM0 clock continues through pickup, relocation and death.
         # Retained runtime initializes RAM0 at67; our visible-first convention
         # is the same128-tick phase shifted by92: (native tick +31) %128.
@@ -379,6 +409,22 @@ class JaxMontezumaRevenge(JaxEnvironment[MontezumaRevengeState, MontezumaRevenge
         next_state = next_state.replace(native_frame_count=state.native_frame_count + 1,
             laser_cycle=jnp.where(self.consts.CUSTOM_ROOMS, next_state.laser_cycle, native_cycle),
             platform_cycle=jnp.where(self.consts.CUSTOM_ROOMS, next_state.platform_cycle, platform_cycle))
+        # Metadata cleanup is the last executed ROM branch in modes2/3.
+        ale_room = state.room_id - jnp.where(state.room_id <= 5, 3,
+            jnp.where(state.room_id <= 14, 7, 9))
+        item_room = jnp.isin(ale_room, jnp.array([2, 3, 9, 11, 20, 23]))
+        native_type = jnp.array([1,4,5,5,10,6,2,4,4,8,1,8,0,10,4,1,0,0,0,3,1,10,8,1])[ale_room]
+        packed_mask = jnp.sum(state.enemies_active * (1 << jnp.arange(self.consts.MAX_ENEMIES_PER_ROOM)))
+        metadata_carry = jnp.where(item_room,
+            jnp.where(native_type == 5, jnp.where(packed_mask == 1, 1, state.enemies_x[0] + 17 > 255), native_type >= 5),
+            ale_room >= 2).astype(jnp.int32)
+        carry = jnp.where(jnp.logical_or(state.native_mode == 2, state.native_mode == 3),
+            metadata_carry, jnp.where(state.native_mode == 6, 0, next_state.native_rng_carry))
+        a, b = state.native_rng_a, state.native_rng_b
+        next_state = next_state.replace(
+            native_rng_a=jnp.bitwise_xor(jnp.mod(2*a + carry + 195 + (b >> 7), 256), a),
+            native_rng_b=jnp.bitwise_xor(b, jnp.bitwise_and(2*b | (a >> 7), 255)),
+            native_rng_carry=carry)
         # Dispatch observations precede the final clock and room-entry updates.
         # Expose the same hazard state that callers receive and render.
         return self._get_observation(next_state), next_state, reward, done, info
@@ -390,14 +436,15 @@ class JaxMontezumaRevenge(JaxEnvironment[MontezumaRevengeState, MontezumaRevenge
         room_col_map = self.ROOM_COLLISION_MAPS[room_idx]
         
         is_bonus_room = state.room_id == 24
-        floor_dropped = jnp.logical_and(is_bonus_room, state.bonus_room_timer >= 640)
-        room_col_map = jax.lax.select(floor_dropped, room_col_map.at[47:50, 4:156].set(0), room_col_map)
+        bonus_collapse = jnp.logical_and(is_bonus_room, state.bonus_room_timer == 632)
+        floor_dropped = jnp.logical_and(is_bonus_room, state.bonus_room_timer >= 632)
+        room_col_map = jax.lax.select(floor_dropped, room_col_map.at[46:50, 4:156].set(0), room_col_map)
         
         platform_active_now = jnp.less(state.platform_cycle, self.consts.PLATFORM_ACTIVE_DURATION)
         previous_score = state.score
 
         # Amulet counter
-        new_amulet_time = jnp.where(is_active, jnp.maximum(state.amulet_time - 1, 0), state.amulet_time)
+        new_amulet_time = state.amulet_time
         is_amulet_active = new_amulet_time > 0
 
         is_up = jnp.logical_or(action == Action.UP, jnp.logical_or(action == Action.UPRIGHT, action == Action.UPLEFT))
@@ -730,6 +777,7 @@ class JaxMontezumaRevenge(JaxEnvironment[MontezumaRevengeState, MontezumaRevenge
                 jnp.logical_and(state.is_climbing == 0,
                     jnp.logical_and(state.is_jumping == 0,
                         state.out_of_ladder_delay == self.consts.OUT_OF_LADDER_DELAY))))
+        dy = jnp.where(bonus_collapse, 0, dy)
         dy = jnp.where(rope_release, 0, jnp.where(after_rope_release, 4, dy))
         dy = jnp.where(rope_top_exit, 46 - self.consts.PLAYER_HEIGHT - state.player_y,
             jnp.where(rope_top_drop, 8, dy))
@@ -737,6 +785,7 @@ class JaxMontezumaRevenge(JaxEnvironment[MontezumaRevengeState, MontezumaRevenge
             jnp.where(abort_ladder_top, l_top[jnp.maximum(ladder_idx, 0)] - 4, jnp.where(l_bottom[jnp.maximum(ladder_idx, 0)] <= 47, 46, l_bottom[jnp.maximum(ladder_idx, 0)])) - self.consts.PLAYER_HEIGHT - state.player_y, dy)
         dx = jnp.where(abort_ladder, 0, dx)
         new_is_jumping = jnp.where(new_jump_counter >= self.consts.JUMP_Y_OFFSETS.shape[0], 0, new_is_jumping)
+        new_is_jumping = jnp.where(bonus_collapse, 0, new_is_jumping)
         
         # 4. Resolve Vertical Collision
         new_y = state.player_y + dy
@@ -868,7 +917,7 @@ class JaxMontezumaRevenge(JaxEnvironment[MontezumaRevengeState, MontezumaRevenge
         # Set is_falling state
         new_is_falling = jnp.where(jnp.logical_and(new_is_jumping == 0, hit_floor == False), jnp.where(dy > 0, 1, 0), 0)
         new_is_falling = jnp.where(is_climbing == 1, 0, new_is_falling)
-        new_is_falling = jnp.where(rope_release, 1, new_is_falling)
+        new_is_falling = jnp.where(jnp.logical_or(rope_release, bonus_collapse), 1, new_is_falling)
         
         # 5. Resolve Horizontal with Wall Collision
         # The pit edge prepares a fall at the old horizontal anchor.
@@ -933,12 +982,43 @@ class JaxMontezumaRevenge(JaxEnvironment[MontezumaRevengeState, MontezumaRevenge
         # 5.5 Item Collection
         overlap_x_item = jnp.logical_and(new_left_x < state.items_x + 6, new_right_x >= state.items_x)
         overlap_y_item = jnp.logical_and(check_y_top < state.items_y + 8, check_y_bot >= state.items_y)
-        collect_item_mask = jnp.logical_and(state.items_active == 1, jnp.logical_and(overlap_x_item, overlap_y_item))
+        # Atari reads the previous rendered frame's collision result.
+        # The key's transparent outline cannot collide like a solid6x8 box.
+        airborne = jnp.logical_or(new_is_jumping == 1, new_is_falling == 1)
+        player_mask = jax.lax.select(airborne, self._key_player_jump_mask,
+                                     self._key_player_stand_mask)
+        flip_player = jnp.where(airborne, new_player_dir == 1, new_player_dir == -1)
+        player_mask = jax.lax.cond(flip_player, lambda: jnp.flip(player_mask, axis=1), lambda: player_mask)
+        py, px = jnp.indices(player_mask.shape)
+        key_px = state.player_x + px[None, :, :] - state.items_x[:, None, None]
+        key_py = state.player_y + py[None, :, :] - state.items_y[:, None, None]
+        inside_key = jnp.logical_and(jnp.logical_and(key_px >= 0, key_px < self._item_collision_masks.shape[2]),
+                                     jnp.logical_and(key_py >= 0, key_py < self._item_collision_masks.shape[1]))
+        key_pixels = self._item_collision_masks[state.items_type[:, None, None],
+            jnp.clip(key_py, 0, self._item_collision_masks.shape[1] - 1),
+            jnp.clip(key_px, 0, self._item_collision_masks.shape[2] - 1)]
+        key_overlap = jnp.any(jnp.logical_and(player_mask[None, :, :], jnp.logical_and(inside_key, key_pixels)), axis=(1, 2))
+        start_room_key = jnp.logical_and(state.room_id == 4, state.items_type == 0)
+        item_overlap = key_overlap
+        pending_pickup = jnp.arange(self.consts.MAX_ITEMS_PER_ROOM) == state.pickup_item_idx
+        collect_item_mask = jnp.logical_and(is_active, jnp.logical_and(
+            jnp.logical_and(state.items_active == 1, jnp.logical_not(pending_pickup)), item_overlap))
+        # ROM RAM52 pickup bit survives bonus respawns until the jump ends.
+        bonus_pose_reset = jnp.logical_or(hit_floor,
+            jnp.logical_and(state.is_jumping == 1, new_is_jumping == 0))
+        bonus_pickup_blocked = jnp.logical_and(is_bonus_room,
+            jnp.logical_and(state.bonus_pickup_latched, jnp.logical_not(bonus_pose_reset)))
+        collect_item_mask = jnp.logical_and(collect_item_mask, jnp.logical_not(bonus_pickup_blocked))
+        first_key_pickup = jnp.any(jnp.logical_and(start_room_key, collect_item_mask))
+        any_item_pickup = jnp.any(collect_item_mask)
 
-        item_scores = jnp.where(state.items_type == 0, 100, 
-                        jnp.where(state.items_type == 2, 100, 1000)) # Amulet score is 100
+        # Measured ALE rewards: key100, ruby1000, amulet200, sword100.
+        # Native type6 adds BCD29 plus carry, i.e.3000 points for a torch.
+        item_scores = jnp.array([100, 1000, 200, 100, 3000], dtype=jnp.int32)[state.items_type]
         new_score = state.score + jnp.sum(jnp.where(collect_item_mask, item_scores, 0))
-        new_items_active = jnp.where(collect_item_mask, 0, state.items_active)
+        # ALE keeps collected items visible through the pickup hold;
+        # remove it on the first resumed movement frame, without scoring twice.
+        new_items_active = jnp.where(pending_pickup, 0, state.items_active)
 
         # Inventory updates
         keys_collected = jnp.sum(jnp.where(jnp.logical_and(collect_item_mask, state.items_type == 0), 1, 0))
@@ -952,11 +1032,18 @@ class JaxMontezumaRevenge(JaxEnvironment[MontezumaRevengeState, MontezumaRevenge
         current_inventory = current_inventory.at[2].set(jnp.where(torch_collected, 1, current_inventory[2]))
         
         # Handle amulet time reset and disappearance
-        new_amulet_time = jnp.where(amulet_collected, self.consts.AMULET_DURATION, new_amulet_time)
+        amulet_duration = self.consts.AMULET_DURATION - jnp.where(self.consts.CUSTOM_ROOMS, 0,
+            jnp.mod(state.native_frame_count + 1 + 67, 8))
+        new_amulet_time = jnp.where(amulet_collected, amulet_duration, new_amulet_time)
         current_inventory = current_inventory.at[3].set(jnp.where(new_amulet_time > 0, 1, 0))
 
         # Door checks
-        in_x_door = jnp.logical_and(front_x >= state.doors_x, front_x < state.doors_x + 4)
+        measured_start_door = state.room_id == 4
+        door_contact_x = jnp.where(jnp.logical_or(measured_start_door, state.room_id == 26),
+            jnp.where(dx > 0, state.player_x + 7, state.player_x), front_x)
+        door_collision_x = state.doors_x + jnp.where(measured_start_door,
+            jnp.where(state.doors_x < 80, 4, -4), 0)
+        in_x_door = jnp.logical_and(door_contact_x >= door_collision_x, door_contact_x < door_collision_x + 4)
         in_y_door_top = jnp.logical_and(check_y_top >= state.doors_y, check_y_top < state.doors_y + 38)
         in_y_door_mid = jnp.logical_and(check_y_mid >= state.doors_y, check_y_mid < state.doors_y + 38)
         in_y_door_bot = jnp.logical_and(check_y_bot >= state.doors_y, check_y_bot < state.doors_y + 38)
@@ -974,17 +1061,21 @@ class JaxMontezumaRevenge(JaxEnvironment[MontezumaRevengeState, MontezumaRevenge
         hit_door_as_wall = jnp.logical_and(hit_door_mask, jnp.logical_not(open_door_mask))
         hit_wall = jnp.logical_or(hit_wall, jnp.any(hit_door_as_wall))
 
-        # Bonus Room Gem Spawning
+        # Bonus gems respawn after pickup cleanup using the free-running ROM
+        # byte. Rejected positions are retried on the next active tick.
         is_bonus_gem_collected = jnp.logical_and(is_bonus_room, collect_item_mask[0])
-        new_rng_key, subkey = jax.random.split(state.key)
-        random_x = jax.random.uniform(subkey, (), minval=19, maxval=140)
-        
-        new_items_x = jax.lax.select(is_bonus_gem_collected, state.items_x.at[0].set(random_x.astype(jnp.int32)), state.items_x)
-        new_items_active = jax.lax.select(is_bonus_gem_collected, new_items_active.at[0].set(1), new_items_active)
+        bonus_spawn_attempt = jnp.logical_and(is_bonus_room,
+            jnp.logical_and(state.bonus_room_timer < 632,
+                jnp.logical_and(new_items_active[0] == 0, is_active)))
+        bonus_spawn = jnp.logical_and(bonus_spawn_attempt,
+            jnp.logical_and(state.native_rng_a >= 16, state.native_rng_a < 136))
+        new_items_x = state.items_x.at[0].set(jnp.where(bonus_spawn,
+            state.native_rng_a - 1, state.items_x[0]))
+        new_items_active = new_items_active.at[0].set(jnp.where(bonus_spawn, 1, new_items_active[0]))
         new_first_gem_pickup = jnp.where(is_bonus_gem_collected, 1, state.first_gem_pickup)
-        # Increment timer every frame we are in the bonus room
-        new_bonus_room_timer = jax.lax.select(is_bonus_room, jnp.where(is_active, state.bonus_room_timer + 1, state.bonus_room_timer), 0)
+        new_bonus_room_timer = state.bonus_room_timer
         new_first_gem_pickup = jax.lax.select(is_bonus_room, new_first_gem_pickup, 0)
+        new_rng_key = state.key
 
         new_x = jnp.where(jnp.logical_or(hit_wall, is_climbing == 1), current_x, new_x)
         
@@ -1013,14 +1104,25 @@ class JaxMontezumaRevenge(JaxEnvironment[MontezumaRevengeState, MontezumaRevenge
         # 6. Enemy Movement
         # Move 1 pixel every 4 frames
         speed_enemy = jnp.where(jnp.logical_and(is_active, jnp.mod(state.frame_count, 4) == 0), 1, 0)
+        # Room5 initialization occupies the first frame after a room change.
+        # ALE's free-running clock ticks when the *previous* native frame is 0 mod4.
+        measured_room5 = jnp.logical_and(jnp.isin(state.room_id, jnp.array([5, 10])), not self.consts.CUSTOM_ROOMS)
+        room5_tick = jnp.logical_and(is_active, jnp.logical_and(
+            jnp.mod(state.native_frame_count, 4) == 0,
+            jnp.logical_not(state.room5_skull_spawn_pending)))
+        # Rolling skulls and spiders share ALE's free-running quarter clock.
+        measured_quarter_clock = jnp.logical_or(measured_room5, jnp.logical_or(state.room_id == 4, jnp.any(state.enemies_type == 3)))
+        speed_enemy = jnp.where(jnp.logical_and(measured_quarter_clock, not self.consts.CUSTOM_ROOMS), room5_tick.astype(jnp.int32), speed_enemy)
+        new_room5_phase = jnp.where(jnp.logical_and(measured_room5, room5_tick),
+            jnp.mod(state.room5_skull_phase + 1, 30), state.room5_skull_phase)
         raw_new_enemies_x = state.enemies_x + state.enemies_direction * speed_enemy
         
         # Bounce off walls
         hit_wall_left_enemy = jnp.logical_and(state.enemies_direction < 0, room_col_map[state.enemies_y + 8, jnp.clip(raw_new_enemies_x, 0, self.consts.WIDTH - 1)] == 1)
         hit_wall_right_enemy = jnp.logical_and(state.enemies_direction > 0, room_col_map[state.enemies_y + 8, jnp.clip(raw_new_enemies_x + 8, 0, self.consts.WIDTH - 1)] == 1)
         
-        hit_left_enemy = raw_new_enemies_x <= state.enemies_min_x
-        hit_right_enemy = raw_new_enemies_x >= state.enemies_max_x
+        hit_left_enemy = jnp.logical_and(state.enemies_direction < 0, raw_new_enemies_x <= state.enemies_min_x)
+        hit_right_enemy = jnp.logical_and(state.enemies_direction > 0, raw_new_enemies_x >= state.enemies_max_x)
         
         bounce_enemy = jnp.logical_and(is_active, jnp.logical_or(hit_left_enemy, jnp.logical_or(hit_right_enemy, jnp.logical_or(hit_wall_left_enemy, hit_wall_right_enemy))))
         
@@ -1031,9 +1133,14 @@ class JaxMontezumaRevenge(JaxEnvironment[MontezumaRevengeState, MontezumaRevenge
         
         # 7. Dying Mechanism (Fall Damage & Enemy Collision)
         fall_stopped = jnp.logical_and(state.is_falling == 1, new_is_falling == 0)
+        # B65B kills on landing after eight falling ticks. The final four
+        # pixels of stair anchor conversion are excluded from that count.
+        native_stair_fall = jnp.logical_and(not self.consts.CUSTOM_ROOMS,
+            state.room_id == 17)
         died_from_fall = jnp.logical_and(
             jnp.logical_and(fall_stopped, is_climbing == 0),
-            new_fall_distance > self.consts.MAX_FALL_DISTANCE
+            jnp.where(native_stair_fall, new_fall_distance >= self.consts.MAX_FALL_DISTANCE - 4,
+                new_fall_distance > self.consts.MAX_FALL_DISTANCE)
         )
 
         new_fall_distance = jnp.where(
@@ -1041,27 +1148,96 @@ class JaxMontezumaRevenge(JaxEnvironment[MontezumaRevengeState, MontezumaRevenge
             jnp.where(is_climbing == 0, new_fall_distance + dy, 0),
             0
         )
+        # The jump timer's final descent is not a B6A5 falling tick.
+        new_fall_distance = jnp.where(jnp.logical_and(native_stair_fall,
+            jnp.logical_and(state.is_jumping == 1, new_is_jumping == 0)), 0, new_fall_distance)
         
         # Vectorized enemy collision
-        e_bounce_offset = jnp.where(state.enemies_bouncing == 1, self.consts.BOUNCE_OFFSETS[jnp.mod(state.frame_count // 4, 22)], 0)
+        e_bounce_offset = enemy_bounce_offsets(state, self.consts)
         e_y_col = state.enemies_y - e_bounce_offset
         overlap_x_enemy = jnp.logical_and(new_left_x < new_enemies_x + 7, new_right_x >= new_enemies_x + 1)
         overlap_y_enemy = jnp.logical_and(check_y_top < e_y_col + 15, check_y_bot >= e_y_col + 1)
-        this_hit_enemy = jnp.logical_and(state.enemies_active == 1, jnp.logical_and(overlap_x_enemy, overlap_y_enemy))
+        # Native room20 snake jumps clear the transparent sprite outlines.
+        # TIA reports contact from the previous rendered player/enemy pixels.
+        walking = jnp.logical_and(state.player_vx != 0, jnp.logical_and(state.is_climbing == 0,
+            jnp.logical_and(state.is_jumping == 0, state.is_falling == 0)))
+        airborne = jnp.logical_or(jnp.logical_and(state.is_jumping == 1, state.jump_counter > 0), state.is_falling == 1)
+        landed_last_tick = jnp.logical_and(state.room_id == 18,
+            jnp.logical_and(state.jump_counter >= self.consts.JUMP_Y_OFFSETS.shape[0],
+                jnp.logical_and(state.is_jumping == 0, state.is_falling == 0)))
+        # ROM draw pointers retain the jump sprite for the landing tick.
+        airborne = jnp.logical_or(airborne, landed_last_tick)
+        player_idx = jnp.where(walking, 1 + ((state.native_frame_count + 68) // 4) % 2, 0)
+        # Preserve the previously matching room20 snake contact while the
+        # newly measured walking phase/bitmap is used for room10 skulls.
+        # This separate bitmap/phase also reproduces the ALE death at3745.
+        player_idx = jnp.where(jnp.logical_and(state.room_id == 20, walking),
+            1 + (state.frame_count // 4) % 2, player_idx)
+        player_idx = jnp.where(state.is_climbing == 1, 3 + (state.player_y // 4) % 2, player_idx)
+        player_idx = jnp.where(airborne, 7, player_idx)
+        player_pixels = self._player_collision_masks[player_idx]
+        player_pixels = jnp.where(jnp.logical_and(state.room_id == 20, player_idx == 2),
+            self._original_walk_1_collision_mask, player_pixels)
+        flip_pixels = jnp.where(jnp.logical_or(walking, airborne), state.player_dir == 1, state.player_dir == -1)
+        player_pixels = jax.lax.cond(flip_pixels, lambda: jnp.flip(player_pixels, axis=1), lambda: player_pixels)
+        snake_pixels = self._snake_collision_masks[(state.frame_count // 7) % 2]
+        snake_pixels = jnp.where((state.enemies_direction == -1)[:, None, None],
+            jnp.flip(snake_pixels, axis=1)[None, :, :], snake_pixels[None, :, :])
+        sy, sx = jnp.indices(player_pixels.shape)
+        snake_x = state.player_x + sx[None, :, :] - state.enemies_x[:, None, None]
+        snake_y = state.player_y + sy[None, :, :] - state.enemies_y[:, None, None]
+        inside_snake = jnp.logical_and(jnp.logical_and(snake_x >= 0, snake_x < snake_pixels.shape[2]),
+            jnp.logical_and(snake_y >= 0, snake_y < snake_pixels.shape[1]))
+        snake_contact_pixels = snake_pixels[jnp.arange(self.consts.MAX_ENEMIES_PER_ROOM)[:, None, None],
+            jnp.clip(snake_y, 0, snake_pixels.shape[1]-1), jnp.clip(snake_x, 0, snake_pixels.shape[2]-1)]
+        snake_contact = jnp.any(jnp.logical_and(player_pixels[None, :, :],
+            jnp.logical_and(inside_snake, snake_contact_pixels)), axis=(1, 2))
+        skull_pixels = self._skull_collision_masks[0]  # ROM type5 uses a fixed symmetric bitmap
+        next_bounce = enemy_bounce_offsets(state.replace(room5_skull_phase=new_room5_phase), self.consts)
+        skull_x = state.player_x + sx[None, :, :] - new_enemies_x[:, None, None]
+        skull_y = state.player_y + sy[None, :, :] - (state.enemies_y - next_bounce)[:, None, None]
+        inside_skull = jnp.logical_and(jnp.logical_and(skull_x >= 0, skull_x < skull_pixels.shape[1]),
+            jnp.logical_and(skull_y >= 0, skull_y < skull_pixels.shape[0]))
+        skull_contact = jnp.any(jnp.logical_and(player_pixels[None, :, :],
+            jnp.logical_and(inside_skull, skull_pixels[jnp.clip(skull_y, 0, skull_pixels.shape[0]-1),
+                jnp.clip(skull_x, 0, skull_pixels.shape[1]-1)])), axis=(1, 2))
+        enemy_contact = jnp.where(jnp.logical_and(jnp.isin(state.room_id, jnp.array([18, 20])), state.enemies_type == 4),
+            snake_contact, jnp.logical_and(overlap_x_enemy, overlap_y_enemy))
+        enemy_contact = jnp.where(jnp.logical_and(state.room_id == 10, state.enemies_type == 1),
+            skull_contact, enemy_contact)
+        this_hit_enemy = jnp.logical_and(state.enemies_active == 1, enemy_contact)
         
         # Neutralize enemy collision if amulet is active
-        this_hit_enemy = jnp.logical_and(this_hit_enemy, jnp.logical_not(is_amulet_active))
+        this_hit_enemy = jnp.logical_and(is_active, jnp.logical_and(this_hit_enemy, jnp.logical_not(is_amulet_active)))
 
         has_sword = current_inventory[1] > 0
-        kill_enemy_mask = jnp.logical_and(this_hit_enemy, has_sword)
+        # Native swords kill skulls and spiders; snakes remain lethal.
+        sword_vulnerable = jnp.logical_or(state.enemies_type == 1, state.enemies_type == 3)
+        kill_enemy_mask = jnp.logical_and(this_hit_enemy, jnp.logical_and(has_sword, sword_vulnerable))
         kill_order = jnp.cumsum(kill_enemy_mask.astype(jnp.int32))
         actually_killed_mask = jnp.logical_and(kill_enemy_mask, kill_order <= current_inventory[1])
         
         died_from_enemy = jnp.any(jnp.logical_and(this_hit_enemy, jnp.logical_not(actually_killed_mask)))
-        new_enemies_active = jnp.where(this_hit_enemy, 0, state.enemies_active)
+        # A fatal collision does not kill or permanently remove the enemy.
+        new_enemies_active = jnp.where(actually_killed_mask, 0, state.enemies_active)
+        # Room20 snakes stay visible throughout death and respawn, then
+        # the touched snake disappears on the first resumed native frame.
+        # This is death cleanup, with no sword use or kill reward.
+        cleanup_enemy = jnp.logical_and(state.room_id == 20, jnp.logical_and(
+            state.death_timer == 0, state.respawn_enemy_idx >= 0))
+        cleanup_mask = jnp.logical_and(cleanup_enemy,
+            jnp.arange(self.consts.MAX_ENEMIES_PER_ROOM) == state.respawn_enemy_idx)
+        new_enemies_active = jnp.where(cleanup_mask, 0, new_enemies_active)
         swords_used = jnp.sum(actually_killed_mask.astype(jnp.int32))
         current_inventory = current_inventory.at[1].add(-swords_used)
-        new_score = new_score + jnp.sum(jnp.where(actually_killed_mask, self.consts.KILL_ENEMY_REWARD, 0))
+        # Keep the explicit uniform-reward override used by reward mods.
+        if self.consts.KILL_ENEMY_REWARD is None:
+            enemy_scores = jnp.where(state.enemies_type == 3,
+                                     self.consts.KILL_SPIDER_REWARD,
+                                     self.consts.KILL_SKULL_REWARD)
+        else:
+            enemy_scores = self.consts.KILL_ENEMY_REWARD
+        new_score = new_score + jnp.sum(jnp.where(actually_killed_mask, enemy_scores, 0))
 
         # Laser Collision
         # Update laser and platform cycles
@@ -1073,28 +1249,41 @@ class JaxMontezumaRevenge(JaxEnvironment[MontezumaRevengeState, MontezumaRevenge
         l_active_las = jnp.logical_and(state.lasers_active == 1, laser_active_now)
         overlap_x_las = jnp.logical_and(new_left_x < state.lasers_x + 4, new_right_x >= state.lasers_x)
         overlap_y_las = jnp.logical_and(check_y_top < 46, check_y_bot >= 7)
-        died_from_laser = jnp.any(jnp.logical_and(l_active_las, jnp.logical_and(overlap_x_las, overlap_y_las)))
+        died_from_laser = jnp.logical_and(~is_amulet_active,
+            jnp.any(jnp.logical_and(l_active_las, jnp.logical_and(overlap_x_las, overlap_y_las))))
         
         is_pit_room = jnp.any(state.room_id == jnp.array([19, 27, 29, 31]))
-        died_from_pit = jnp.logical_and(is_pit_room, jnp.logical_and(player_feet_y >= 110, jnp.logical_not(on_ground)))
+        died_from_pit = jnp.logical_and(is_pit_room,
+            jnp.logical_and(state.is_falling == 1, state.player_y + 47 > 100))
 
         player_died = jnp.logical_or(died_from_fall, jnp.logical_or(died_from_enemy, jnp.logical_or(died_from_laser, died_from_pit)))
         
         start_death = jnp.logical_and(state.death_timer == 0, player_died)
-        new_death_timer = jnp.where(start_death, self.consts.DEATH_TIMER_FRAMES, 
+        # ALE resumes after at least50 ticks, on a fixed four-frame cadence.
+        death_wait = self.consts.DEATH_TIMER_FRAMES + jnp.mod(-(state.native_frame_count + 1), 4)
+        new_death_timer = jnp.where(start_death, death_wait,
                                     jnp.where(state.death_timer > 0, state.death_timer - 1, 0))
         
         death_type = jnp.where(died_from_fall, 1, jnp.where(died_from_enemy, 2, jnp.where(died_from_laser, 3, jnp.where(died_from_pit, 1, 0))))
         new_death_type = jnp.where(start_death, death_type, jnp.where(new_death_timer == 0, 0, state.death_type))
 
-        respawn_now = jnp.logical_and(state.death_timer == 1, new_death_timer == 0)
+        final_death = jnp.logical_and(jnp.logical_or(state.game_over_pending,
+            jnp.logical_and(start_death, state.lives == 0)), not self.consts.CUSTOM_ROOMS)
+        respawn_now = jnp.logical_and(jnp.logical_and(state.death_timer == 1, new_death_timer == 0), ~final_death)
         
         spawn_x = state.entry_x
         spawn_y = state.entry_y
         
-        new_lives = jnp.where(start_death, state.lives - 1, state.lives)
-        final_x = jnp.where(respawn_now, spawn_x, jnp.where(new_death_timer > 0, state.player_x, new_x))
-        final_y = jnp.where(respawn_now, spawn_y, jnp.where(new_death_timer > 0, state.player_y, new_y))
+        extra_lives = jnp.sum(new_score // 10000 - state.score // 10000)
+        # ALE ends the last life after the death hold, without respawning.
+        lose_life = jnp.logical_or(jnp.logical_and(start_death, ~final_death),
+            jnp.logical_and(final_death, state.death_timer == 1))
+        new_lives = jnp.where(lose_life, state.lives - 1, state.lives) + extra_lives
+        final_x = jnp.where(respawn_now, spawn_x, jnp.where(state.death_timer > 0, state.player_x, new_x))
+        final_x = jnp.where(jnp.logical_and(not self.consts.CUSTOM_ROOMS,
+            jnp.logical_and(start_death, died_from_fall)), state.player_x, final_x)
+        final_y = jnp.where(respawn_now, spawn_y, jnp.where(state.death_timer > 0, state.player_y, new_y))
+        final_y = jnp.where(jnp.logical_and(start_death, died_from_pit), 49, final_y)
         final_vx = jnp.where(jnp.logical_or(respawn_now, new_death_timer > 0), 0, current_vx)
         final_vy = jnp.where(jnp.logical_or(respawn_now, new_death_timer > 0), 0, dy)
         final_player_dir = jnp.where(respawn_now, 1, jnp.where(new_death_timer > 0, state.player_dir, new_player_dir))
@@ -1114,15 +1303,55 @@ class JaxMontezumaRevenge(JaxEnvironment[MontezumaRevengeState, MontezumaRevenge
         fall_after_jump = jnp.where(final_is_falling == 1, fall_after_jump, 0)
 
         transition_any = jnp.logical_or(jnp.logical_or(transition_left, transition_right), jnp.logical_or(transition_down, transition_up))
+        carry = (state.room_id >= 24).astype(jnp.int32)
+        carry = jnp.where(jnp.logical_and(is_bonus_room, bonus_spawn_attempt), state.native_rng_a >= 136, carry)
+        rope_path = jnp.logical_and(state.last_rope >= 0,
+            jnp.logical_and(state.is_climbing == 1, jnp.logical_or(ladder_down, jnp.logical_not(jnp.logical_or(is_up, jnp.logical_or(is_down, jnp.logical_or(is_left, is_right)))))))
+        rope_path = jnp.logical_or(rope_path, jnp.logical_and(is_climbing_rope, ladder_down))
+        carry = jnp.where(jnp.logical_or(rope_path, rope_top_exit), 1, carry)
+        carry = jnp.where(jnp.logical_and(last_jump_frame, jnp.logical_and(ladder_up,
+            jnp.any(jnp.logical_and(state.ropes_active == 1,
+                jnp.logical_and(r_x + r_width >= state.player_x,
+                    jnp.logical_and(r_x < state.player_x + 8, intersect_y_rope)))))), 1, carry)
+        fall_carry = jnp.where(jnp.logical_or(jnp.logical_or(hit_floor, start_death), is_climbing_rope), 0, 1)
+        right_air_drift = jnp.logical_and(state.player_vx > 0,
+            jnp.logical_and(state.fall_after_jump == 1, (state.native_frame_count + 1 + 67) % 2 == 0))
+        fall_carry = jnp.where(right_air_drift, new_x >= self.consts.WIDTH - 9, fall_carry)
+        # Standing dispatch can prepare mode7 before any falling motion.
+        # Its next contact still follows the standing path, including carry.
+        carry = jnp.where(jnp.logical_and(jnp.isin(state.native_mode, jnp.array([7, 8])),
+            state.is_falling == 1), fall_carry, carry)
+        pickup_carry = jnp.where(jnp.logical_or(amulet_collected, torch_collected), 1,
+            jnp.where(keys_collected > 0, state.inventory[0] == 0, 0))
+        carry = jnp.where(any_item_pickup, pickup_carry, carry)
+        carry = jnp.where(jnp.logical_or(num_opened > 0, jnp.any(actually_killed_mask)), 0, carry)
+        carry = jnp.where(start_death, jnp.where(died_from_pit, 0, 1), carry)
+        carry = jnp.where(transition_any, jnp.logical_or(transition_left, transition_up), carry)
         next_mode = jnp.where(transition_any, 2,
-            jnp.where(new_death_timer > 0, 6, jnp.where(final_is_falling == 1, 7, 4)))
+            jnp.where(jnp.logical_or(new_death_timer > 0,
+                jnp.logical_or(any_item_pickup, jnp.logical_or(num_opened > 0, jnp.any(actually_killed_mask)))), 6,
+                jnp.where(final_is_falling == 1, 7, 4)))
         next_mode = jnp.where(new_death_timer == 1, 2, next_mode)
+        next_mode = jnp.where(jnp.logical_and(final_death,
+            jnp.logical_and(state.death_timer > 0, new_death_timer <= 1)), 5, next_mode)
+        # B75E samples FIRE in game-over dispatch too; a new press prepares
+        # mode0 on the terminal frame without running another episode.
+        next_mode = jnp.where(jnp.logical_and(state.native_mode == 5,
+            jnp.logical_and(is_fire, ~state.prev_is_fire)), 0, next_mode)
         state = state.replace(
-            native_mode=next_mode.astype(jnp.int32),
+            native_mode=next_mode.astype(jnp.int32), native_rng_carry=carry.astype(jnp.int32),
+            game_over_pending=final_death,
             lives=new_lives,
             score=new_score,
-            player_x=final_x,
-            player_y=final_y,
+            respawn_enemy_idx=jnp.where(
+                jnp.logical_and(start_death, jnp.logical_and(state.room_id == 20, died_from_enemy)),
+                jnp.argmax(this_hit_enemy.astype(jnp.int32)),
+                jnp.where(cleanup_enemy, -1, state.respawn_enemy_idx)),
+            pickup_timer=jnp.where(jnp.logical_or(jnp.logical_or(any_item_pickup, num_opened > 0), jnp.any(actually_killed_mask)),
+                2 + jnp.mod(-(state.native_frame_count + 1), 4), 0),
+            pickup_item_idx=jnp.where(any_item_pickup, jnp.argmax(collect_item_mask.astype(jnp.int32)), -1),
+            player_x=jnp.where(num_opened > 0, state.player_x, final_x),
+            player_y=jnp.where(num_opened > 0, state.player_y, final_y),
             player_vx=final_vx,
             player_vy=final_vy,
             player_dir=final_player_dir,
@@ -1138,9 +1367,13 @@ class JaxMontezumaRevenge(JaxEnvironment[MontezumaRevengeState, MontezumaRevenge
             is_falling=final_is_falling,
             fall_distance=final_fall_distance,
             frame_count=jnp.where(is_active, state.frame_count + 1, state.frame_count),
+            room5_skull_phase=new_room5_phase,
+            room5_skull_spawn_pending=jnp.where(is_active, False, state.room5_skull_spawn_pending),
             enemies_x=new_enemies_x,
             enemies_active=new_enemies_active,
             enemies_direction=new_enemies_direction,
+            rolling_skull_direction=jnp.where(jnp.any(jnp.logical_and(is_active, state.enemies_type == 1)),
+                new_enemies_direction[jnp.argmax(jnp.logical_and(is_active, state.enemies_type == 1))], state.rolling_skull_direction),
             inventory=current_inventory,
             amulet_time=new_amulet_time,
             items_x=new_items_x,
@@ -1152,6 +1385,9 @@ class JaxMontezumaRevenge(JaxEnvironment[MontezumaRevengeState, MontezumaRevenge
             death_type=new_death_type,
             bonus_room_timer=new_bonus_room_timer,
             first_gem_pickup=new_first_gem_pickup,
+            bonus_pickup_latched=jnp.logical_and(is_bonus_room,
+                jnp.logical_and(jnp.logical_or(state.bonus_pickup_latched, is_bonus_gem_collected),
+                    jnp.logical_not(bonus_pose_reset))),
             key=new_rng_key
         )
 
@@ -1268,7 +1504,7 @@ class JaxMontezumaRevenge(JaxEnvironment[MontezumaRevengeState, MontezumaRevenge
             active=jnp.array([1])
         )
 
-        bounce = jnp.where(state.enemies_bouncing == 1, self.consts.BOUNCE_OFFSETS[jnp.mod(state.frame_count // 4, 22)], 0)
+        bounce = enemy_bounce_offsets(state, self.consts)
         enemies_obs = ObjectObservation.create(
             x=state.enemies_x,
             y=state.enemies_y + room_y - bounce,

@@ -30,7 +30,7 @@ def test_death_by_falling(montezuma_env):
         if state.death_timer > 0:
             break
             
-    assert state.death_timer == env.consts.DEATH_TIMER_FRAMES
+    assert state.death_timer == env.consts.DEATH_TIMER_FRAMES + (-state.native_frame_count) % 4
     assert state.death_type == 1 # died_from_fall
     assert state.lives == initial_lives - 1
 
@@ -54,7 +54,7 @@ def test_death_by_enemy(montezuma_env):
     
     obs, state, reward, done, info = env.step(state, 0) # NOOP
     
-    assert state.death_timer == env.consts.DEATH_TIMER_FRAMES
+    assert state.death_timer == env.consts.DEATH_TIMER_FRAMES + (-state.native_frame_count) % 4
     assert state.death_type == 2 # died_from_enemy
     assert state.lives == initial_lives - 1
 
@@ -80,7 +80,7 @@ def test_death_by_laser(montezuma_env):
     
     obs, state, reward, done, info = env.step(state, 0) # NOOP
     
-    assert state.death_timer == env.consts.DEATH_TIMER_FRAMES
+    assert state.death_timer == env.consts.DEATH_TIMER_FRAMES + (-state.native_frame_count) % 4
     assert state.death_type == 3 # died_from_laser
     assert state.lives == initial_lives - 1
 

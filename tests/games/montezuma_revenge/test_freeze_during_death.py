@@ -33,7 +33,7 @@ def test_enemies_freeze_during_death(montezuma_env):
     # I'll check if it moved
     assert state.enemies_x[0] == enemy_x_at_death, f"Enemy moved during death! {enemy_x_at_death} -> {state.enemies_x[0]}"
 
-def test_lasers_freeze_during_death(montezuma_env):
+def test_laser_clock_continues_during_death(montezuma_env):
     env = montezuma_env
     key = jax.random.PRNGKey(0)
     obs, state = env.reset(key)
@@ -46,7 +46,8 @@ def test_lasers_freeze_during_death(montezuma_env):
         player_y=jnp.array(20, dtype=jnp.int32),
         lasers_x=state.lasers_x.at[0].set(40),
         lasers_active=state.lasers_active.at[0].set(1),
-        laser_cycle=jnp.array(0, dtype=jnp.int32)
+        native_frame_count=jnp.array(59, dtype=jnp.int32),
+        laser_cycle=jnp.array(90, dtype=jnp.int32)
     )
     
     obs, state, reward, done, info = env.step(state, 0)
@@ -58,8 +59,8 @@ def test_lasers_freeze_during_death(montezuma_env):
     obs, state, reward, done, info = env.step(state, 0)
     assert state.death_timer > 0
     
-    assert state.laser_cycle == laser_cycle_at_death, f"Laser cycle incremented during death! {laser_cycle_at_death} -> {state.laser_cycle}"
+    assert state.laser_cycle == (laser_cycle_at_death + 1) % 128
 
 if __name__ == "__main__":
     test_enemies_freeze_during_death()
-    test_lasers_freeze_during_death()
+    test_laser_clock_continues_during_death()

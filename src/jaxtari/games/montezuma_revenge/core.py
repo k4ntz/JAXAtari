@@ -63,11 +63,18 @@ class MontezumaRevengeConstants(struct.PyTreeNode):
     OUT_OF_LADDER_DELAY: int = struct.field(pytree_node=False, default=5)
     MAX_FALL_DISTANCE: int = struct.field(pytree_node=False, default=20) # ladder_height (39) - 6
     BOUNCE_OFFSETS: jnp.ndarray = struct.field(pytree_node=False, default_factory=lambda: jnp.array([0, 3, 6, 9, 12, 15, 18, 21, 24, 27, 27, 27, 27, 24, 21, 18, 15, 12, 9, 6, 3, 0], dtype=jnp.int32))
-    DEATH_TIMER_FRAMES: int = struct.field(pytree_node=False, default=70)
+    # ALE room2 (our room5): 30 quarter-rate ticks, with the apex at entry.
+    ROOM5_BOUNCE_OFFSETS: jnp.ndarray = struct.field(pytree_node=False, default_factory=lambda: jnp.array(
+        [25, 25, 25, 24, 23, 22, 21, 19, 17, 15, 13, 10, 7, 4, 0, 0,
+         4, 7, 10, 13, 15, 17, 19, 21, 22, 23, 24, 25, 25, 25], dtype=jnp.int32))
+    DEATH_TIMER_FRAMES: int = struct.field(pytree_node=False, default=50)
     PLATFORM_ACTIVE_DURATION: int = struct.field(pytree_node=False, default=92) # For spawning and disappearing platform
     PLATFORM_CYCLE_LENGTH: int = struct.field(pytree_node=False, default=128)
-    AMULET_DURATION: int = struct.field(pytree_node=False, default=660)
-    KILL_ENEMY_REWARD: int = struct.field(pytree_node=False, default=100)
+    AMULET_DURATION: int = struct.field(pytree_node=False, default=640)
+    # None selects native rewards; mods may still override all kills uniformly.
+    KILL_ENEMY_REWARD: int | None = struct.field(pytree_node=False, default=None)
+    KILL_SKULL_REWARD: int = struct.field(pytree_node=False, default=2000)
+    KILL_SPIDER_REWARD: int = struct.field(pytree_node=False, default=3000)
 
 @struct.dataclass
 class MontezumaRevengeState:
@@ -157,12 +164,38 @@ class MontezumaRevengeState:
     bonus_room_timer: jnp.ndarray
     first_gem_pickup: jnp.ndarray
     key: jrandom.PRNGKey
+    game_over_pending: jnp.ndarray = False
+    # First-key pickup bookkeeping; elapsed native ticks include frozen poses.
+    pickup_timer: jnp.ndarray = struct.field(default_factory=lambda: jnp.int32(0))
+    pickup_item_idx: jnp.ndarray = struct.field(default_factory=lambda: jnp.int32(-1))
+    rolling_skull_direction: jnp.ndarray = struct.field(default_factory=lambda: jnp.int32(-1))
     native_frame_count: jnp.ndarray = struct.field(default_factory=lambda: jnp.int32(0))
+    # ROM random bytes and dispatch state; free-running even during holds.
+    bonus_pickup_latched: jnp.ndarray = False
     jump_type: jnp.ndarray = struct.field(default_factory=lambda: jnp.int32(0))
+    native_rng_a: jnp.ndarray = struct.field(default_factory=lambda: jnp.int32(109))
+    native_rng_b: jnp.ndarray = struct.field(default_factory=lambda: jnp.int32(212))
     native_mode: jnp.ndarray = struct.field(default_factory=lambda: jnp.int32(4))
+    native_rng_carry: jnp.ndarray = struct.field(default_factory=lambda: jnp.int32(0))
+    respawn_enemy_idx: jnp.ndarray = struct.field(default_factory=lambda: jnp.int32(-1))
+
+    # Room5 bounce age resets on entry; its movement clock remains global.
+    room5_skull_phase: jnp.ndarray = struct.field(default_factory=lambda: jnp.int32(0))
+    room5_skull_spawn_pending: jnp.ndarray = struct.field(default_factory=lambda: jnp.bool_(False))
+
     transition_pending: jnp.ndarray = struct.field(default_factory=lambda: jnp.int32(0))
     transition_x: jnp.ndarray = struct.field(default_factory=lambda: jnp.int32(0))
     transition_y: jnp.ndarray = struct.field(default_factory=lambda: jnp.int32(0))
+
+
+def enemy_bounce_offsets(state: MontezumaRevengeState, consts: MontezumaRevengeConstants):
+    """Shared native/render/observation height; preserve unmeasured rooms."""
+    legacy = consts.BOUNCE_OFFSETS[jnp.mod(state.frame_count // 4, 22)]
+    room5 = consts.ROOM5_BOUNCE_OFFSETS[state.room5_skull_phase]
+    measured_room = jnp.logical_and(jnp.isin(state.room_id, jnp.array([5, 10])), not consts.CUSTOM_ROOMS)
+    offset = jnp.where(measured_room, room5, legacy)
+    return jnp.where(state.enemies_bouncing == 1, offset, 0)
+
 
 @struct.dataclass
 class MontezumaRevengeObservation:

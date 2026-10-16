@@ -160,12 +160,14 @@ def load_room(room_id: jnp.ndarray, state: MontezumaRevengeState, consts: Montez
         ix = config.items_x
         iy = config.items_y
         ia = config.items_active
-        ex = config.enemies_x.at[0].set(93)
+        ex = config.enemies_x.at[0].set(90)
         ey = config.enemies_y.at[0].set(119)
         ea = config.enemies_active.at[0].set(1)
-        ed = config.enemies_direction.at[0].set(1)
-        eminx = config.enemies_min_x.at[0].set(55)
-        emaxx = config.enemies_max_x.at[0].set(100)
+        ed = config.enemies_direction.at[0].set(-1)
+        # Reversal attempts hold the last legal pixel for one movement tick.
+        # ALE's first-room skull visits x=54..104, including both endpoints.
+        eminx = config.enemies_min_x.at[0].set(53)
+        emaxx = config.enemies_max_x.at[0].set(105)
         
         lx = lx.at[0].set(72)
         lt = lt.at[0].set(50)
@@ -235,19 +237,20 @@ def load_room(room_id: jnp.ndarray, state: MontezumaRevengeState, consts: Montez
         lb = config.ladders_bottom
         la = config.ladders_active
 
-        ex = config.enemies_x.at[0].set(112)
-        ey = config.enemies_y.at[0].set(33)
+        # Native pair: fixed +16 duplicate; base top79, entry apex54.
+        ex = config.enemies_x.at[0].set(115)
+        ey = config.enemies_y.at[0].set(32)
         ea = config.enemies_active.at[0].set(1)
         ed = config.enemies_direction.at[0].set(-1)
-        eminx = config.enemies_min_x.at[0].set(10)
-        emaxx = config.enemies_max_x.at[0].set(124)
+        eminx = config.enemies_min_x.at[0].set(4)
+        emaxx = config.enemies_max_x.at[0].set(132)
 
-        ex = ex.at[1].set(95)
-        ey = ey.at[1].set(33)
+        ex = ex.at[1].set(131)
+        ey = ey.at[1].set(32)
         ea = ea.at[1].set(1)
         ed = ed.at[1].set(-1)
-        eminx = eminx.at[1].set(4)
-        emaxx = emaxx.at[1].set(118)
+        eminx = eminx.at[1].set(20)
+        emaxx = emaxx.at[1].set(148)
 
         lx = lx.at[0].set(72)
         lt = lt.at[0].set(50)
@@ -277,8 +280,8 @@ def load_room(room_id: jnp.ndarray, state: MontezumaRevengeState, consts: Montez
         lb = config.ladders_bottom
         la = config.ladders_active
 
-        ex = config.enemies_x.at[0].set(92)
-        ey = config.enemies_y.at[0].set(36)
+        ex = config.enemies_x.at[0].set(89)
+        ey = config.enemies_y.at[0].set(35)
         ea = config.enemies_active.at[0].set(1)
         ed = config.enemies_direction.at[0].set(-1)
         eminx = config.enemies_min_x.at[0].set(4)
@@ -312,15 +315,15 @@ def load_room(room_id: jnp.ndarray, state: MontezumaRevengeState, consts: Montez
         lb = config.ladders_bottom
         la = config.ladders_active
 
-        ex = config.enemies_x.at[0].set(30)
-        ey = config.enemies_y.at[0].set(33)
+        ex = config.enemies_x.at[0].set(59)
+        ey = config.enemies_y.at[0].set(32)
         ea = config.enemies_active.at[0].set(1)
         ed = config.enemies_direction.at[0].set(1)
         eminx = config.enemies_min_x.at[0].set(8)
         emaxx = config.enemies_max_x.at[0].set(155)
 
-        ex = ex.at[1].set(47)
-        ey = ey.at[1].set(33)
+        ex = ex.at[1].set(75)
+        ey = ey.at[1].set(32)
         ea = ea.at[1].set(1)
         ed = ed.at[1].set(1)
         eminx = eminx.at[1].set(8)
@@ -357,12 +360,12 @@ def load_room(room_id: jnp.ndarray, state: MontezumaRevengeState, consts: Montez
         iy = config.items_y
         ia = config.items_active
 
-        ex = config.enemies_x.at[0].set(93)
-        ey = config.enemies_y.at[0].set(69)
+        ex = config.enemies_x.at[0].set(91)
+        ey = config.enemies_y.at[0].set(71)
         ea = config.enemies_active.at[0].set(1)
         ed = config.enemies_direction.at[0].set(-1)
-        eminx = config.enemies_min_x.at[0].set(48)
-        emaxx = config.enemies_max_x.at[0].set(105)
+        eminx = config.enemies_min_x.at[0].set(54)
+        emaxx = config.enemies_max_x.at[0].set(106)
 
         lx = lx.at[0].set(72)
         lt = lt.at[0].set(128)
@@ -509,14 +512,14 @@ def load_room(room_id: jnp.ndarray, state: MontezumaRevengeState, consts: Montez
         la = la.at[0].set(1)
 
         ex = config.enemies_x.at[0].set(18)
-        ey = config.enemies_y.at[0].set(35) # Floor is at 48, snake height is 13. 48-13=35
+        ey = config.enemies_y.at[0].set(33) # Floor is at 48, snake height is 13. 48-13=35
         ea = config.enemies_active.at[0].set(1)
         ed = config.enemies_direction.at[0].set(0) # Static snake
         eminx = config.enemies_min_x.at[0].set(18)
         emaxx = config.enemies_max_x.at[0].set(47)
 
         ex = ex.at[1].set(50)
-        ey = ey.at[1].set(35)
+        ey = ey.at[1].set(33)
         ea = ea.at[1].set(1)
         ed = ed.at[1].set(0) # Static snake
         eminx = eminx.at[1].set(50)
@@ -657,14 +660,14 @@ def load_room(room_id: jnp.ndarray, state: MontezumaRevengeState, consts: Montez
 
         # Two snakes
         ex = config.enemies_x.at[0].set(44)
-        ey = config.enemies_y.at[0].set(35) # Floor at 48, snake height 13 -> 35
+        ey = config.enemies_y.at[0].set(33) # ALE visible snake top is screen80
         ea = config.enemies_active.at[0].set(1)
         ed = config.enemies_direction.at[0].set(0) # Static snake
         eminx = config.enemies_min_x.at[0].set(44)
         emaxx = config.enemies_max_x.at[0].set(51)
 
         ex = ex.at[1].set(108)
-        ey = ey.at[1].set(35)
+        ey = ey.at[1].set(33)
         ea = ea.at[1].set(1)
         ed = ed.at[1].set(0)
         eminx = eminx.at[1].set(108)
@@ -721,8 +724,8 @@ def load_room(room_id: jnp.ndarray, state: MontezumaRevengeState, consts: Montez
         lb = lb.at[1].set(149)
         la = la.at[1].set(1)
 
-        ex = config.enemies_x.at[0].set(100)
-        ey = config.enemies_y.at[0].set(36)
+        ex = config.enemies_x.at[0].set(99)
+        ey = config.enemies_y.at[0].set(35)
         ea = config.enemies_active.at[0].set(1)
         ed = config.enemies_direction.at[0].set(-1)
         eminx = config.enemies_min_x.at[0].set(4)
@@ -914,7 +917,7 @@ def load_room(room_id: jnp.ndarray, state: MontezumaRevengeState, consts: Montez
         iy = iy.at[0].set(7)
         ia = ia.at[0].set(1)
 
-        ix = ix.at[1].set(77)
+        ix = ix.at[1].set(75)
         iy = iy.at[1].set(7)
         ia = ia.at[1].set(1)
 
@@ -939,7 +942,7 @@ def load_room(room_id: jnp.ndarray, state: MontezumaRevengeState, consts: Montez
         ia = config.items_active
 
         # Amulet position
-        ix = ix.at[0].set(17)
+        ix = ix.at[0].set(15)
         iy = iy.at[0].set(7)
         ia = ia.at[0].set(1)
         
@@ -965,8 +968,8 @@ def load_room(room_id: jnp.ndarray, state: MontezumaRevengeState, consts: Montez
         lb = config.ladders_bottom
         la = config.ladders_active
 
-        ex = config.enemies_x.at[0].set(60)
-        ey = config.enemies_y.at[0].set(36)
+        ex = config.enemies_x.at[0].set(59)
+        ey = config.enemies_y.at[0].set(35)
         ea = config.enemies_active.at[0].set(1)
         ed = config.enemies_direction.at[0].set(1)
         eminx = config.enemies_min_x.at[0].set(4)
@@ -1059,9 +1062,13 @@ def load_room(room_id: jnp.ndarray, state: MontezumaRevengeState, consts: Montez
 
     return state.replace(
         room_id=room_id,
+        room5_skull_phase=jnp.int32(0),
+        room5_skull_spawn_pending=jnp.logical_or(room_id == 5, room_id == 10),
         enemies_x=config.enemies_x,
         enemies_y=config.enemies_y,
-        enemies_direction=config.enemies_direction,
+        # Enemy position resets on entry, but the rolling direction survives.
+        enemies_direction=jnp.where(room_id == 4,
+            config.enemies_direction.at[0].set(state.rolling_skull_direction), config.enemies_direction),
         enemies_min_x=config.enemies_min_x,
         enemies_max_x=config.enemies_max_x,
         enemies_bouncing=config.enemies_bouncing,

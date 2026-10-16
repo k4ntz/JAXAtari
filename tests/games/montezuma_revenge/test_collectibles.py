@@ -12,18 +12,28 @@ def test_collect_key(montezuma_env):
     from jaxtari.games.montezuma_revenge.rooms import load_room
     state = load_room(jnp.array(14, dtype=jnp.int32), state, env.consts)
     
-    # Place player at the key
+    # Jump from the upper floor into the key.
     state = state.replace(
         player_x=jnp.array(128, dtype=jnp.int32),
-        player_y=jnp.array(7, dtype=jnp.int32)
+        player_y=jnp.array(26, dtype=jnp.int32)
     )
     
-    # Step NOOP to collect
+    for action in (1, 0, 0):
+        obs, state, reward, done, info = env.step(state, action)
+
     obs, state, reward, done, info = env.step(state, 0)
     
     assert state.inventory[0] == initial_keys + 1
-    assert state.items_active[0] == 0
+    assert state.items_active[0] == obs.items.active[0] == 1
     assert reward == 100
+
+    # The item remains visible throughout the pickup hold.
+    for _ in range(int(state.pickup_timer)):
+        obs, state, _, _, _ = env.step(state, 0)
+        assert state.items_active[0] == obs.items.active[0] == 1
+    obs, state, _, _, _ = env.step(state, 0)
+    assert state.items_active[0] == obs.items.active[0] == 0
+    assert state.inventory[0] == initial_keys + 1
 
 def test_open_door(montezuma_env):
     env = montezuma_env
@@ -68,7 +78,7 @@ def test_collect_sword(montezuma_env):
     obs, state, reward, done, info = env.step(state, 0)
     
     assert state.inventory[1] == 1
-    assert reward == 1000
+    assert reward == 100
 
 def test_kill_enemy_with_sword(montezuma_env):
     env = montezuma_env
@@ -141,12 +151,22 @@ def test_collect_torch(montezuma_env):
     
     state = state.replace(
         player_x=jnp.array(77, dtype=jnp.int32),
-        player_y=jnp.array(7, dtype=jnp.int32)
+        player_y=jnp.array(26, dtype=jnp.int32)
     )
     
+    for action in (1, 0, 0, 0):
+        obs, state, reward, done, info = env.step(state, action)
+
     obs, state, reward, done, info = env.step(state, 0)
     
     # inventory[2] is the torch
     assert state.inventory[2] == 1
-    assert state.items_active[0] == 0
+    assert state.items_active[0] == obs.items.active[0] == 1
+
+    # The item remains visible throughout the pickup hold.
+    for _ in range(int(state.pickup_timer)):
+        obs, state, _, _, _ = env.step(state, 0)
+        assert state.items_active[0] == obs.items.active[0] == 1
+    obs, state, _, _, _ = env.step(state, 0)
+    assert state.items_active[0] == obs.items.active[0] == 0
 
