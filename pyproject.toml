@@ -29,6 +29,7 @@ build-backend = "hatchling.build"
 
 [project.scripts]
 install-sprites = "jaxtari.install_sprites:download_and_extract"
+install-detection = "jaxtari.install_detection:download_and_extract"
 
 [project.optional-dependencies]
 dev = [

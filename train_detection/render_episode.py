@@ -1,8 +1,8 @@
 """Record one episode with YOLOObjectCentricWrapper and overlay the detections on the game frames.
 
-    python detectors/render_episode.py gray96/pong                     # random policy
-    python detectors/render_episode.py rgb640/seaquest --policy down
-    python detectors/render_episode.py rgb640/beamrider --policy fire --out beamrider.mp4
+    python train_detection/render_episode.py gray96/pong                     # random policy
+    python train_detection/render_episode.py rgb640/seaquest --policy down
+    python train_detection/render_episode.py rgb640/beamrider --policy fire --out beamrider.mp4
 
 --policy is "random" or a JaxtariAction name held for the whole episode (fire, down, upfire, ...).
 By default boxes are drawn on the full-resolution colour frame; --detector-view shows the frame exactly as

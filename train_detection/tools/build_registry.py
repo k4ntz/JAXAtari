@@ -5,12 +5,12 @@ true_2d_grid, flat_per_row, slot_flags), maps names to the 7-class taxonomy via 
 entries for fields that are not yet in the registry (existing, hand-tuned entries are never changed).
 Unmatched names get class_id "REVIEW" and need a manual decision.
 
-    python detectors/tools/build_registry.py pong breakout        # specific games
-    python detectors/tools/build_registry.py --all                # all games
-    python detectors/tools/build_registry.py pong --inspect       # only print the observation structure
+    python train_detection/tools/build_registry.py pong breakout        # specific games
+    python train_detection/tools/build_registry.py --all                # all games
+    python train_detection/tools/build_registry.py pong --inspect       # only print the observation structure
 
 Afterwards tune offsets / grid geometry of new entries by rendering labels:
-    python detectors/generate_dataset.py <game> --preview
+    python train_detection/generate_dataset.py <game> --preview
 """
 import argparse
 import json

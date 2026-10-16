@@ -4,8 +4,8 @@ For every observation field the wrapper fills, converted objects are matched (Hu
 within --hit-px game pixels) to the visible ground-truth objects of ObjectCentricWrapper for the same state.
 Reports recall, precision and position error per field, plus wrapper throughput (jitted, vmapped).
 
-    python detectors/evaluate.py gray96/pong rgb640/pong          # checkpoint names or .npz paths
-    python detectors/evaluate.py rgb640/pong rgb640/breakout --steps 200 --batch 1 --json results.json
+    python train_detection/evaluate.py gray96/pong rgb640/pong          # checkpoint names or .npz paths
+    python train_detection/evaluate.py rgb640/pong rgb640/breakout --steps 200 --batch 1 --json results.json
 """
 import argparse
 import json
@@ -24,9 +24,10 @@ from jaxtari.detection import MISSING, YOLOObjectCentricWrapper, load_detector
 from jaxtari.wrappers import AtariWrapper
 
 
-def _visible(oo):
+def _visible(oo, screen_w, screen_h):
     p = {k: np.atleast_1d(np.asarray(getattr(oo, k))).ravel() for k in ("x", "y", "width", "height", "active")}
-    m = (p["active"] > 0) & (p["x"] > 1) & (p["y"] > 1) & (p["width"] > 0) & (p["height"] > 0)
+    m = (p["active"] > 0) & (p["x"] > 1) & (p["y"] > 1) & (p["width"] > 0) & (p["height"] > 0) & \
+        (p["x"] < screen_w) & (p["y"] < screen_h)  # off-screen objects (unclipped coordinates) are not visible
     return np.stack([p["x"][m], p["y"][m]], 1)
 
 
@@ -38,10 +39,11 @@ def _match(gt, pred, hit_px):
     return [d[i, j] for i, j in zip(r, c) if d[i, j] <= hit_px]
 
 
-def evaluate(path, steps=200, batch_sizes=(1, 128), hit_px=3.0, max_pool=None, seed=1):
+def evaluate(path, steps=200, batch_sizes=(1, 128), hit_px=3.0, max_pool=False, seed=1):
     det = load_detector(path)
     env = YOLOObjectCentricWrapper(AtariWrapper(jaxtari.make(det.game)), det, max_pool=max_pool)
     base = env._env._env
+    screen_h, screen_w = base.renderer.config.game_dimensions
     as_float = jax.tree.map(lambda a: np.asarray(a, np.float32), env._template)
     _, unravel = flatten_util.ravel_pytree(as_float)
     gt_flat = jax.jit(lambda es: flatten_util.ravel_pytree(base._get_observation(es))[0].astype(jnp.float32))
@@ -55,7 +57,7 @@ def evaluate(path, steps=200, batch_sizes=(1, 128), hit_px=3.0, max_pool=None, s
         for name, f in env.fields.items():
             pv, gv = getattr(pred, name), getattr(gt, name)
             if f["kind"] == "oo":
-                g = _visible(gv)
+                g = _visible(gv, screen_w, screen_h)
                 a = np.atleast_1d(np.asarray(pv.active)).ravel() == 1
                 p = np.stack([np.atleast_1d(np.asarray(pv.x)).ravel()[a], np.atleast_1d(np.asarray(pv.y)).ravel()[a]], 1)
                 errs = _match(g, p, hit_px)
@@ -111,18 +113,17 @@ def main():
     ap.add_argument("--steps", type=int, default=200)
     ap.add_argument("--batch", type=int, nargs="*", default=[1, 128], help="vmap sizes for the speed test")
     ap.add_argument("--hit-px", type=float, default=3.0)
-    ap.add_argument("--max-pool", choices=["on", "off"], default=None, help="override the checkpoint default")
+    ap.add_argument("--max-pool", action="store_true", help="max over the last two frames (flickering games)")
     ap.add_argument("--json", default=None, help="write all results to this file")
     a = ap.parse_args()
-    pool = None if a.max_pool is None else a.max_pool == "on"
     results = []
-    print("| checkpoint | pool | recall | precision | pos. err (px) | " + " | ".join(f"SPS@{b}" for b in a.batch) + " |")
-    print("|---|---|---|---|---|" + "---|" * len(a.batch))
+    print("| checkpoint | recall | precision | pos. err (px) | " + " | ".join(f"SPS@{b}" for b in a.batch) + " |")
+    print("|---|---|---|---|" + "---|" * len(a.batch))
     for c in a.checkpoints:
-        r = evaluate(c, a.steps, a.batch, a.hit_px, pool)
+        r = evaluate(c, a.steps, a.batch, a.hit_px, a.max_pool)
         results.append(r)
         err = "–" if r["pos_err"] is None else f"{r['pos_err']:.2f}"
-        print(f"| {Path(c).parent.name}/{Path(c).stem} | {r['max_pool']} | {r['recall']:.1%} | {r['precision']:.1%} | "
+        print(f"| {Path(c).parent.name}/{Path(c).stem} | {r['recall']:.1%} | {r['precision']:.1%} | "
               f"{err} | " + " | ".join(str(r["env_steps_per_s"][b]) for b in a.batch) + " |", flush=True)
     if a.json:
         Path(a.json).write_text(json.dumps(results, indent=1))

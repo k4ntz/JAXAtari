@@ -1,7 +1,7 @@
 """Pure-JAX YOLOv8 detector: pre-processing, network, DFL box decoding and class-aware NMS.
 
 Everything is jittable and vmappable. Checkpoints are torch-free ``.npz`` files (raw layer weights plus a
-JSON architecture/inference spec); ``detectors/convert_ultralytics.py`` creates them from ultralytics
+JSON architecture/inference spec); ``train_detection/convert_ultralytics.py`` creates them from ultralytics
 ``.pt`` files. Supported layers are those of YOLOv8: Conv, C2f (+Bottleneck), SPPF, Upsample, Concat and
 the (anchor-free, DFL) Detect head.
 
@@ -140,7 +140,6 @@ class YOLODetector:
     iou: float = 0.50
     max_det: int = 300
     max_cand: int = 2048  # candidates entering NMS
-    max_pool: bool = False  # default for the wrapper: max-pool the last two frames (flickering games)
     game: str = ""
 
     def preprocess(self, frame):
@@ -222,10 +221,11 @@ def resolve_checkpoint(name_or_path):
     if q.is_file():
         return q
     raise FileNotFoundError(f"detector checkpoint '{name_or_path}' not found (neither a file nor {q}); "
-                            f"install the detector weights or pass the path of a .npz checkpoint")
+                            f"install the detector weights (python3 -m jaxtari.install_detection) or pass the path "
+                            f"of a .npz checkpoint")
 
 
-def load_detector(path, conf=None, iou=None, max_det=300, max_cand=2048, max_pool=None):
+def load_detector(path, conf=None, iou=None, max_det=300, max_cand=2048):
     """Load a ``.npz`` detector checkpoint by path or name (see resolve_checkpoint). Arguments override the
     inference defaults stored in the checkpoint."""
     with np.load(resolve_checkpoint(path), allow_pickle=False) as f:
@@ -240,5 +240,4 @@ def load_detector(path, conf=None, iou=None, max_det=300, max_cand=2048, max_poo
         names={int(k): v for k, v in spec["names"].items()}, nc=spec["nc"], input_mode=spec["input_mode"],
         frame_size=tuple(spec["frame_size"]), **letterbox_geometry(spec["frame_size"], spec["imgsz"]),
         conf=spec.get("conf", 0.40) if conf is None else conf, iou=spec.get("iou", 0.50) if iou is None else iou,
-        max_det=max_det, max_cand=max_cand, max_pool=spec.get("max_pool", False) if max_pool is None else max_pool,
-        game=spec.get("game", ""))
+        max_det=max_det, max_cand=max_cand, game=spec.get("game", ""))

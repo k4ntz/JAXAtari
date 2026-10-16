@@ -81,10 +81,3 @@ def test_wrapper_jit_and_vmap(pong_env):
     assert obs.shape == (3, 4, pong_env.num_features)
     assert reward.shape == (3,) and state.detections.boxes.shape[0] == 3
 
-
-@needs_weights
-def test_checkpoint_defaults():
-    ast = WEIGHTS / "gray96" / "asteroids.npz"
-    if ast.exists():
-        assert load_detector(ast).max_pool  # flickering game
-    assert not load_detector(PONG).max_pool

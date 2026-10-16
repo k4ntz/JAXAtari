@@ -2,13 +2,11 @@
 
 Requires the train_detection extra: pip install -e ".[train_detection]" (ultralytics / torch).
 
-    python detectors/generate_dataset.py pong --size 96 96
-    python detectors/train.py pong --data detectors/datasets/pong --out pong_gray96.npz
-    # flickering game: pooled dataset, wrapper defaults to max-pooling
-    python detectors/train.py asteroids --data detectors/datasets/asteroids --out asteroids_gray96.npz --max-pool
+    python train_detection/generate_dataset.py pong --size 96 96
+    python train_detection/train.py pong --data train_detection/datasets/pong --out pong_gray96.npz
 
-The start weights (--init) are an existing .npz checkpoint name or path (default: rgb640/<game>),
-an ultralytics .pt file, or "scratch". For 1-channel datasets the first convolution of a 3-channel init is
+The start weights (--init) are an existing .npz checkpoint name or path, an ultralytics .pt file
+(default: COCO-pretrained yolov8n.pt, downloaded by ultralytics if not present), or "scratch". For 1-channel datasets the first convolution of a 3-channel init is
 summed over its input channels (exact for gray = R = G = B).
 """
 import argparse
@@ -55,7 +53,8 @@ def build_init(init, game, channels, nc, out):
             src, _ = npz_state_dict(resolve_checkpoint(init))
             src = {k: torch.from_numpy(np.asarray(v, np.float32)) for k, v in src.items()}
         else:
-            ck = torch.load(init, map_location="cpu", weights_only=False)
+            from ultralytics.utils.downloads import attempt_download_asset
+            ck = torch.load(attempt_download_asset(str(init)), map_location="cpu", weights_only=False)
             src = (ck.get("ema") or ck["model"]).float().state_dict()
         sd = model.state_dict()
         loaded = 0
@@ -85,7 +84,6 @@ def main():
     ap.add_argument("--epochs", type=int, default=60)
     ap.add_argument("--batch", type=int, default=64)
     ap.add_argument("--device", default=None, help="cuda / mps / cpu (default: auto)")
-    ap.add_argument("--max-pool", action="store_true", help="default the wrapper to max-pooling (flicker)")
     ap.add_argument("--conf", type=float, default=0.40)
     a = ap.parse_args()
 
@@ -106,7 +104,7 @@ def main():
 
     work = ROOT / "runs" / "train" / a.game
     work.mkdir(parents=True, exist_ok=True)
-    init = a.init or f"rgb640/{a.game}"
+    init = a.init or "yolov8n.pt"
     start = build_init(init, a.game, channels, int(cfg["nc"]), work / "init.pt")
 
     t0 = time.time()
@@ -118,7 +116,7 @@ def main():
     best = work / "weights" / "best.pt"
     res = YOLO(str(best)).val(data=str(data / "data.yaml"), imgsz=imgsz, device=a.device, verbose=False, plots=False)
     convert(best, a.out, a.game, "rgb" if rgb640 else "native", (640, 840) if rgb640 else (w, h), imgsz,
-            conf=a.conf, max_pool=a.max_pool)
+            conf=a.conf)
     print(json.dumps(dict(game=a.game, out=a.out, minutes=round((time.time() - t0) / 60, 1),
                           map50=round(float(res.box.map50), 4), map50_95=round(float(res.box.map), 4))))
 

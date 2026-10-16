@@ -16,6 +16,7 @@ conversion, frame stack) runs inside jax.jit. The calibration (see calibration.p
 construction. Checkpoints trained on natively downscaled frames switch the environment's renderer to
 JAXtari native downscaling automatically.
 """
+import dataclasses
 import functools
 from typing import Any, Union
 
@@ -51,14 +52,18 @@ class YOLOObjectCentricWrapper(JaxtariWrapper):
         detector: YOLODetector, path to a ``.npz`` checkpoint, or checkpoint name such as "gray96/pong".
         game_name: registry key (defaults to the game stored in the checkpoint).
         registry: quirks registry dict (defaults to the one shipped with jaxtari).
-        max_pool: max over the last two frames of each frame skip, for games whose sprites flicker
-            (drawn on alternating frames, e.g. Asteroids). Defaults to the checkpoint's setting.
+        max_pool: run the detector on the max over the last two frames of each frame skip, for games whose
+            sprites flicker (drawn on alternating frames, e.g. Asteroids). Inference only: detectors are
+            trained on single frames; the calibration uses the same pooled input.
         calibration_steps / calibration_seed: random steps used for the one-off calibration.
+        max_det: detections kept per frame. Defaults to twice the object slots of the observation (grid
+            fields: their cells), capped at the detector's max_det; detections beyond the slots cannot be
+            stored anyway, and the conversion's cost (compile time and runtime) grows with max_det^2.
     """
 
     def __init__(self, env, detector: Union[YOLODetector, str], game_name=None, registry=None,
-                 frame_stack_size=4, frame_skip=4, clip_reward=True, max_pool=None, calibration_steps=300,
-                 calibration_seed=0):
+                 frame_stack_size=4, frame_skip=4, clip_reward=True, max_pool=False, calibration_steps=300,
+                 calibration_seed=0, max_det=None):
         assert isinstance(env, AtariWrapper), "YOLOObjectCentricWrapper must be applied on top of AtariWrapper"
         super().__init__(env)
         self.detector = detector if isinstance(detector, YOLODetector) else load_detector(detector)
@@ -67,7 +72,7 @@ class YOLOObjectCentricWrapper(JaxtariWrapper):
         if self.game_name not in registry:
             raise KeyError(f"game '{self.game_name}' not in the quirks registry")
         self.frame_stack_size, self.frame_skip, self.clip_reward = frame_stack_size, frame_skip, clip_reward
-        self.max_pool = self.detector.max_pool if max_pool is None else max_pool
+        self.max_pool = max_pool
 
         core = env
         while hasattr(core, "_env"):
@@ -90,8 +95,13 @@ class YOLOObjectCentricWrapper(JaxtariWrapper):
                     for b, c, s in zip(boxes, np.asarray(d.cls)[v], np.asarray(d.conf)[v])]
 
         self.fields, self._template = calibrate(env._env, registry[self.game_name]["objects"], self.detector.names,
-                                                detect_game_px, calibration_steps, calibration_seed, self.max_pool)
+                                                detect_game_px, calibration_steps, calibration_seed, max_pool)
         self.num_features = int(sum(np.size(l) for l in jax.tree.leaves(self._template)))
+        if max_det is None:
+            slots = sum(int(np.prod(f["shape"])) if f["kind"] == "grid" else f["cap"]
+                        for f in self.fields.values() if f["kind"] in ("oo", "xy", "grid"))
+            max_det = min(self.detector.max_det, max(2 * slots, 1))
+        self.detector = dataclasses.replace(self.detector, max_det=int(max_det))
         oc_space = ObjectCentricWrapper(env, frame_stack_size=frame_stack_size).observation_space()
         self._observation_space = spaces.Box(low=np.minimum(np.asarray(oc_space.low), MISSING),
                                              high=np.asarray(oc_space.high), shape=oc_space.shape,
@@ -247,11 +257,16 @@ class YOLOObjectCentricWrapper(JaxtariWrapper):
             _, atari_state, reward, terminated, truncated, info = self._env.step(atari_state, action)
             return atari_state, (reward, terminated, truncated, info)
 
-        # frame_skip - 1 steps, keep the frame before the last one for max-pooling, then the last step
-        atari_state, outs = jax.lax.scan(body, state.atari_state, None, length=self.frame_skip - 1)
-        prev_frame = self.render_frame(atari_state) if self.max_pool else None
-        atari_state, last = body(atari_state, None)
-        rewards, terms, truncs, infos = jax.tree.map(lambda a, b: jnp.concatenate([a, b[None]], 0), outs, last)
+        if self.max_pool:  # frame_skip - 1 steps, keep the frame before the last one, then the last step
+            atari_state, outs = jax.lax.scan(body, state.atari_state, None, length=self.frame_skip - 1)
+            prev_frame = self.render_frame(atari_state)
+            atari_state, last = body(atari_state, None)
+            rewards, terms, truncs, infos = jax.tree.map(lambda a, b: jnp.concatenate([a, b[None]], 0),
+                                                         outs, last)
+        else:
+            atari_state, (rewards, terms, truncs, infos) = jax.lax.scan(body, state.atari_state, None,
+                                                                        length=self.frame_skip)
+            prev_frame = None
 
         reward = jnp.sum(rewards)
         if self.clip_reward:

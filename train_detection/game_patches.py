@@ -15,50 +15,9 @@ def register_patch(game_name):
     return decorator
 
 
-@register_patch("enduro")
-def patch_enduro(pixels, yolo_lines, frame_bgr, to_yolo, draw_debug_box, debug_mode):
-    y_min, y_max = 140, 155
-    car_strip = pixels[y_min:y_max, :, :]
-    brightness = np.sum(car_strip, axis=2)
-    y_coords, x_coords = np.where(brightness > 400)
-
-    if len(x_coords) > 0:
-        car_x = int(np.min(x_coords))
-        car_w = int(np.max(x_coords) - car_x)
-        car_h = y_max - y_min
-        patch_h, patch_w = pixels.shape[:2]
-
-        yolo_lines.append(to_yolo(0, car_x, y_min, car_w, car_h, patch_h, patch_w))
-        if debug_mode:
-            draw_debug_box(frame_bgr, car_x, y_min, car_w, car_h, 0, "entity", "player_car")
-    return None
-
-
 @register_patch("mspacman")
 def patch_mspacman(pixels, yolo_lines, frame_bgr, to_yolo, draw_debug_box, debug_mode):
     patch_h, patch_w = pixels.shape[:2]
-
-    # Extract Pacman
-    player_color = np.array([210, 164, 74])
-    p_mask = cv2.inRange(pixels, np.clip(player_color - 25, 0, 255), np.clip(player_color + 25, 0, 255))
-    p_contours, _ = cv2.findContours(p_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-
-    for cnt in p_contours:
-        x, y, w, h = cv2.boundingRect(cnt)
-        if 4 <= w <= 16 and 4 <= h <= 16 and y < 176:
-            yolo_lines.append(to_yolo(0, x, y, w, h, patch_h, patch_w))
-            if debug_mode:
-                pad_x = 2
-                pad_y = 3
-
-                px = max(0, x - pad_x)
-                py = max(0, y - pad_y)
-                pw = min(patch_w - px, w + (pad_x * 2))
-                ph = min(patch_h - py, h + (pad_y * 2))
-
-                yolo_lines.append(to_yolo(0, px, py, pw, ph, patch_h, patch_w))
-                if debug_mode:
-                    draw_debug_box(frame_bgr, px, py, pw, ph, 0, "entity", "player_cv")
 
     # Extract Pellets
     palette_colors = [

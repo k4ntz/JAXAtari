@@ -148,7 +148,7 @@ def apply_wrappers(env, config):
                 frame_stack_size=4,
                 frame_skip=4,
                 clip_reward=True,
-                max_pool=config.get("YOLO_MAX_POOL", None),  # None: checkpoint default
+                max_pool=config.get("YOLO_MAX_POOL", False),  # max over the last two frames (flicker)
             )
         else:
             env = ObjectCentricWrapper(

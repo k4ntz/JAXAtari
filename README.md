@@ -278,7 +278,8 @@ env = YOLOObjectCentricWrapper(AtariWrapper(jaxtari.make("pong")), "gray96/pong"
 obs, state = jax.vmap(env.reset)(jax.random.split(key, 1024))   # obs: (1024, 4, 26), as ObjectCentricWrapper
 ```
 
-Detector checkpoints, dataset generation, training and evaluation are described in [detectors/README.md](detectors/README.md).
+Install the detector checkpoints with `python3 -m jaxtari.install_detection` (or `.venv/bin/install-detection`).
+Detector checkpoints, dataset generation, training and evaluation are described in [train_detection/README.md](train_detection/README.md).
 
 ---
 
@@ -295,6 +296,7 @@ Jaxtari/
 │   ├── renderers.py         # JAX rendering utilities
 │   ├── spaces.py            # action/observation space definitions
 │   ├── install_sprites.py   # sprite download script
+│   ├── install_detection.py # detector checkpoint download script
 │   ├── detection/           # YOLO detector + YOLOObjectCentricWrapper (pure JAX), quirks registry
 │   └── games/
 │       ├── jax_<game>.py    # one file per environment
@@ -305,7 +307,7 @@ Jaxtari/
 ├── scripts/                 # see scripts/README.md for a full description
 │   ├── play.py              # interactive human play
 │   └── benchmarks/          # PPO/PQN training and evaluation scripts
-├── detectors/               # detector tooling (datasets, training, evaluation, videos)
+├── train_detection/         # detector tooling (datasets, training, evaluation, videos)
 ├── tests/                   # pytest test suite
 ├── docs/                    # Sphinx documentation source
 ├── games_covered.md         # full environment status table

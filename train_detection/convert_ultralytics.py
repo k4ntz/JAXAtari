@@ -3,11 +3,11 @@
 This is the only place (besides training) that needs torch/ultralytics: ``pip install -e ".[train_detection]"``.
 
     # original 640px RGB checkpoints (frame = native RGB nearest-upscaled to 640x840)
-    python detectors/convert_ultralytics.py path/to/pong.pt pong_rgb640.npz --game pong \
+    python train_detection/convert_ultralytics.py path/to/pong.pt pong_rgb640.npz --game pong \
         --input-mode rgb --frame-size 640 840 --imgsz 640
     # low-res checkpoints trained on JAXtari natively downscaled 96x96 grayscale frames
-    python detectors/convert_ultralytics.py best.pt pong_gray96.npz --game pong \
-        --input-mode native --frame-size 96 96 --imgsz 96 [--max-pool]
+    python train_detection/convert_ultralytics.py best.pt pong_gray96.npz --game pong \
+        --input-mode native --frame-size 96 96 --imgsz 96
 """
 import argparse
 import json
@@ -69,7 +69,7 @@ def _layer(m, i, arrays):
     return spec
 
 
-def convert(src, dst, game, input_mode, frame_size, imgsz, conf=0.40, iou=0.50, max_pool=False):
+def convert(src, dst, game, input_mode, frame_size, imgsz, conf=0.40, iou=0.50):
     import torch
     from ultralytics import YOLO
     ck = torch.load(str(src), map_location="cpu", weights_only=False)
@@ -83,7 +83,7 @@ def convert(src, dst, game, input_mode, frame_size, imgsz, conf=0.40, iou=0.50, 
     spec = dict(format=FORMAT, version=1, game=game, names={int(k): v for k, v in model.names.items()},
                 nc=int(model.model[-1].nc), save=sorted(int(s) for s in model.save), layers=layers,
                 input_mode=input_mode, frame_size=list(frame_size), imgsz=imgsz, conf=conf, iou=iou,
-                max_pool=max_pool, source=Path(src).name)
+                source=Path(src).name)
     Path(dst).parent.mkdir(parents=True, exist_ok=True)
     np.savez_compressed(dst, __spec__=np.asarray(json.dumps(spec)), **arrays)
     return dst
@@ -99,6 +99,5 @@ if __name__ == "__main__":
     ap.add_argument("--imgsz", type=int, required=True)
     ap.add_argument("--conf", type=float, default=0.40)
     ap.add_argument("--iou", type=float, default=0.50)
-    ap.add_argument("--max-pool", action="store_true", help="default the wrapper to max-pooling (flicker)")
     a = ap.parse_args()
-    print(convert(a.src, a.dst, a.game, a.input_mode, a.frame_size, a.imgsz, a.conf, a.iou, a.max_pool))
+    print(convert(a.src, a.dst, a.game, a.input_mode, a.frame_size, a.imgsz, a.conf, a.iou))

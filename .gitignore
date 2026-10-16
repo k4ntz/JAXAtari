@@ -14,9 +14,9 @@ data/oc_parity_corpus/reports/
 data/oc_parity_corpus/reports_oracle/
 data/oc_parity_corpus/final_report/
 
-# detector datasets / training runs (detectors/)
-detectors/datasets/
-detectors/runs/
+# detector datasets / training runs (train_detection/)
+train_detection/datasets/
+train_detection/runs/
 
 # Reference material (not tracked)
 reference_material/*

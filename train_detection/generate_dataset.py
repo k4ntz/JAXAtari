@@ -4,13 +4,13 @@ Frames are sampled from random play; labels follow jaxtari.detection.labels (reg
 floor) plus the OpenCV fallbacks in game_patches.py for objects the game state does not expose.
 
     # 96x96 grayscale frames from JAXtari native downscaling (what the gray96 detectors use)
-    python detectors/generate_dataset.py pong asteroids --size 96 96
-    # flickering games: max over two consecutive frames (+ use max_pool in the wrapper)
-    python detectors/generate_dataset.py asteroids --size 96 96 --pool --frames 3000 --player-frac 0.4
+    python train_detection/generate_dataset.py pong asteroids --size 96 96
+    # class balancing for games where the player is rarely alive under random play
+    python train_detection/generate_dataset.py asteroids --size 96 96 --frames 3000 --player-frac 0.4
     # full-resolution RGB frames, nearest-upscaled to 640x840 (what the rgb640 detectors use)
-    python detectors/generate_dataset.py pong --rgb640
+    python train_detection/generate_dataset.py pong --rgb640
     # check / tune registry geometry: draw the labels on a few frames
-    python detectors/generate_dataset.py pong --preview
+    python train_detection/generate_dataset.py pong --preview
 
 Output: <out>/<game>/{images,labels}/{train,val}/*.png|txt and <out>/<game>/data.yaml (ultralytics).
 Requires opencv (pip install -e ".[train_detection]").
@@ -25,7 +25,6 @@ from pathlib import Path
 
 import cv2
 import jax
-import jax.numpy as jnp
 import numpy as np
 
 import jaxtari
@@ -38,7 +37,7 @@ ROOT = Path(__file__).resolve().parent
 COLORS = [(0, 255, 0), (0, 0, 255), (255, 165, 0), (0, 215, 255), (219, 55, 170), (180, 180, 180), (255, 255, 255)]
 
 
-def sample(game, n_frames, size=None, rgb640=False, pool=False, every=20, seed=0, player_frac=0.0,
+def sample(game, n_frames, size=None, rgb640=False, every=20, seed=0, player_frac=0.0,
            reset_every=None):
     """-> list of (image, [yolo label lines]) from random play."""
     objects = labels.load_registry()[game]["objects"]
@@ -58,13 +57,12 @@ def sample(game, n_frames, size=None, rgb640=False, pool=False, every=20, seed=0
     samples, t, next_t, since_reset = [], 0, every, 0
     while len(samples) < n_frames:
         a = 1 if rng.random() < 0.5 else int(rng.integers(n_act))  # 50% FIRE, as the original extractor
-        prev = render(st)
         obs, st, _, done, _ = step(st, a)
         t, since_reset = t + 1, since_reset + 1
         if bool(done) or (reset_every and since_reset >= reset_every):
             key, k = jax.random.split(key)
             obs, st = reset(k)
-            prev, since_reset = jnp.zeros_like(prev), 0
+            since_reset = 0
         if t < next_t:
             continue
         next_t = t + every + int(rng.integers(0, 4))  # jitter: sample both parities of flickering games
@@ -80,10 +78,7 @@ def sample(game, n_frames, size=None, rgb640=False, pool=False, every=20, seed=0
             n_player = sum(any(l.startswith("0 ") for l in ls) for _, ls in samples)
             if len(samples) - n_player >= n_frames * (1 - player_frac):
                 continue  # class balancing for games where the player is rarely alive under random play
-        frame = render(st)
-        if pool:
-            frame = jnp.maximum(frame, prev)
-        frame = np.asarray(frame)
+        frame = np.asarray(render(st))
         if rgb640:  # native RGB -> 4x nearest upscale (640x840), BGR for cv2
             frame = cv2.resize(cv2.cvtColor(frame, cv2.COLOR_RGB2BGR), (640, 840), interpolation=cv2.INTER_NEAREST)
         elif frame.shape[-1] == 3:
@@ -135,7 +130,6 @@ def main():
     mode = ap.add_mutually_exclusive_group()
     mode.add_argument("--size", type=int, nargs=2, metavar=("W", "H"), help="native downscaled grayscale frames")
     mode.add_argument("--rgb640", action="store_true", help="native RGB, nearest-upscaled to 640x840")
-    ap.add_argument("--pool", action="store_true", help="max over two consecutive frames (flickering games)")
     ap.add_argument("--player-frac", type=float, default=0.0, help="min. fraction of frames containing a player")
     ap.add_argument("--every", type=int, default=20, help="sample a frame every ~N env steps")
     ap.add_argument("--reset-every", type=int, default=None, help="force a reset every N steps (e.g. hauntedhouse)")
@@ -144,7 +138,7 @@ def main():
     a = ap.parse_args()
     for g in a.games:
         n = 8 if a.preview else a.frames
-        samples = sample(g, n, a.size, a.rgb640, a.pool, a.every, a.seed, a.player_frac, a.reset_every)
+        samples = sample(g, n, a.size, a.rgb640, a.every, a.seed, a.player_frac, a.reset_every)
         if a.preview:
             print(f"{g}: preview -> {preview(samples, Path(a.out) / f'{g}_preview.png')}")
             continue

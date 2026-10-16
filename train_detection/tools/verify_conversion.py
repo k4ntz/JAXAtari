@@ -1,6 +1,6 @@
 """Check that a converted .npz detector reproduces ultralytics' own predictions (needs torch/ultralytics).
 
-    python detectors/tools/verify_conversion.py path/to/best.pt pong_gray96.npz
+    python train_detection/tools/verify_conversion.py path/to/best.pt pong_gray96.npz
 
 Runs both on frames from random play (rendered exactly as the wrapper renders them) and reports the
 fraction of ultralytics detections reproduced (same class, IoU > 0.5) and the largest box difference.

@@ -163,5 +163,9 @@ def frame_labels(obs, objects_cfg, screen_w=SCREEN_W, screen_h=SCREEN_H):
         if obj is None:
             continue
         for box in label_boxes(obj, entry):
-            lines.append(to_yolo_line(entry["class_id"], *pad_label(entry, *box), screen_w, screen_h))
+            x, y, w, h = pad_label(entry, *box)
+            x0, y0, x1, y1 = max(x, 0), max(y, 0), min(x + w, screen_w), min(y + h, screen_h)
+            if x1 - x0 < 1 or y1 - y0 < 1:
+                continue  # off-screen (e.g. radar-style unclipped coordinates)
+            lines.append(to_yolo_line(entry["class_id"], x0, y0, x1 - x0, y1 - y0, screen_w, screen_h))
     return lines
