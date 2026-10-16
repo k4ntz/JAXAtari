@@ -107,6 +107,80 @@ class RoomConfig:
         default_factory=lambda: jnp.zeros(_DEFAULT_CONSTS.MAX_PLATFORMS_PER_ROOM, dtype=jnp.int32)
     )
 
+# Native room metadata sampled from the ROM's three temple layouts.
+# Columns: native entity type, horizontal anchor, vertical anchor, duplicate bits.
+# Room architecture is shared; contents and collectible histories reset per temple.
+LEVEL_CONTENTS = jnp.array([
+    [  # Temple 1; native room order 0..23.
+        [1, 25, 254, 0], [4, 14, 254, 0], [5, 116, 254, 1], [5, 60, 254, 1],
+        [10, 90, 226, 0], [6, 78, 254, 0], [2, 12, 254, 0], [4, 130, 254, 0],
+        [4, 78, 254, 0], [8, 18, 228, 2], [1, 16, 254, 0], [8, 44, 228, 4],
+        [0, 80, 254, 0], [10, 100, 226, 0], [4, 77, 201, 0], [1, 20, 254, 0],
+        [0, 80, 254, 0], [0, 80, 254, 0], [0, 60, 228, 0], [3, 16, 254, 0],
+        [1, 76, 254, 4], [10, 60, 226, 0], [8, 30, 228, 0], [1, 100, 254, 3],
+    ],
+    [  # Temple 2; native room order 0..23.
+        [2, 25, 254, 0], [4, 14, 254, 0], [1, 132, 254, 0], [1, 12, 254, 1],
+        [8, 30, 228, 0], [6, 78, 254, 0], [5, 12, 254, 0], [1, 130, 254, 0],
+        [1, 61, 254, 2], [10, 40, 226, 0], [4, 16, 254, 0], [3, 16, 254, 0],
+        [0, 80, 254, 0], [8, 44, 228, 4], [4, 77, 254, 0], [1, 20, 254, 0],
+        [0, 80, 254, 0], [0, 80, 254, 0], [0, 60, 228, 0], [5, 46, 254, 1],
+        [1, 61, 254, 3], [4, 16, 254, 0], [10, 30, 226, 0], [1, 116, 254, 1],
+    ],
+    [  # Temple 3; native room order 0..23.
+        [5, 70, 254, 0], [4, 14, 254, 0], [8, 18, 228, 2], [1, 44, 254, 4],
+        [8, 18, 228, 2], [6, 78, 254, 0], [10, 130, 226, 0], [4, 130, 254, 0],
+        [4, 20, 254, 0], [10, 50, 226, 0], [2, 16, 254, 0], [5, 136, 254, 1],
+        [0, 80, 254, 0], [5, 120, 254, 0], [3, 77, 201, 0], [1, 20, 254, 0],
+        [0, 80, 254, 0], [0, 80, 254, 0], [0, 60, 228, 0], [10, 30, 226, 0],
+        [4, 138, 254, 0], [8, 100, 228, 0], [5, 40, 254, 1], [1, 100, 254, 3],
+    ],
+], dtype=jnp.int32)
+ALE_ROOM_IDS = jnp.array([3,4,5,10,11,12,13,14,17,18,19,20,21,22,23,24,25,26,27,28,29,30,31,32], dtype=jnp.int32)
+# Native exit bits: up, down, left, right (ROM BBCA).
+NATIVE_EXIT_MASKS = jnp.array([10,12,6,10,15,14,13,6,8,5,9,15,12,15,6,0,12,12,12,13,4,9,13,4], dtype=jnp.int32)
+_PACKED_ROOM_HISTORY = jnp.array([
+    [31,51,31,17,21,25,1,17,12,33,145,23],
+    [31,19,31,17,81,17,9,17,12,35,113,19],
+    [31,89,95,17,17,19,1,17,12,33,17,55],
+], dtype=jnp.int32)
+NATIVE_ROOM_HISTORY = jnp.stack([_PACKED_ROOM_HISTORY >> 4,
+    _PACKED_ROOM_HISTORY & 15], axis=2).reshape(3,24)
+
+# ROM metadata addresses the remaining entities through a four-bit room
+# history. Removing one member of a group changes its anchor and spacing.
+_DUPLICATES_BY_MASK = jnp.array([0,0,0,1,0,2,1,3,0,4,1,4,5,5,10,6], dtype=jnp.int32)
+_ANCHOR_INDEX_BY_MASK = jnp.array([0,0,1,0,2,0,1,0,3,0,0,0,0,0,0,0], dtype=jnp.int32)
+_THIRD_PRIMARY_X = jnp.array([70,14,18,44,18,78,130,130,20,50,16,120,80,120,77,20,80,80,60,30,138,100,24,100], dtype=jnp.int32)
+_THIRD_GROUP_ROOMS = jnp.array([2,3,4,11,22,23], dtype=jnp.int32)
+_THIRD_GROUP_X = jnp.array([[18,0,50,0],[44,0,0,108],[18,0,50,0],
+    [120,136,0,0],[24,40,0,0],[100,116,132,0]], dtype=jnp.int32)
+
+
+def initialize_level(state, consts):
+    contents = LEVEL_CONTENTS[jnp.minimum(state.level, 2)]
+    native_type, _, _, duplicates = contents.T
+    active = jnp.stack([jnp.ones(24, dtype=jnp.int32),
+        (duplicates & 5 != 0).astype(jnp.int32),
+        (duplicates & 2 != 0).astype(jnp.int32)], axis=1)
+    item = jnp.isin(native_type, jnp.array([1,2,3,4,6]))
+    enemy = jnp.isin(native_type, jnp.array([5,8,10]))
+    item_types = jnp.array([0,1,3,2,0,0,4,0,0,0,0])[native_type]
+    enemy_types = jnp.where(native_type == 8, 4, jnp.where(native_type == 10, 3, 1))
+    items = jnp.zeros_like(state.global_items_active).at[ALE_ROOM_IDS].set(active * item[:,None])
+    enemies = jnp.zeros_like(state.global_enemies_active).at[ALE_ROOM_IDS].set(active * enemy[:,None])
+    # Both barrier chambers have a rolling skull alongside their collectible.
+    enemies = enemies.at[jnp.array([4,12]),0].set(1)
+    enemies = enemies.at[27,0].set(jnp.where(state.level == 2, 1, enemies[27,0]))
+    doors = jnp.zeros_like(state.global_doors_active).at[jnp.array([4,12,26])].set(1)
+    return state.replace(native_room_history=NATIVE_ROOM_HISTORY[jnp.minimum(state.level, 2)],
+        global_items_active=items,
+        global_items_type=jnp.zeros_like(state.global_items_type).at[ALE_ROOM_IDS].set(jnp.broadcast_to(item_types[:,None], active.shape)),
+        global_enemies_active=enemies,
+        global_enemies_type=jnp.zeros_like(state.global_enemies_type).at[ALE_ROOM_IDS].set(jnp.broadcast_to(enemy_types[:,None], active.shape)).at[jnp.array([4,12]),0].set(1),
+        global_doors_active=doors)
+
+
 def load_room(room_id: jnp.ndarray, state: MontezumaRevengeState, consts: MontezumaRevengeConstants) -> MontezumaRevengeState:
     config = RoomConfig()
 
@@ -1060,8 +1134,54 @@ def load_room(room_id: jnp.ndarray, state: MontezumaRevengeState, consts: Montez
         config,
     )
 
+    native_room = jnp.argmax(ALE_ROOM_IDS == room_id)
+    typ, x, y, duplicates = LEVEL_CONTENTS[jnp.minimum(state.level, 2), native_room]
+    entity_active = jnp.where(jnp.isin(typ, jnp.array([5,8,10])),
+        state.global_enemies_active[room_id], state.global_items_active[room_id])
+    history_weights = jnp.array([1,0,4], dtype=jnp.int32).at[1].set(jnp.where(duplicates & 1 != 0, 2, 8))
+    remaining_mask = jnp.sum(entity_active * history_weights)
+    group = jnp.argmax(_THIRD_GROUP_ROOMS == native_room)
+    grouped = jnp.any(_THIRD_GROUP_ROOMS == native_room)
+    restored_x = jnp.where(grouped,
+        _THIRD_GROUP_X[group, _ANCHOR_INDEX_BY_MASK[remaining_mask]], _THIRD_PRIMARY_X[native_room])
+    restored_x = jnp.where(jnp.logical_and(grouped, typ == 5),
+        _THIRD_PRIMARY_X[native_room] + jnp.where(remaining_mask == 1, 0, 16), restored_x)
+    x = jnp.where(state.level == 2, restored_x, x)
+    duplicates = jnp.where(state.level == 2, _DUPLICATES_BY_MASK[remaining_mask], duplicates)
+    offsets = jnp.array([0, 0, 32], dtype=jnp.int32).at[1].set(jnp.where(duplicates & 1 != 0, 16, 64))
+    # Keep original history slots stable while drawing the surviving group
+    # at the compressed native anchors on the next room initialization.
+    rank = jnp.clip(jnp.cumsum(entity_active) - 1, 0, 2)
+    compact_offsets = offsets.at[1].set(jnp.where(duplicates & 1 != 0, 16,
+        jnp.where(duplicates & 4 != 0, 64, 32)))
+    offsets = jnp.where(state.level == 2, compact_offsets[rank], offsets)
+    entity_x = x - 1 + offsets + jnp.where(typ == 8, 1, 0)
+    base_y = jnp.where(native_room == 0, 55, jnp.where(native_room == 1, 98, jnp.where(native_room == 7, 54, 53))) + 255 - y - 47
+    item_y = base_y + jnp.where(y < 216, 4, 0)
+    enemy_y = base_y + jnp.where(y < 216, 8, 0) + jnp.where(typ == 5, 25, 0)
+    later = state.level > 0
+    is_start = jnp.logical_or(jnp.isin(room_id, jnp.array([4,12])),
+        jnp.logical_and(state.level == 2, room_id == 27))
+    config = config.replace(
+        items_x=jnp.where(later, entity_x, config.items_x),
+        items_y=jnp.where(later, jnp.full_like(config.items_y, item_y), config.items_y),
+        enemies_x=jnp.where(jnp.logical_and(later, ~is_start), entity_x, config.enemies_x),
+        enemies_y=jnp.where(jnp.logical_and(later, ~is_start), jnp.full_like(config.enemies_y, enemy_y), config.enemies_y),
+        enemies_bouncing=jnp.where(later, jnp.full_like(config.enemies_bouncing, (typ == 5).astype(jnp.int32)), config.enemies_bouncing),
+        enemies_direction=jnp.where(jnp.logical_and(later, ~is_start), jnp.full_like(config.enemies_direction, jnp.where(typ == 8, 0, -1)), config.enemies_direction),
+        enemies_min_x=jnp.where(jnp.logical_and(later, ~is_start), 4 + offsets, config.enemies_min_x),
+        enemies_max_x=jnp.where(jnp.logical_and(later, ~is_start), 148 - jnp.where(duplicates & 1 != 0, 16, jnp.where(duplicates & 4 != 0, 64, jnp.where(duplicates & 2 != 0, 32, 0))) + offsets, config.enemies_max_x))
+    pit_skull = jnp.logical_and(state.level == 2, room_id == 27)
+    config = config.replace(
+        enemies_x=config.enemies_x.at[0].set(jnp.where(pit_skull, 57, config.enemies_x[0])),
+        enemies_y=config.enemies_y.at[0].set(jnp.where(pit_skull, 34, config.enemies_y[0])),
+        enemies_direction=config.enemies_direction.at[0].set(jnp.where(pit_skull, 1, config.enemies_direction[0])),
+        enemies_min_x=config.enemies_min_x.at[0].set(jnp.where(pit_skull, 32, config.enemies_min_x[0])),
+        enemies_max_x=config.enemies_max_x.at[0].set(jnp.where(pit_skull, 122, config.enemies_max_x[0])))
+
     return state.replace(
         room_id=room_id,
+        native_rolling_x=jnp.int32(58),
         room5_skull_phase=jnp.int32(0),
         room5_skull_spawn_pending=jnp.logical_or(room_id == 5, room_id == 10),
         enemies_x=config.enemies_x,

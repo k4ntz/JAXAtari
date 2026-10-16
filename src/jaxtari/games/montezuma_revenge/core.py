@@ -164,11 +164,27 @@ class MontezumaRevengeState:
     bonus_room_timer: jnp.ndarray
     first_gem_pickup: jnp.ndarray
     key: jrandom.PRNGKey
+    # ROM has three content layouts; subsequent temples repeat the third.
+    level: jnp.ndarray = 0
+    # The TIA contact latch refers to the preceding rendered player pose.
+    collision_player_x: jnp.ndarray = -1
+    collision_player_y: jnp.ndarray = -1
+    collision_player_pose: jnp.ndarray = 0
+    collision_player_dir: jnp.ndarray = -1
+    # RAM52 bit2 survives landing; a later floor collapse reuses this drift.
+    native_jump_momentum: jnp.ndarray = False
+    # RAM53 selects a fixed hanging pose or a globally clocked climb cycle.
+    native_climb_moving: jnp.ndarray = False
+    native_walk_pose: jnp.ndarray = False
     game_over_pending: jnp.ndarray = False
     # First-key pickup bookkeeping; elapsed native ticks include frozen poses.
     pickup_timer: jnp.ndarray = struct.field(default_factory=lambda: jnp.int32(0))
     pickup_item_idx: jnp.ndarray = struct.field(default_factory=lambda: jnp.int32(-1))
     rolling_skull_direction: jnp.ndarray = struct.field(default_factory=lambda: jnp.int32(-1))
+    rolling_skull_phase: jnp.ndarray = struct.field(default_factory=lambda: jnp.int32(8))
+    native_rolling_x: jnp.ndarray = struct.field(default_factory=lambda: jnp.int32(58))
+    native_rolling_direction: jnp.ndarray = struct.field(default_factory=lambda: jnp.int32(-1))
+    native_room_history: jnp.ndarray = struct.field(default_factory=lambda: jnp.ones(24, dtype=jnp.int32))
     native_frame_count: jnp.ndarray = struct.field(default_factory=lambda: jnp.int32(0))
     # ROM random bytes and dispatch state; free-running even during holds.
     bonus_pickup_latched: jnp.ndarray = False
@@ -192,7 +208,7 @@ def enemy_bounce_offsets(state: MontezumaRevengeState, consts: MontezumaRevengeC
     """Shared native/render/observation height; preserve unmeasured rooms."""
     legacy = consts.BOUNCE_OFFSETS[jnp.mod(state.frame_count // 4, 22)]
     room5 = consts.ROOM5_BOUNCE_OFFSETS[state.room5_skull_phase]
-    measured_room = jnp.logical_and(jnp.isin(state.room_id, jnp.array([5, 10])), not consts.CUSTOM_ROOMS)
+    measured_room = jnp.logical_and(jnp.logical_or(state.level > 0, jnp.isin(state.room_id, jnp.array([5, 10]))), not consts.CUSTOM_ROOMS)
     offset = jnp.where(measured_room, room5, legacy)
     return jnp.where(state.enemies_bouncing == 1, offset, 0)
 

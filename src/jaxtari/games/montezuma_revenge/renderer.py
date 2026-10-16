@@ -584,7 +584,8 @@ class MontezumaRevengeRenderer(JAXGameRenderer):
 
         def _draw_lasers(raster):
             # Draw Lasers - vectorized to draw all lasers at once
-            laser_active_now = jnp.logical_and(jnp.greater_equal(state.laser_cycle, 0), jnp.less(state.laser_cycle, 92))
+            laser_active_now = jnp.logical_or(state.level == 2,
+                jnp.logical_and(jnp.greater_equal(state.laser_cycle, 0), jnp.less(state.laser_cycle, 92)))
             laser_offset = jnp.mod(state.laser_cycle, 4)
             
             # Compute stripe j values (40 pixels high, 4-pixel spacing with offset)
@@ -817,6 +818,14 @@ class MontezumaRevengeRenderer(JAXGameRenderer):
             )
             
             skull_mask = self.SHAPE_MASKS["skull"][jnp.where(state.enemies_bouncing[i] == 1, 0, anim_idx)]
+            skull_mask = jnp.where(jnp.logical_and(state.level == 2, state.room_id == 3),
+                skull_mask.at[-1, :].set(self.jr.TRANSPARENT_ID), skull_mask)
+            native_rolling = jnp.logical_and(state.level == 2,
+                jnp.logical_and(i == 0, jnp.isin(state.room_id, jnp.array([4,12,27]))))
+            skull_mask = jnp.where(native_rolling,
+                self.SHAPE_MASKS["skull"][state.rolling_skull_phase], skull_mask)
+            skull_mask = jax.lax.cond(jnp.logical_and(native_rolling, state.native_rolling_direction < 0),
+                lambda: jnp.flip(skull_mask, axis=1), lambda: skull_mask)
             
             # Neutralize (gray out) enemies if amulet is active
             is_neutralized = state.amulet_time > 0
@@ -886,7 +895,20 @@ class MontezumaRevengeRenderer(JAXGameRenderer):
         )
         
         player_mask = self.SHAPE_MASKS["player"][player_sprite_idx]
-        raster = self.jr.render_at(raster, state.player_x, state.player_y + 47, player_mask, flip_horizontal=flip_player)
+        # Native climb pointers describe the pose rendered before this tick's
+        # movement. Keep its fixed/clocked bitmap, facing and ladder scanlines.
+        climb_render = jnp.logical_and(state.level == 2, jnp.logical_and(~is_dying,
+            jnp.logical_or(state.is_climbing == 1,
+                jnp.logical_and(state.collision_player_pose >= 3, state.collision_player_pose <= 6))))
+        retained_mask = self.SHAPE_MASKS["player"][state.collision_player_pose]
+        player_mask = jnp.where(climb_render, retained_mask, player_mask)
+        retained_flip = jnp.where(jnp.isin(state.collision_player_pose, jnp.array([1,2,7])),
+            state.collision_player_dir == 1, state.collision_player_dir == -1)
+        flip_player = jnp.where(climb_render, retained_flip, flip_player)
+        render_x = jnp.where(climb_render, state.collision_player_x, state.player_x)
+        climb_offset = jnp.isin(state.collision_player_pose, jnp.array([3,4])).astype(jnp.int32) * 2
+        render_y = jnp.where(climb_render, state.collision_player_y + climb_offset, state.player_y)
+        raster = self.jr.render_at(raster, render_x, render_y + 47, player_mask, flip_horizontal=flip_player)
 
         # Render Score
         score = state.score
