@@ -180,7 +180,7 @@ def load_room(room_id: jnp.ndarray, state: MontezumaRevengeState, consts: Montez
         lb = lb.at[2].set(130)
         la = la.at[2].set(1)
 
-        rx = config.ropes_x.at[0].set(111)
+        rx = config.ropes_x.at[0].set(112)
         rt = config.ropes_top.at[0].set(49)
         rb = config.ropes_bottom.at[0].set(88)
         ra = config.ropes_active.at[0].set(1)
@@ -190,7 +190,7 @@ def load_room(room_id: jnp.ndarray, state: MontezumaRevengeState, consts: Montez
         ia = ia.at[0].set(1)
 
         cx = config.conveyors_x.at[0].set(60)
-        cy = config.conveyors_y.at[0].set(88)
+        cy = config.conveyors_y.at[0].set(89)
         ca = config.conveyors_active.at[0].set(1)
         cd = config.conveyors_direction.at[0].set(-1)
         
@@ -290,7 +290,7 @@ def load_room(room_id: jnp.ndarray, state: MontezumaRevengeState, consts: Montez
         la = la.at[0].set(1)
         lx = lx.at[1].set(72)
         lt = lt.at[1].set(6)
-        lb = lb.at[1].set(44)
+        lb = lb.at[1].set(46)
         la = la.at[1].set(1)
 
         return config.replace(
@@ -468,7 +468,7 @@ def load_room(room_id: jnp.ndarray, state: MontezumaRevengeState, consts: Montez
         laa = config.lasers_active
 
         lx = lx.at[0].set(72)
-        lt = lt.at[0].set(51)
+        lt = lt.at[0].set(50)
         lb = lb.at[0].set(149)
         la = la.at[0].set(1)
 
@@ -614,13 +614,13 @@ def load_room(room_id: jnp.ndarray, state: MontezumaRevengeState, consts: Montez
         # Ladder
         lx = lx.at[0].set(72)
         lt = lt.at[0].set(6)
-        lb = lb.at[0].set(47)
+        lb = lb.at[0].set(44)
         la = la.at[0].set(1)
 
         # Dropout floor (using platform)
-        px = px.at[0].set(32)
-        py = py.at[0].set(47)
-        pw = pw.at[0].set(96)
+        px = px.at[0].set(36)
+        py = py.at[0].set(46)
+        pw = pw.at[0].set(88)
         pa = pa.at[0].set(1)
 
         return config.replace(
@@ -753,7 +753,7 @@ def load_room(room_id: jnp.ndarray, state: MontezumaRevengeState, consts: Montez
 
         # 1 Ladder to bottom
         lx = lx.at[0].set(72)
-        lt = lt.at[0].set(123)
+        lt = lt.at[0].set(125)
         lb = lb.at[0].set(150)
         la = la.at[0].set(1)
 
@@ -813,9 +813,9 @@ def load_room(room_id: jnp.ndarray, state: MontezumaRevengeState, consts: Montez
         emaxx = config.enemies_max_x.at[0].set(37)
 
         # Dropout floor (using platform)
-        px = px.at[0].set(32)
-        py = py.at[0].set(47)
-        pw = pw.at[0].set(96) # Multiple of 12 (7 * 12)
+        px = px.at[0].set(36)
+        py = py.at[0].set(46)
+        pw = pw.at[0].set(88) # Multiple of 12 (7 * 12)
         pa = pa.at[0].set(1)
 
         return config.replace(
@@ -868,9 +868,9 @@ def load_room(room_id: jnp.ndarray, state: MontezumaRevengeState, consts: Montez
         pa = config.platforms_active
 
         # Dropout floor (using platform)
-        px = px.at[0].set(32)
-        py = py.at[0].set(47)
-        pw = pw.at[0].set(96) # Multiple of 12 (7 * 12)
+        px = px.at[0].set(36)
+        py = py.at[0].set(46)
+        pw = pw.at[0].set(88) # Multiple of 12 (7 * 12)
         pa = pa.at[0].set(1)
 
         ex = config.enemies_x.at[0].set(45)
@@ -904,9 +904,9 @@ def load_room(room_id: jnp.ndarray, state: MontezumaRevengeState, consts: Montez
         pa = config.platforms_active
 
         # Dropout floor (using platform)
-        px = px.at[0].set(32)
-        py = py.at[0].set(47)
-        pw = pw.at[0].set(96) # Multiple of 12 (7 * 12)
+        px = px.at[0].set(36)
+        py = py.at[0].set(46)
+        pw = pw.at[0].set(88) # Multiple of 12 (7 * 12)
         pa = pa.at[0].set(1)
         
         # 2 Gems (coins) on the platform

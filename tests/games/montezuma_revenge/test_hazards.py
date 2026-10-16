@@ -16,11 +16,14 @@ def test_laser_inactive_cycle(montezuma_env):
         player_y=jnp.array(20, dtype=jnp.int32),
         lasers_x=state.lasers_x.at[0].set(40),
         lasers_active=state.lasers_active.at[0].set(1),
+        # Phase 95 belongs to native tick 64. The free-running native clock
+        # determines laser phase, including when a test initializes a room.
+        native_frame_count=jnp.array(64, dtype=jnp.int32),
         laser_cycle=jnp.array(95, dtype=jnp.int32)
     )
     
     obs, state, reward, done, info = env.step(state, 0) # NOOP
     
     # Laser is inactive, player should not die
+    assert state.laser_cycle == 96
     assert state.death_timer == 0
-

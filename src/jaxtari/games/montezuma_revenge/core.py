@@ -28,18 +28,22 @@ class MontezumaRevengeConstants(struct.PyTreeNode):
     HEIGHT: int = struct.field(pytree_node=False, default=210)
     PLAYER_WIDTH: int = struct.field(pytree_node=False, default=7)
     PLAYER_HEIGHT: int = struct.field(pytree_node=False, default=20)
-    INITIAL_PLAYER_X: int = struct.field(pytree_node=False, default=77)
+    INITIAL_PLAYER_X: int = struct.field(pytree_node=False, default=76)
     INITIAL_PLAYER_Y: int = struct.field(pytree_node=False, default=26)
     INITIAL_ROOM_ID: int = struct.field(pytree_node=False, default=4)
     PLAYER_SPEED: int = struct.field(pytree_node=False, default=1)
+    # Ladder centering uses the standing sprite anchor, independently of collision width.
+    LADDER_PLAYER_X_OFFSET: int = struct.field(pytree_node=False, default=4)
+    # Rope sprites use the same eight-pixel pose anchor, not collision width.
+    ROPE_PLAYER_X_OFFSET: int = struct.field(pytree_node=False, default=4)
     
     # Room Transition Coordinates
-    ROOM_ENTRY_X_LEFT: int = struct.field(pytree_node=False, default=4)
-    ROOM_ENTRY_X_RIGHT: int = struct.field(pytree_node=False, default=148)
-    ROOM_ENTRY_Y_TOP: int = struct.field(pytree_node=False, default=6)
-    ROOM_ENTRY_Y_BOTTOM: int = struct.field(pytree_node=False, default=129)
-    ROOM_EXIT_Y_TOP: int = struct.field(pytree_node=False, default=2)
-    ROOM_EXIT_Y_BOTTOM: int = struct.field(pytree_node=False, default=130)
+    ROOM_ENTRY_X_LEFT: int = struct.field(pytree_node=False, default=0)
+    ROOM_ENTRY_X_RIGHT: int = struct.field(pytree_node=False, default=151)
+    ROOM_ENTRY_Y_TOP: int = struct.field(pytree_node=False, default=7)
+    ROOM_ENTRY_Y_BOTTOM: int = struct.field(pytree_node=False, default=127)
+    ROOM_EXIT_Y_TOP: int = struct.field(pytree_node=False, default=6)
+    ROOM_EXIT_Y_BOTTOM: int = struct.field(pytree_node=False, default=128)
     
     JUMP_Y_OFFSETS: jnp.ndarray = struct.field(pytree_node=False, default_factory=lambda: jnp.array([3, 3, 3, 2, 2, 2, 1, 1, 0, 0, 0, 0, -1, -1, -2, -2, -2, -3, -3, -3], dtype=jnp.int32))
     GRAVITY: int = struct.field(pytree_node=False, default=2)
@@ -60,7 +64,7 @@ class MontezumaRevengeConstants(struct.PyTreeNode):
     MAX_FALL_DISTANCE: int = struct.field(pytree_node=False, default=20) # ladder_height (39) - 6
     BOUNCE_OFFSETS: jnp.ndarray = struct.field(pytree_node=False, default_factory=lambda: jnp.array([0, 3, 6, 9, 12, 15, 18, 21, 24, 27, 27, 27, 27, 24, 21, 18, 15, 12, 9, 6, 3, 0], dtype=jnp.int32))
     DEATH_TIMER_FRAMES: int = struct.field(pytree_node=False, default=70)
-    PLATFORM_ACTIVE_DURATION: int = struct.field(pytree_node=False, default=90) # For spawning and disappearing platform
+    PLATFORM_ACTIVE_DURATION: int = struct.field(pytree_node=False, default=92) # For spawning and disappearing platform
     PLATFORM_CYCLE_LENGTH: int = struct.field(pytree_node=False, default=128)
     AMULET_DURATION: int = struct.field(pytree_node=False, default=660)
     KILL_ENEMY_REWARD: int = struct.field(pytree_node=False, default=100)
@@ -153,6 +157,12 @@ class MontezumaRevengeState:
     bonus_room_timer: jnp.ndarray
     first_gem_pickup: jnp.ndarray
     key: jrandom.PRNGKey
+    native_frame_count: jnp.ndarray = struct.field(default_factory=lambda: jnp.int32(0))
+    jump_type: jnp.ndarray = struct.field(default_factory=lambda: jnp.int32(0))
+    native_mode: jnp.ndarray = struct.field(default_factory=lambda: jnp.int32(4))
+    transition_pending: jnp.ndarray = struct.field(default_factory=lambda: jnp.int32(0))
+    transition_x: jnp.ndarray = struct.field(default_factory=lambda: jnp.int32(0))
+    transition_y: jnp.ndarray = struct.field(default_factory=lambda: jnp.int32(0))
 
 @struct.dataclass
 class MontezumaRevengeObservation:
@@ -228,3 +238,8 @@ def check_platform(col_map, y, x, width):
                     col_map[y, x_p1] == 1
                 )
             )
+
+
+def rope_widths(state: MontezumaRevengeState):
+    """The right ropes in rooms12/23 occupy two rendered columns."""
+    return jnp.where(jnp.logical_and(jnp.isin(state.room_id, jnp.array([12,23])), jnp.arange(state.ropes_x.shape[0]) == 1), 2, 1)
