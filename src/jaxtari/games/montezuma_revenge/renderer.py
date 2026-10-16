@@ -199,12 +199,66 @@ class MontezumaRevengeRenderer(JAXGameRenderer):
             self.SHAPE_MASKS["digit_8"],
             self.SHAPE_MASKS["digit_9"],
         ])
+        self.temple_color_maps = self._create_temple_color_maps()
+
         if self.pre_load_rooms:
             room_template_state = self._create_room_geometry_template_state()
             self.room_backgrounds = jnp.stack([
                 self._build_room_background(room_id, self._load_room_geometry(room_id, room_template_state))
                 for room_id in range(self.consts.MAX_ROOMS)
             ])
+
+    def _create_temple_color_maps(self):
+        """Map room-geometry colors by temple and floor, before drawing sprites.
+
+        ALE's NTSC palette advances the two playfield colors one pair per temple.
+        Assets contain the first temple's colors. Keep that temple, custom
+        rooms, the bonus room, and non-playfield colors unchanged.
+        """
+        color_pairs = (
+            ((66, 158, 130), (24, 59, 157)),
+            ((104, 25, 154), (204, 216, 110)),
+            ((45, 87, 176), (92, 186, 92)),
+            ((24, 26, 167), (213, 130, 74)),
+            ((72, 160, 72), (24, 26, 167)),
+            ((51, 26, 163), (223, 183, 85)),
+        )
+        self.PALETTE, pair_ids = self.jr.add_palette_colors(
+            self.PALETTE, [color for pair in color_pairs for color in pair])
+        pair_ids = pair_ids.reshape(6, 2).tolist()
+        # Drawing helpers append their own IDs for some asset colors.
+        aliases = {
+            (66, 158, 130): [self.LADDER_ID],
+            (24, 59, 157): [self.BLUE_LADDER_ID],
+            (104, 25, 154): [self.LADDER_ID_L2],
+            (204, 216, 110): [self.YELLOW_LADDER_ID],
+            (45, 87, 176): [self.LEVEL2_PLATFORM_ID],
+            (24, 26, 167): [self.DEEP_BLUE_PLATFORM_ID],
+            (213, 130, 74): [self.ORANGE_LADDER_ID],
+        }
+        floors = ((3, 4, 5), (10, 11, 12, 13, 14),
+                  (17, 18, 19, 20, 21, 22, 23), (25, 26, 27, 28, 29, 30, 31, 32))
+        identity = list(range(self.PALETTE.shape[0]))
+        maps = [[identity.copy() for _ in range(self.consts.MAX_ROOMS)] for _ in range(3)]
+        for temple in (1, 2):
+            for floor, rooms in enumerate(floors):
+                for room in rooms:
+                    roles = {color_pairs[floor][0]: 0, color_pairs[floor][1]: 1}
+                    # Some shared geometry helpers use IDs from another floor.
+                    if floor:
+                        roles[(66, 158, 130)] = 1 if room == 23 else 0
+                    if floor >= 2:
+                        roles[(45, 87, 176)] = 0
+                        roles[(104, 25, 154)] = 0
+                        roles[(24, 26, 167)] = 0
+                    for color, role in roles.items():
+                        source_ids = aliases.get(color, [])
+                        asset_id = self.COLOR_TO_ID.get(color)
+                        if asset_id is not None:
+                            source_ids = [asset_id, *source_ids]
+                        for source_id in source_ids:
+                            maps[temple][room][int(source_id)] = pair_ids[floor + temple][role]
+        return jnp.asarray(maps, dtype=self.BACKGROUND.dtype)
 
     def _create_room_geometry_template_state(self) -> MontezumaRevengeState:
         return MontezumaRevengeState(
@@ -735,6 +789,12 @@ class MontezumaRevengeRenderer(JAXGameRenderer):
             raster
         )
         
+        # Recolor geometry only. Player/enemy/item sprites and the HUD retain
+        # their own palette, and collision masks never depend on this lookup.
+        if not self.consts.CUSTOM_ROOMS:
+            color_map = self.temple_color_maps[jnp.clip(state.level, 0, 2), state.room_id]
+            raster = color_map[raster]
+
         # Draw Items
         def render_item(i, raster):
             x = state.items_x[i]
