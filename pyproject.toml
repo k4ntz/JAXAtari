@@ -29,6 +29,7 @@ build-backend = "hatchling.build"
 
 [project.scripts]
 install-sprites = "jaxtari.install_sprites:download_and_extract"
+install-detection = "jaxtari.install_detection:download_and_extract"
 
 [project.optional-dependencies]
 dev = [
@@ -45,6 +46,12 @@ gh_ci = [
   "pytest-xdist",
   "pytest-github-actions-annotate-failures",
   "syrupy==4.9.1",
+]
+train_detection = [  # tooling for detector datasets / training / videos (the wrapper itself needs none of it)
+  "ultralytics",
+  "opencv-python-headless",
+  "imageio",
+  "imageio-ffmpeg",
 ]
 training = [
   "tyro",

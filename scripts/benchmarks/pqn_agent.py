@@ -20,6 +20,7 @@ import optax
 import flax.linen as nn
 from flax.training.train_state import TrainState
 from flax.core.frozen_dict import FrozenDict
+from jaxtari.detection import YOLOObjectCentricWrapper
 from jaxtari.wrappers import AtariWrapper, MultiRewardWrapper, PixelObsWrapper, FlattenObservationWrapper, LogWrapper, ObjectCentricWrapper, NormalizeObservationWrapper, MultiRewardWrapper, MultiRewardLogWrapper
 import hydra
 from omegaconf import OmegaConf
@@ -139,12 +140,23 @@ def apply_wrappers(env, config):
             full_action_space=False
     )
     if config.get("OBJECT_CENTRIC", False):
-        env = ObjectCentricWrapper(
-            env,
-            frame_stack_size=4,
-            frame_skip=4,
-            clip_reward=True
-        )
+        if config.get("YOLO_WEIGHTS", None) is not None:
+            # object-centric observations from a YOLO detector (same layout as ObjectCentricWrapper)
+            env = YOLOObjectCentricWrapper(
+                env,
+                config["YOLO_WEIGHTS"],  # checkpoint name (e.g. "gray96/pong") or .npz path
+                frame_stack_size=4,
+                frame_skip=4,
+                clip_reward=True,
+                max_pool=config.get("YOLO_MAX_POOL", False),  # max over the last two frames (flicker)
+            )
+        else:
+            env = ObjectCentricWrapper(
+                env,
+                frame_stack_size=4,
+                frame_skip=4,
+                clip_reward=True
+            )
         env = NormalizeObservationWrapper(env)
         env = FlattenObservationWrapper(env)
     else:
@@ -717,6 +729,11 @@ def single_run(config):
     outs = jax.block_until_ready(train_vjit(rngs))
     print(f"Run time: {time.time() - compile_time} seconds.")
     print(f"Total: {time.time()-t0} seconds.")
+    if config.get("METRICS_PATH", None) is not None:  # learning curves without wandb
+        os.makedirs(os.path.dirname(config["METRICS_PATH"]) or ".", exist_ok=True)
+        np.savez(config["METRICS_PATH"], compile_s=compile_time - t0, run_s=time.time() - compile_time,
+                 **{k: np.asarray(v) for k, v in outs["metrics"].items()})
+        print(f"Metrics saved to {config['METRICS_PATH']}")
 
     if config.get("SAVE_PATH", None) is not None:
         model_state = outs["runner_state"][0]

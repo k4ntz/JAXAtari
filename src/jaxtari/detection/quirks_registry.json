@@ -1,0 +1,4284 @@
+{
+    "amidar": {
+        "objects": {
+            "player_gorilla": {
+                "class_id": 0,
+                "detected_type": "entity",
+                "x_offset": -1,
+                "y_offset": 0,
+                "grid_origin_x": null,
+                "grid_origin_y": null,
+                "cell_w": null,
+                "cell_h": null,
+                "grid_cols": null,
+                "active_value": null,
+                "_raw_shape": null
+            },
+            "player_paint_roller": {
+                "class_id": 0,
+                "detected_type": "entity",
+                "x_offset": -1,
+                "y_offset": 0,
+                "grid_origin_x": null,
+                "grid_origin_y": null,
+                "cell_w": null,
+                "cell_h": null,
+                "grid_cols": null,
+                "active_value": null,
+                "_raw_shape": null
+            },
+            "enemy": {
+                "class_id": 1,
+                "detected_type": "entity",
+                "x_offset": -2,
+                "y_offset": 0,
+                "grid_origin_x": null,
+                "grid_origin_y": null,
+                "cell_w": null,
+                "cell_h": null,
+                "grid_cols": null,
+                "active_value": null,
+                "_raw_shape": null
+            },
+            "paths": {
+                "class_id": 4,
+                "detected_type": "entity",
+                "x_offset": 0,
+                "y_offset": 0,
+                "grid_origin_x": null,
+                "grid_origin_y": null,
+                "cell_w": null,
+                "cell_h": null,
+                "grid_cols": null,
+                "active_value": null,
+                "_raw_shape": null
+            },
+            "walked_on_paths": {
+                "class_id": 4,
+                "detected_type": "entity",
+                "x_offset": 0,
+                "y_offset": 0,
+                "grid_origin_x": null,
+                "grid_origin_y": null,
+                "cell_w": null,
+                "cell_h": null,
+                "grid_cols": null,
+                "active_value": null,
+                "_raw_shape": null
+            },
+            "completed_rectangles": {
+                "class_id": 4,
+                "detected_type": "entity",
+                "x_offset": 0,
+                "y_offset": 0,
+                "grid_origin_x": null,
+                "grid_origin_y": null,
+                "cell_w": null,
+                "cell_h": null,
+                "grid_cols": null,
+                "active_value": null,
+                "_raw_shape": null
+            }
+        }
+    },
+    "alien": {
+        "objects": {
+            "player": {
+                "class_id": 0,
+                "detected_type": "entity",
+                "x_offset": 8,
+                "y_offset": 6,
+                "grid_origin_x": null,
+                "grid_origin_y": null,
+                "cell_w": null,
+                "cell_h": null,
+                "grid_cols": null,
+                "active_value": null,
+                "_raw_shape": null
+            },
+            "enemies": {
+                "class_id": 1,
+                "detected_type": "entity",
+                "x_offset": 8,
+                "y_offset": 6,
+                "grid_origin_x": null,
+                "grid_origin_y": null,
+                "cell_w": null,
+                "cell_h": null,
+                "grid_cols": null,
+                "active_value": null,
+                "_raw_shape": null
+            },
+            "enemies_killable": {
+                "class_id": 1,
+                "detected_type": "slot_flags",
+                "x_offset": null,
+                "y_offset": null,
+                "grid_origin_x": null,
+                "grid_origin_y": null,
+                "cell_w": null,
+                "cell_h": null,
+                "grid_cols": null,
+                "active_value": null,
+                "_raw_shape": [
+                    4,
+                    6
+                ]
+            }
+        }
+    },
+    "asterix": {
+        "objects": {
+            "player": {
+                "class_id": 0,
+                "detected_type": "entity",
+                "x_offset": 0,
+                "y_offset": 0,
+                "w_padding": 1,
+                "h_padding": 2,
+                "grid_origin_x": null,
+                "grid_origin_y": null,
+                "cell_w": null,
+                "cell_h": null,
+                "grid_cols": null,
+                "active_value": null,
+                "_raw_shape": null
+            },
+            "enemies": {
+                "class_id": 1,
+                "detected_type": "entity",
+                "x_offset": 0,
+                "y_offset": 0,
+                "grid_origin_x": null,
+                "grid_origin_y": null,
+                "cell_w": null,
+                "cell_h": null,
+                "grid_cols": null,
+                "active_value": null,
+                "_raw_shape": null
+            },
+            "collectibles": {
+                "class_id": 3,
+                "detected_type": "entity",
+                "x_offset": -2,
+                "y_offset": -1,
+                "w_padding": 1,
+                "h_padding": 4,
+                "grid_origin_x": null,
+                "grid_origin_y": null,
+                "cell_w": null,
+                "cell_h": null,
+                "grid_cols": null,
+                "active_value": null,
+                "_raw_shape": null
+            }
+        }
+    },
+    "asteroids": {
+        "objects": {
+            "player": {
+                "class_id": 0,
+                "detected_type": "entity",
+                "x_offset": 0,
+                "y_offset": 0,
+                "grid_origin_x": null,
+                "grid_origin_y": null,
+                "cell_w": null,
+                "cell_h": null,
+                "grid_cols": null,
+                "active_value": null,
+                "_raw_shape": null
+            },
+            "missiles": {
+                "class_id": 2,
+                "detected_type": "entity",
+                "x_offset": 0,
+                "y_offset": 0,
+                "grid_origin_x": null,
+                "grid_origin_y": null,
+                "cell_w": null,
+                "cell_h": null,
+                "grid_cols": null,
+                "active_value": null,
+                "_raw_shape": null
+            },
+            "asteroids": {
+                "class_id": 1,
+                "detected_type": "entity",
+                "x_offset": 0,
+                "y_offset": 0,
+                "grid_origin_x": null,
+                "grid_origin_y": null,
+                "cell_w": null,
+                "cell_h": null,
+                "grid_cols": null,
+                "active_value": null,
+                "_raw_shape": null
+            }
+        }
+    },
+    "atlantis": {
+        "objects": {
+            "enemy": {
+                "class_id": 1,
+                "detected_type": "entity",
+                "x_offset": 0,
+                "y_offset": 0,
+                "grid_origin_x": null,
+                "grid_origin_y": null,
+                "cell_w": null,
+                "cell_h": null,
+                "grid_cols": null,
+                "active_value": null,
+                "_raw_shape": null
+            },
+            "bullet": {
+                "class_id": 2,
+                "detected_type": "entity",
+                "x_offset": 0,
+                "y_offset": 0,
+                "grid_origin_x": null,
+                "grid_origin_y": null,
+                "cell_w": null,
+                "cell_h": null,
+                "grid_cols": null,
+                "active_value": null,
+                "_raw_shape": null
+            },
+            "plasma": {
+                "class_id": 6,
+                "detected_type": "entity",
+                "x_offset": 0,
+                "y_offset": 0,
+                "grid_origin_x": null,
+                "grid_origin_y": null,
+                "cell_w": null,
+                "cell_h": null,
+                "grid_cols": null,
+                "active_value": null,
+                "_raw_shape": null
+            },
+            "installations_alive": {
+                "class_id": 4,
+                "detected_type": "slot_flags",
+                "x_offset": null,
+                "y_offset": null,
+                "grid_origin_x": null,
+                "grid_origin_y": null,
+                "cell_w": null,
+                "cell_h": null,
+                "grid_cols": null,
+                "active_value": null,
+                "_raw_shape": [
+                    4,
+                    6
+                ]
+            },
+            "cannons": {
+                "class_id": 0,
+                "detected_type": "entity",
+                "x_offset": 0,
+                "y_offset": 0,
+                "grid_origin_x": null,
+                "grid_origin_y": null,
+                "cell_w": null,
+                "cell_h": null,
+                "grid_cols": null,
+                "active_value": null,
+                "_raw_shape": null
+            },
+            "installations": {
+                "class_id": 4,
+                "detected_type": "entity",
+                "x_offset": 0,
+                "y_offset": 0,
+                "grid_origin_x": null,
+                "grid_origin_y": null,
+                "cell_w": null,
+                "cell_h": null,
+                "grid_cols": null,
+                "active_value": null,
+                "_raw_shape": null
+            }
+        }
+    },
+    "bankheist": {
+        "objects": {
+            "player": {
+                "class_id": 0,
+                "detected_type": "entity",
+                "x_offset": 0,
+                "y_offset": 0,
+                "grid_origin_x": null,
+                "grid_origin_y": null,
+                "cell_w": 10,
+                "cell_h": null,
+                "grid_cols": null,
+                "active_value": null,
+                "_raw_shape": null
+            },
+            "enemies": {
+                "class_id": 1,
+                "detected_type": "entity",
+                "x_offset": 0,
+                "y_offset": 0,
+                "grid_origin_x": null,
+                "grid_origin_y": null,
+                "cell_w": null,
+                "cell_h": null,
+                "grid_cols": null,
+                "active_value": null,
+                "_raw_shape": null
+            },
+            "banks": {
+                "class_id": 3,
+                "detected_type": "entity",
+                "x_offset": 0,
+                "y_offset": 0,
+                "grid_origin_x": null,
+                "grid_origin_y": null,
+                "cell_w": null,
+                "cell_h": null,
+                "grid_cols": null,
+                "active_value": null,
+                "_raw_shape": null
+            },
+            "dynamite": {
+                "class_id": 2,
+                "detected_type": "entity",
+                "x_offset": 0,
+                "y_offset": -4,
+                "grid_origin_x": null,
+                "grid_origin_y": null,
+                "cell_w": null,
+                "cell_h": null,
+                "grid_cols": null,
+                "active_value": null,
+                "_raw_shape": null
+            }
+        }
+    },
+    "beamrider": {
+        "objects": {
+            "player": {
+                "class_id": 0,
+                "detected_type": "entity",
+                "x_offset": -1,
+                "y_offset": 0,
+                "grid_origin_x": null,
+                "grid_origin_y": null,
+                "cell_w": null,
+                "cell_h": null,
+                "grid_cols": null,
+                "active_value": null,
+                "_raw_shape": null
+            },
+            "player_shots": {
+                "class_id": 2,
+                "detected_type": "entity",
+                "x_offset": 0,
+                "y_offset": 0,
+                "grid_origin_x": null,
+                "grid_origin_y": null,
+                "cell_w": null,
+                "cell_h": null,
+                "grid_cols": null,
+                "active_value": null,
+                "_raw_shape": null
+            },
+            "white_ufo": {
+                "class_id": 5,
+                "detected_type": "entity",
+                "x_offset": 0,
+                "y_offset": 0,
+                "grid_origin_x": null,
+                "grid_origin_y": null,
+                "cell_w": null,
+                "cell_h": null,
+                "grid_cols": null,
+                "active_value": null,
+                "_raw_shape": null
+            },
+            "enemy_shots": {
+                "class_id": 6,
+                "detected_type": "entity",
+                "x_offset": 0,
+                "y_offset": 0,
+                "grid_origin_x": null,
+                "grid_origin_y": null,
+                "cell_w": null,
+                "cell_h": null,
+                "grid_cols": null,
+                "active_value": null,
+                "_raw_shape": null
+            },
+            "chasing_meteoroids": {
+                "class_id": 1,
+                "detected_type": "entity",
+                "x_offset": 0,
+                "y_offset": 0,
+                "grid_origin_x": null,
+                "grid_origin_y": null,
+                "cell_w": null,
+                "cell_h": null,
+                "grid_cols": null,
+                "active_value": null,
+                "_raw_shape": null
+            },
+            "falling_rocks": {
+                "class_id": 5,
+                "detected_type": "entity",
+                "x_offset": 0,
+                "y_offset": 0,
+                "grid_origin_x": null,
+                "grid_origin_y": null,
+                "cell_w": null,
+                "cell_h": null,
+                "grid_cols": null,
+                "active_value": null,
+                "_raw_shape": null
+            },
+            "lane_blockers": {
+                "class_id": 4,
+                "detected_type": "entity",
+                "x_offset": 0,
+                "y_offset": 0,
+                "grid_origin_x": null,
+                "grid_origin_y": null,
+                "cell_w": null,
+                "cell_h": null,
+                "grid_cols": null,
+                "active_value": null,
+                "_raw_shape": null
+            },
+            "coins": {
+                "class_id": 3,
+                "detected_type": "entity",
+                "x_offset": 0,
+                "y_offset": 0,
+                "grid_origin_x": null,
+                "grid_origin_y": null,
+                "cell_w": null,
+                "cell_h": null,
+                "grid_cols": null,
+                "active_value": null,
+                "_raw_shape": null
+            },
+            "kamikaze": {
+                "class_id": 1,
+                "detected_type": "entity",
+                "x_offset": 0,
+                "y_offset": 0,
+                "grid_origin_x": null,
+                "grid_origin_y": null,
+                "cell_w": null,
+                "cell_h": null,
+                "grid_cols": null,
+                "active_value": null,
+                "_raw_shape": null
+            },
+            "rejuvenator": {
+                "class_id": 3,
+                "detected_type": "entity",
+                "x_offset": 0,
+                "y_offset": 0,
+                "grid_origin_x": null,
+                "grid_origin_y": null,
+                "cell_w": null,
+                "cell_h": null,
+                "grid_cols": null,
+                "active_value": null,
+                "_raw_shape": null
+            },
+            "bouncer": {
+                "class_id": 1,
+                "detected_type": "entity",
+                "x_offset": 0,
+                "y_offset": 0,
+                "grid_origin_x": null,
+                "grid_origin_y": null,
+                "cell_w": null,
+                "cell_h": null,
+                "grid_cols": null,
+                "active_value": null,
+                "_raw_shape": null
+            },
+            "mothership": {
+                "class_id": 1,
+                "detected_type": "entity",
+                "x_offset": 0,
+                "y_offset": 0,
+                "grid_origin_x": null,
+                "grid_origin_y": null,
+                "cell_w": null,
+                "cell_h": null,
+                "grid_cols": null,
+                "active_value": null,
+                "_raw_shape": null
+            },
+            "white_ufo_pattern_id": {
+                "class_id": 5,
+                "detected_type": "slot_flags",
+                "x_offset": null,
+                "y_offset": null,
+                "grid_origin_x": null,
+                "grid_origin_y": null,
+                "cell_w": null,
+                "cell_h": null,
+                "grid_cols": null,
+                "active_value": null,
+                "_raw_shape": [
+                    4,
+                    3
+                ]
+            },
+            "white_ufo_pattern_timer": {
+                "class_id": 5,
+                "detected_type": "slot_flags",
+                "x_offset": null,
+                "y_offset": null,
+                "grid_origin_x": null,
+                "grid_origin_y": null,
+                "cell_w": null,
+                "cell_h": null,
+                "grid_cols": null,
+                "active_value": null,
+                "_raw_shape": [
+                    4,
+                    3
+                ]
+            }
+        }
+    },
+    "berzerk": {
+        "objects": {
+            "player": {
+                "class_id": 0,
+                "detected_type": "entity",
+                "x_offset": 0,
+                "y_offset": 0,
+                "grid_origin_x": null,
+                "grid_origin_y": null,
+                "cell_w": null,
+                "cell_h": null,
+                "grid_cols": null,
+                "active_value": null,
+                "_raw_shape": null
+            },
+            "player_bullet": {
+                "class_id": 2,
+                "detected_type": "entity",
+                "x_offset": 0,
+                "y_offset": 0,
+                "grid_origin_x": null,
+                "grid_origin_y": null,
+                "cell_w": null,
+                "cell_h": null,
+                "grid_cols": null,
+                "active_value": null,
+                "_raw_shape": null
+            },
+            "enemies": {
+                "class_id": 1,
+                "detected_type": "entity",
+                "x_offset": 0,
+                "y_offset": 0,
+                "grid_origin_x": null,
+                "grid_origin_y": null,
+                "cell_w": null,
+                "cell_h": null,
+                "grid_cols": null,
+                "active_value": null,
+                "_raw_shape": null
+            },
+            "enemy_bullets": {
+                "class_id": 6,
+                "detected_type": "entity",
+                "x_offset": 0,
+                "y_offset": 0,
+                "grid_origin_x": null,
+                "grid_origin_y": null,
+                "cell_w": null,
+                "cell_h": null,
+                "grid_cols": null,
+                "active_value": null,
+                "_raw_shape": null
+            },
+            "otto": {
+                "class_id": 1,
+                "detected_type": "entity",
+                "x_offset": 0,
+                "y_offset": 0,
+                "grid_origin_x": null,
+                "grid_origin_y": null,
+                "cell_w": null,
+                "cell_h": null,
+                "grid_cols": null,
+                "active_value": null,
+                "_raw_shape": null
+            }
+        }
+    },
+    "blackjack": {
+        "objects": {}
+    },
+    "breakout": {
+        "objects": {
+            "player": {
+                "class_id": 0,
+                "detected_type": "entity",
+                "x_offset": 0,
+                "y_offset": 0,
+                "grid_origin_x": null,
+                "grid_origin_y": null,
+                "cell_w": null,
+                "cell_h": null,
+                "grid_cols": null,
+                "active_value": null,
+                "_raw_shape": null
+            },
+            "ball": {
+                "class_id": 2,
+                "detected_type": "entity",
+                "x_offset": 0,
+                "y_offset": 0,
+                "grid_origin_x": null,
+                "grid_origin_y": null,
+                "cell_w": null,
+                "cell_h": null,
+                "grid_cols": null,
+                "active_value": null,
+                "_raw_shape": null
+            },
+            "blocks_top": {
+                "class_id": 4,
+                "detected_type": "entity",
+                "x_offset": 0,
+                "y_offset": 0,
+                "grid_origin_x": null,
+                "grid_origin_y": null,
+                "cell_w": null,
+                "cell_h": 6,
+                "grid_cols": null,
+                "active_value": null,
+                "_raw_shape": null
+            },
+            "blocks_mid": {
+                "class_id": 4,
+                "detected_type": "entity",
+                "x_offset": 0,
+                "y_offset": 0,
+                "grid_origin_x": null,
+                "grid_origin_y": null,
+                "cell_w": null,
+                "cell_h": 6,
+                "grid_cols": null,
+                "active_value": null,
+                "_raw_shape": null
+            },
+            "blocks_bot": {
+                "class_id": 4,
+                "detected_type": "entity",
+                "x_offset": 0,
+                "y_offset": 0,
+                "grid_origin_x": null,
+                "grid_origin_y": null,
+                "cell_w": null,
+                "cell_h": 6,
+                "grid_cols": null,
+                "active_value": null,
+                "_raw_shape": null
+            }
+        }
+    },
+    "centipede": {
+        "objects": {
+            "player": {
+                "class_id": 0,
+                "detected_type": "entity",
+                "x_offset": -1,
+                "y_offset": -2,
+                "w_padding": 1,
+                "h_padding": 2,
+                "grid_origin_x": null,
+                "grid_origin_y": null,
+                "cell_w": null,
+                "cell_h": null,
+                "grid_cols": null,
+                "active_value": null,
+                "_raw_shape": null
+            },
+            "mushrooms": {
+                "class_id": 4,
+                "detected_type": "entity",
+                "x_offset": 0,
+                "y_offset": 0,
+                "grid_origin_x": null,
+                "grid_origin_y": null,
+                "cell_w": null,
+                "cell_h": null,
+                "grid_cols": null,
+                "active_value": null,
+                "_raw_shape": null
+            },
+            "centipede": {
+                "class_id": 1,
+                "detected_type": "entity",
+                "x_offset": 0,
+                "y_offset": 0,
+                "grid_origin_x": null,
+                "grid_origin_y": null,
+                "cell_w": null,
+                "cell_h": null,
+                "grid_cols": null,
+                "active_value": null,
+                "_raw_shape": null
+            },
+            "spider": {
+                "class_id": 1,
+                "detected_type": "entity",
+                "x_offset": 0,
+                "y_offset": -1,
+                "grid_origin_x": null,
+                "grid_origin_y": null,
+                "cell_w": null,
+                "cell_h": null,
+                "grid_cols": null,
+                "active_value": null,
+                "_raw_shape": null
+            },
+            "flea": {
+                "class_id": 1,
+                "detected_type": "entity",
+                "x_offset": 0,
+                "y_offset": 0,
+                "grid_origin_x": null,
+                "grid_origin_y": null,
+                "cell_w": null,
+                "cell_h": null,
+                "grid_cols": null,
+                "active_value": null,
+                "_raw_shape": null
+            },
+            "scorpion": {
+                "class_id": 1,
+                "detected_type": "entity",
+                "x_offset": 0,
+                "y_offset": 0,
+                "grid_origin_x": null,
+                "grid_origin_y": null,
+                "cell_w": null,
+                "cell_h": null,
+                "grid_cols": null,
+                "active_value": null,
+                "_raw_shape": null
+            },
+            "player_spell": {
+                "class_id": 2,
+                "detected_type": "entity",
+                "x_offset": 0,
+                "y_offset": 0,
+                "grid_origin_x": null,
+                "grid_origin_y": null,
+                "cell_w": null,
+                "cell_h": null,
+                "grid_cols": null,
+                "active_value": null,
+                "_raw_shape": null
+            }
+        }
+    },
+    "choppercommand": {
+        "objects": {
+            "player": {
+                "class_id": 0,
+                "detected_type": "entity",
+                "x_offset": 0,
+                "y_offset": 0,
+                "grid_origin_x": null,
+                "grid_origin_y": null,
+                "cell_w": null,
+                "cell_h": null,
+                "grid_cols": null,
+                "active_value": null,
+                "_raw_shape": null
+            },
+            "trucks": {
+                "class_id": 5,
+                "detected_type": "entity",
+                "x_offset": 0,
+                "y_offset": 0,
+                "grid_origin_x": null,
+                "grid_origin_y": null,
+                "cell_w": null,
+                "cell_h": null,
+                "grid_cols": null,
+                "active_value": null,
+                "_raw_shape": null
+            },
+            "jets": {
+                "class_id": 5,
+                "detected_type": "entity",
+                "x_offset": 0,
+                "y_offset": 0,
+                "grid_origin_x": null,
+                "grid_origin_y": null,
+                "cell_w": null,
+                "cell_h": null,
+                "grid_cols": null,
+                "active_value": null,
+                "_raw_shape": null
+            },
+            "choppers": {
+                "class_id": 5,
+                "detected_type": "entity",
+                "x_offset": 0,
+                "y_offset": 0,
+                "grid_origin_x": null,
+                "grid_origin_y": null,
+                "cell_w": null,
+                "cell_h": null,
+                "grid_cols": null,
+                "active_value": null,
+                "_raw_shape": null
+            },
+            "enemy_missiles": {
+                "class_id": 6,
+                "detected_type": "entity",
+                "x_offset": 0,
+                "y_offset": 0,
+                "grid_origin_x": null,
+                "grid_origin_y": null,
+                "cell_w": null,
+                "cell_h": null,
+                "grid_cols": null,
+                "active_value": null,
+                "_raw_shape": null
+            },
+            "player_missiles": {
+                "class_id": 2,
+                "detected_type": "entity",
+                "x_offset": 0,
+                "y_offset": 0,
+                "grid_origin_x": null,
+                "grid_origin_y": null,
+                "cell_w": null,
+                "cell_h": null,
+                "grid_cols": null,
+                "active_value": null,
+                "_raw_shape": null
+            }
+        }
+    },
+    "enduro": {
+        "objects": {
+            "road_features": {
+                "class_id": 4,
+                "detected_type": "slot_flags",
+                "x_offset": null,
+                "y_offset": null,
+                "grid_origin_x": null,
+                "grid_origin_y": null,
+                "cell_w": null,
+                "cell_h": null,
+                "grid_cols": null,
+                "active_value": null,
+                "_raw_shape": [
+                    4,
+                    3
+                ]
+            },
+            "player": {
+                "class_id": 0,
+                "detected_type": "entity",
+                "x_offset": 0,
+                "y_offset": 0,
+                "grid_origin_x": null,
+                "grid_origin_y": null,
+                "cell_w": null,
+                "cell_h": null,
+                "grid_cols": null,
+                "active_value": null,
+                "_raw_shape": null
+            },
+            "enemies": {
+                "class_id": 1,
+                "detected_type": "entity",
+                "x_offset": 0,
+                "y_offset": 0,
+                "grid_origin_x": null,
+                "grid_origin_y": null,
+                "cell_w": null,
+                "cell_h": null,
+                "grid_cols": null,
+                "active_value": null,
+                "_raw_shape": null
+            }
+        }
+    },
+    "fishingderby": {
+        "objects": {
+            "hook_p1": {
+                "class_id": 0,
+                "detected_type": "entity",
+                "x_offset": -2,
+                "y_offset": -2,
+                "grid_origin_x": null,
+                "grid_origin_y": null,
+                "cell_w": null,
+                "cell_h": null,
+                "grid_cols": null,
+                "active_value": null,
+                "_raw_shape": null
+            },
+            "fish": {
+                "class_id": 3,
+                "detected_type": "entity",
+                "x_offset": 0,
+                "y_offset": 0,
+                "grid_origin_x": null,
+                "grid_origin_y": null,
+                "cell_w": null,
+                "cell_h": null,
+                "grid_cols": null,
+                "active_value": null,
+                "_raw_shape": null
+            },
+            "shark": {
+                "class_id": 1,
+                "detected_type": "entity",
+                "x_offset": 3,
+                "y_offset": 0,
+                "w_padding": 12,
+                "h_padding": 6,
+                "grid_origin_x": null,
+                "grid_origin_y": null,
+                "cell_w": null,
+                "cell_h": null,
+                "grid_cols": null,
+                "active_value": null,
+                "_raw_shape": null
+            }
+        }
+    },
+    "flagcapture": {
+        "objects": {
+            "player": {
+                "class_id": 0,
+                "detected_type": "entity",
+                "x_offset": 0,
+                "y_offset": 0,
+                "grid_origin_x": null,
+                "grid_origin_y": null,
+                "cell_w": null,
+                "cell_h": null,
+                "grid_cols": null,
+                "active_value": null,
+                "_raw_shape": null
+            },
+            "grid": {
+                "class_id": 4,
+                "detected_type": "true_2d_grid",
+                "x_offset": null,
+                "y_offset": null,
+                "grid_origin_x": 12,
+                "grid_origin_y": 26,
+                "cell_w": 8,
+                "cell_h": 15,
+                "transpose_grid": true,
+                "step_x": 16,
+                "step_y": 24,
+                "grid_cols": 7,
+                "active_min": 1.0,
+                "_raw_shape": [
+                    4,
+                    9,
+                    7
+                ]
+            }
+        }
+    },
+    "freeway": {
+        "objects": {
+            "chicken": {
+                "class_id": 0,
+                "detected_type": "entity",
+                "x_offset": 0,
+                "y_offset": 0,
+                "grid_origin_x": null,
+                "grid_origin_y": null,
+                "cell_w": null,
+                "cell_h": null,
+                "grid_cols": null,
+                "active_value": null,
+                "_raw_shape": null
+            },
+            "car": {
+                "class_id": 5,
+                "detected_type": "entity",
+                "x_offset": 0,
+                "y_offset": 0,
+                "grid_origin_x": null,
+                "grid_origin_y": null,
+                "cell_w": null,
+                "cell_h": null,
+                "grid_cols": null,
+                "active_value": null,
+                "_raw_shape": null
+            }
+        }
+    },
+    "frostbite": {
+        "objects": {
+            "bailey": {
+                "class_id": 0,
+                "detected_type": "entity",
+                "x_offset": 0,
+                "y_offset": 0,
+                "grid_origin_x": null,
+                "grid_origin_y": null,
+                "cell_w": null,
+                "cell_h": null,
+                "grid_cols": null,
+                "active_value": null,
+                "_raw_shape": null
+            },
+            "obstacles": {
+                "class_id": 4,
+                "detected_type": "entity",
+                "x_offset": 0,
+                "y_offset": 0,
+                "grid_origin_x": null,
+                "grid_origin_y": null,
+                "cell_w": null,
+                "cell_h": null,
+                "grid_cols": null,
+                "active_value": null,
+                "_raw_shape": null
+            },
+            "bear": {
+                "class_id": 1,
+                "detected_type": "entity",
+                "x_offset": 0,
+                "y_offset": 0,
+                "grid_origin_x": null,
+                "grid_origin_y": null,
+                "cell_w": null,
+                "cell_h": null,
+                "grid_cols": null,
+                "active_value": null,
+                "_raw_shape": null
+            },
+            "ice_grid": {
+                "class_id": 4,
+                "detected_type": "entity",
+                "x_offset": 0,
+                "y_offset": 0,
+                "grid_origin_x": null,
+                "grid_origin_y": null,
+                "cell_w": null,
+                "cell_h": null,
+                "grid_cols": null,
+                "active_value": null,
+                "_raw_shape": null
+            }
+        }
+    },
+    "galaxian": {
+        "objects": {
+            "player": {
+                "class_id": 0,
+                "detected_type": "entity",
+                "x_offset": 0,
+                "y_offset": 0,
+                "grid_origin_x": null,
+                "grid_origin_y": null,
+                "cell_w": null,
+                "cell_h": null,
+                "grid_cols": null,
+                "active_value": null,
+                "_raw_shape": null
+            },
+            "aliens": {
+                "class_id": 1,
+                "detected_type": "entity",
+                "x_offset": 0,
+                "y_offset": 0,
+                "grid_origin_x": null,
+                "grid_origin_y": null,
+                "cell_w": null,
+                "cell_h": null,
+                "grid_cols": null,
+                "active_value": null,
+                "_raw_shape": null
+            },
+            "missiles": {
+                "class_id": 2,
+                "detected_type": "entity",
+                "x_offset": 0,
+                "y_offset": 0,
+                "grid_origin_x": null,
+                "grid_origin_y": null,
+                "cell_w": null,
+                "cell_h": null,
+                "grid_cols": null,
+                "active_value": null,
+                "_raw_shape": null
+            },
+            "bombs": {
+                "class_id": 6,
+                "detected_type": "entity",
+                "x_offset": 0,
+                "y_offset": 0,
+                "grid_origin_x": null,
+                "grid_origin_y": null,
+                "cell_w": null,
+                "cell_h": null,
+                "grid_cols": null,
+                "active_value": null,
+                "_raw_shape": null
+            }
+        }
+    },
+    "hauntedhouse": {
+        "objects": {
+            "player": {
+                "class_id": 0,
+                "detected_type": "static_entity",
+                "static_boxes": []
+            },
+            "enemies": {
+                "class_id": 1,
+                "detected_type": "static_entity",
+                "static_boxes": []
+            },
+            "items": {
+                "class_id": 3,
+                "detected_type": "entity",
+                "x_offset": 0,
+                "y_offset": 0,
+                "grid_origin_x": null,
+                "grid_origin_y": null,
+                "cell_w": null,
+                "cell_h": null,
+                "grid_cols": null,
+                "active_value": null,
+                "_raw_shape": null
+            }
+        }
+    },
+    "humancannonball": {
+        "objects": {
+            "human": {
+                "class_id": 0,
+                "detected_type": "entity",
+                "x_offset": 0,
+                "y_offset": 0,
+                "w_padding": 4,
+                "h_padding": 4,
+                "grid_origin_x": null,
+                "grid_origin_y": null,
+                "cell_w": null,
+                "cell_h": null,
+                "grid_cols": null,
+                "active_value": null,
+                "_raw_shape": null
+            },
+            "water_tower": {
+                "class_id": 4,
+                "detected_type": "entity",
+                "x_offset": -8,
+                "y_offset": 0,
+                "w_padding": 8,
+                "grid_origin_x": null,
+                "grid_origin_y": null,
+                "cell_w": null,
+                "cell_h": null,
+                "grid_cols": null,
+                "active_value": null,
+                "_raw_shape": null
+            },
+            "cannon": {
+                "class_id": 5,
+                "detected_type": "entity",
+                "x_offset": 0,
+                "y_offset": 0,
+                "grid_origin_x": null,
+                "grid_origin_y": null,
+                "cell_w": null,
+                "cell_h": null,
+                "grid_cols": null,
+                "active_value": null,
+                "_raw_shape": null
+            }
+        }
+    },
+    "kangaroo": {
+        "objects": {
+            "player": {
+                "class_id": 0,
+                "detected_type": "entity",
+                "x_offset": 0,
+                "y_offset": 0,
+                "grid_origin_x": null,
+                "grid_origin_y": null,
+                "cell_w": null,
+                "cell_h": null,
+                "grid_cols": null,
+                "active_value": null,
+                "_raw_shape": null
+            },
+            "platforms": {
+                "class_id": 4,
+                "detected_type": "entity",
+                "x_offset": 0,
+                "y_offset": 0,
+                "grid_origin_x": null,
+                "grid_origin_y": null,
+                "cell_w": null,
+                "cell_h": null,
+                "grid_cols": null,
+                "active_value": null,
+                "_raw_shape": null
+            },
+            "ladders": {
+                "class_id": 4,
+                "detected_type": "entity",
+                "x_offset": 0,
+                "y_offset": 0,
+                "grid_origin_x": null,
+                "grid_origin_y": null,
+                "cell_w": null,
+                "cell_h": null,
+                "grid_cols": null,
+                "active_value": null,
+                "_raw_shape": null
+            },
+            "fruits": {
+                "class_id": 3,
+                "detected_type": "entity",
+                "x_offset": 0,
+                "y_offset": 0,
+                "grid_origin_x": null,
+                "grid_origin_y": null,
+                "cell_w": null,
+                "cell_h": null,
+                "grid_cols": null,
+                "active_value": null,
+                "_raw_shape": null
+            },
+            "bell": {
+                "class_id": 3,
+                "detected_type": "entity",
+                "x_offset": 0,
+                "y_offset": 0,
+                "grid_origin_x": null,
+                "grid_origin_y": null,
+                "cell_w": null,
+                "cell_h": null,
+                "grid_cols": null,
+                "active_value": null,
+                "_raw_shape": null
+            },
+            "child": {
+                "class_id": 3,
+                "detected_type": "entity",
+                "x_offset": 0,
+                "y_offset": 0,
+                "grid_origin_x": null,
+                "grid_origin_y": null,
+                "cell_w": null,
+                "cell_h": null,
+                "grid_cols": null,
+                "active_value": null,
+                "_raw_shape": null
+            },
+            "falling_coconut": {
+                "class_id": 6,
+                "detected_type": "entity",
+                "x_offset": 0,
+                "y_offset": 0,
+                "grid_origin_x": null,
+                "grid_origin_y": null,
+                "cell_w": null,
+                "cell_h": null,
+                "grid_cols": null,
+                "active_value": null,
+                "_raw_shape": null
+            },
+            "monkeys": {
+                "class_id": 1,
+                "detected_type": "entity",
+                "x_offset": 0,
+                "y_offset": 0,
+                "grid_origin_x": null,
+                "grid_origin_y": null,
+                "cell_w": null,
+                "cell_h": null,
+                "grid_cols": null,
+                "active_value": null,
+                "_raw_shape": null
+            },
+            "thrown_coconuts": {
+                "class_id": 6,
+                "detected_type": "entity",
+                "x_offset": 0,
+                "y_offset": 0,
+                "grid_origin_x": null,
+                "grid_origin_y": null,
+                "cell_w": null,
+                "cell_h": null,
+                "grid_cols": null,
+                "active_value": null,
+                "_raw_shape": null
+            }
+        }
+    },
+    "kingkong": {
+        "objects": {
+            "player": {
+                "class_id": 0,
+                "detected_type": "entity",
+                "x_offset": -2.5,
+                "y_offset": -18,
+                "w_padding": 4,
+                "grid_origin_x": null,
+                "grid_origin_y": null,
+                "cell_w": null,
+                "cell_h": null,
+                "grid_cols": null,
+                "active_value": null,
+                "_raw_shape": null
+            },
+            "kong": {
+                "class_id": 1,
+                "detected_type": "entity",
+                "x_offset": 0,
+                "y_offset": -35,
+                "grid_origin_x": null,
+                "grid_origin_y": null,
+                "cell_w": null,
+                "cell_h": null,
+                "grid_cols": null,
+                "active_value": null,
+                "_raw_shape": null
+            },
+            "princess": {
+                "class_id": 3,
+                "detected_type": "entity",
+                "x_offset": -2,
+                "y_offset": -15,
+                "grid_origin_x": null,
+                "grid_origin_y": null,
+                "cell_w": null,
+                "cell_h": null,
+                "grid_cols": null,
+                "active_value": null,
+                "_raw_shape": null
+            },
+            "bombs": {
+                "class_id": 6,
+                "detected_type": "entity",
+                "x_offset": 0,
+                "y_offset": -12,
+                "grid_origin_x": null,
+                "grid_origin_y": null,
+                "cell_w": null,
+                "cell_h": null,
+                "grid_cols": null,
+                "active_value": null,
+                "_raw_shape": null
+            }
+        }
+    },
+    "lasergates": {
+        "objects": {
+            "player": {
+                "class_id": 0,
+                "detected_type": "entity",
+                "x_offset": 0,
+                "y_offset": 0,
+                "grid_origin_x": null,
+                "grid_origin_y": null,
+                "cell_w": null,
+                "cell_h": null,
+                "grid_cols": null,
+                "active_value": null,
+                "_raw_shape": null
+            },
+            "player_missile": {
+                "class_id": 2,
+                "detected_type": "entity",
+                "x_offset": 0,
+                "y_offset": 0,
+                "grid_origin_x": null,
+                "grid_origin_y": null,
+                "cell_w": null,
+                "cell_h": null,
+                "grid_cols": null,
+                "active_value": null,
+                "_raw_shape": null
+            },
+            "radar_mortar": {
+                "class_id": 1,
+                "detected_type": "entity",
+                "x_offset": 0,
+                "y_offset": 0,
+                "grid_origin_x": null,
+                "grid_origin_y": null,
+                "cell_w": null,
+                "cell_h": null,
+                "grid_cols": null,
+                "active_value": null,
+                "_raw_shape": null
+            },
+            "radar_mortar_missile": {
+                "class_id": 6,
+                "detected_type": "entity",
+                "x_offset": 0,
+                "y_offset": 0,
+                "grid_origin_x": null,
+                "grid_origin_y": null,
+                "cell_w": null,
+                "cell_h": null,
+                "grid_cols": null,
+                "active_value": null,
+                "_raw_shape": null
+            },
+            "byte_bat": {
+                "class_id": 1,
+                "detected_type": "entity",
+                "x_offset": 0,
+                "y_offset": 0,
+                "grid_origin_x": null,
+                "grid_origin_y": null,
+                "cell_w": null,
+                "cell_h": null,
+                "grid_cols": null,
+                "active_value": null,
+                "_raw_shape": null
+            },
+            "rock_muncher": {
+                "class_id": 1,
+                "detected_type": "entity",
+                "x_offset": 0,
+                "y_offset": 0,
+                "grid_origin_x": null,
+                "grid_origin_y": null,
+                "cell_w": null,
+                "cell_h": null,
+                "grid_cols": null,
+                "active_value": null,
+                "_raw_shape": null
+            },
+            "rock_muncher_missile": {
+                "class_id": 6,
+                "detected_type": "entity",
+                "x_offset": 0,
+                "y_offset": 0,
+                "grid_origin_x": null,
+                "grid_origin_y": null,
+                "cell_w": null,
+                "cell_h": null,
+                "grid_cols": null,
+                "active_value": null,
+                "_raw_shape": null
+            },
+            "homing_missile": {
+                "class_id": 6,
+                "detected_type": "entity",
+                "x_offset": 0,
+                "y_offset": 0,
+                "grid_origin_x": null,
+                "grid_origin_y": null,
+                "cell_w": null,
+                "cell_h": null,
+                "grid_cols": null,
+                "active_value": null,
+                "_raw_shape": null
+            },
+            "forcefields": {
+                "class_id": 4,
+                "detected_type": "entity",
+                "x_offset": 0,
+                "y_offset": -30,
+                "grid_origin_x": null,
+                "grid_origin_y": null,
+                "cell_w": null,
+                "cell_h": null,
+                "grid_cols": null,
+                "active_value": null,
+                "_raw_shape": null
+            },
+            "densepack": {
+                "class_id": 4,
+                "detected_type": "entity",
+                "x_offset": 0,
+                "y_offset": 0,
+                "grid_origin_x": null,
+                "grid_origin_y": null,
+                "cell_w": null,
+                "cell_h": null,
+                "grid_cols": null,
+                "active_value": null,
+                "_raw_shape": null
+            },
+            "detonator": {
+                "class_id": 1,
+                "detected_type": "entity",
+                "x_offset": 0,
+                "y_offset": 0,
+                "grid_origin_x": null,
+                "grid_origin_y": null,
+                "cell_w": null,
+                "cell_h": null,
+                "grid_cols": null,
+                "active_value": null,
+                "_raw_shape": null
+            },
+            "energy_pod": {
+                "class_id": 3,
+                "detected_type": "entity",
+                "x_offset": 0,
+                "y_offset": 0,
+                "grid_origin_x": null,
+                "grid_origin_y": null,
+                "cell_w": null,
+                "cell_h": null,
+                "grid_cols": null,
+                "active_value": null,
+                "_raw_shape": null
+            },
+            "upper_mountains": {
+                "class_id": 4,
+                "detected_type": "entity",
+                "x_offset": 0,
+                "y_offset": 0,
+                "grid_origin_x": null,
+                "grid_origin_y": null,
+                "cell_w": null,
+                "cell_h": null,
+                "grid_cols": null,
+                "active_value": null,
+                "_raw_shape": null
+            },
+            "lower_mountains": {
+                "class_id": 4,
+                "detected_type": "entity",
+                "x_offset": 0,
+                "y_offset": 0,
+                "grid_origin_x": null,
+                "grid_origin_y": null,
+                "cell_w": null,
+                "cell_h": null,
+                "grid_cols": null,
+                "active_value": null,
+                "_raw_shape": null
+            }
+        }
+    },
+    "namethisgame": {
+        "objects": {
+            "player": {
+                "class_id": 0,
+                "detected_type": "entity",
+                "x_offset": 0,
+                "y_offset": 0,
+                "grid_origin_x": null,
+                "grid_origin_y": null,
+                "cell_w": null,
+                "cell_h": null,
+                "grid_cols": null,
+                "active_value": null,
+                "_raw_shape": null
+            },
+            "shark": {
+                "class_id": 1,
+                "detected_type": "entity",
+                "x_offset": 0,
+                "y_offset": 0,
+                "grid_origin_x": null,
+                "grid_origin_y": null,
+                "cell_w": null,
+                "cell_h": null,
+                "grid_cols": null,
+                "active_value": null,
+                "_raw_shape": null
+            },
+            "spear": {
+                "class_id": 2,
+                "detected_type": "entity",
+                "x_offset": 0,
+                "y_offset": 0,
+                "grid_origin_x": null,
+                "grid_origin_y": null,
+                "cell_w": null,
+                "cell_h": null,
+                "grid_cols": null,
+                "active_value": null,
+                "_raw_shape": null
+            },
+            "tentacles": {
+                "class_id": 1,
+                "detected_type": "entity",
+                "x_offset": 0,
+                "y_offset": 0,
+                "grid_origin_x": null,
+                "grid_origin_y": null,
+                "cell_w": null,
+                "cell_h": null,
+                "grid_cols": null,
+                "active_value": null,
+                "_raw_shape": null
+            },
+            "oxygen_line": {
+                "class_id": 3,
+                "detected_type": "entity",
+                "x_offset": 0,
+                "y_offset": 0,
+                "grid_origin_x": null,
+                "grid_origin_y": null,
+                "cell_w": null,
+                "cell_h": null,
+                "grid_cols": null,
+                "active_value": null,
+                "_raw_shape": null
+            },
+            "boat": {
+                "class_id": 5,
+                "detected_type": "entity",
+                "x_offset": 0,
+                "y_offset": 0,
+                "grid_origin_x": null,
+                "grid_origin_y": null,
+                "cell_w": null,
+                "cell_h": null,
+                "grid_cols": null,
+                "active_value": null,
+                "_raw_shape": null
+            }
+        }
+    },
+    "phoenix": {
+        "objects": {
+            "player": {
+                "class_id": 0,
+                "detected_type": "entity",
+                "x_offset": 0,
+                "y_offset": 0,
+                "grid_origin_x": null,
+                "grid_origin_y": null,
+                "cell_w": null,
+                "cell_h": null,
+                "grid_cols": null,
+                "active_value": null,
+                "_raw_shape": null
+            },
+            "player_projectile": {
+                "class_id": 2,
+                "detected_type": "entity",
+                "x_offset": -1,
+                "y_offset": 0,
+                "h_padding": 6,
+                "grid_origin_x": null,
+                "grid_origin_y": null,
+                "cell_w": null,
+                "cell_h": null,
+                "grid_cols": null,
+                "active_value": null,
+                "_raw_shape": null
+            },
+            "enemy_projectiles": {
+                "class_id": 6,
+                "detected_type": "static_entity",
+                "static_boxes": []
+            },
+            "enemies": {
+                "class_id": 1,
+                "detected_type": "entity",
+                "x_offset": 0,
+                "y_offset": 0,
+                "w_padding": 2,
+                "h_padding": 2,
+                "grid_origin_x": null,
+                "grid_origin_y": null,
+                "cell_w": null,
+                "cell_h": null,
+                "grid_cols": null,
+                "active_value": null,
+                "_raw_shape": null
+            },
+            "boss": {
+                "class_id": 1,
+                "detected_type": "entity",
+                "x_offset": 0,
+                "y_offset": 0,
+                "grid_origin_x": null,
+                "grid_origin_y": null,
+                "cell_w": null,
+                "cell_h": null,
+                "grid_cols": null,
+                "active_value": null,
+                "_raw_shape": null
+            },
+            "boss_blocks": {
+                "class_id": 4,
+                "detected_type": "entity",
+                "x_offset": 0,
+                "y_offset": 0,
+                "grid_origin_x": null,
+                "grid_origin_y": null,
+                "cell_w": null,
+                "cell_h": null,
+                "grid_cols": null,
+                "active_value": null,
+                "_raw_shape": null
+            }
+        }
+    },
+    "pong": {
+        "objects": {
+            "player": {
+                "class_id": 0,
+                "detected_type": "entity",
+                "x_offset": 0,
+                "y_offset": 0,
+                "grid_origin_x": null,
+                "grid_origin_y": null,
+                "cell_w": 0,
+                "cell_h": 4,
+                "grid_cols": null,
+                "active_value": null,
+                "_raw_shape": null
+            },
+            "enemy": {
+                "class_id": 1,
+                "detected_type": "entity",
+                "x_offset": 0,
+                "y_offset": 0,
+                "grid_origin_x": null,
+                "grid_origin_y": null,
+                "cell_w": 0,
+                "cell_h": 4,
+                "grid_cols": null,
+                "active_value": null,
+                "_raw_shape": null
+            },
+            "ball": {
+                "class_id": 2,
+                "detected_type": "entity",
+                "x_offset": 0,
+                "y_offset": 0,
+                "grid_origin_x": null,
+                "grid_origin_y": null,
+                "cell_w": null,
+                "cell_h": null,
+                "grid_cols": null,
+                "active_value": null,
+                "_raw_shape": null
+            }
+        }
+    },
+    "qbert": {
+        "objects": {
+            "player": {
+                "class_id": 0,
+                "detected_type": "entity",
+                "x_offset": 0,
+                "y_offset": 0,
+                "grid_origin_x": null,
+                "grid_origin_y": null,
+                "cell_w": null,
+                "cell_h": null,
+                "grid_cols": null,
+                "active_value": null,
+                "_raw_shape": null
+            },
+            "red_balls": {
+                "class_id": 1,
+                "detected_type": "entity",
+                "x_offset": 0,
+                "y_offset": 0,
+                "grid_origin_x": null,
+                "grid_origin_y": null,
+                "cell_w": null,
+                "cell_h": null,
+                "grid_cols": null,
+                "active_value": null,
+                "_raw_shape": null
+            },
+            "purple_ball": {
+                "class_id": 1,
+                "detected_type": "entity",
+                "x_offset": 0,
+                "y_offset": 0,
+                "grid_origin_x": null,
+                "grid_origin_y": null,
+                "cell_w": null,
+                "cell_h": null,
+                "grid_cols": null,
+                "active_value": null,
+                "_raw_shape": null
+            },
+            "snake": {
+                "class_id": 1,
+                "detected_type": "entity",
+                "x_offset": 0,
+                "y_offset": 0,
+                "grid_origin_x": null,
+                "grid_origin_y": null,
+                "cell_w": null,
+                "cell_h": null,
+                "grid_cols": null,
+                "active_value": null,
+                "_raw_shape": null
+            },
+            "green_ball": {
+                "class_id": 3,
+                "detected_type": "entity",
+                "x_offset": 0,
+                "y_offset": 0,
+                "grid_origin_x": null,
+                "grid_origin_y": null,
+                "cell_w": null,
+                "cell_h": null,
+                "grid_cols": null,
+                "active_value": null,
+                "_raw_shape": null
+            },
+            "sam": {
+                "class_id": 1,
+                "detected_type": "entity",
+                "coordinate_mode": "pixel_color",
+                "origin_x": 94,
+                "origin_y": 43,
+                "horizontal_step": 16,
+                "vertical_step": 24,
+                "y_base": 2,
+                "obj_w": 8,
+                "obj_h": 13,
+                "x_offset": -4,
+                "y_offset": 1
+            },
+            "pyramid": {
+                "class_id": 4,
+                "detected_type": "true_2d_grid",
+                "x_offset": null,
+                "y_offset": null,
+                "grid_origin_x": 0,
+                "grid_origin_y": 0,
+                "cell_w": 8,
+                "cell_h": 8,
+                "grid_cols": 8,
+                "active_value": 1.0,
+                "_raw_shape": [
+                    4,
+                    8,
+                    8
+                ]
+            }
+        }
+    },
+    "riverraid": {
+        "objects": {
+            "player": {
+                "class_id": 0,
+                "detected_type": "entity",
+                "x_offset": 0,
+                "y_offset": 0,
+                "grid_origin_x": null,
+                "grid_origin_y": null,
+                "cell_w": null,
+                "cell_h": null,
+                "grid_cols": null,
+                "active_value": null,
+                "_raw_shape": null
+            },
+            "enemies": {
+                "class_id": 1,
+                "detected_type": "entity",
+                "x_offset": 0,
+                "y_offset": 0,
+                "grid_origin_x": null,
+                "grid_origin_y": null,
+                "cell_w": null,
+                "cell_h": null,
+                "grid_cols": null,
+                "active_value": null,
+                "_raw_shape": null
+            },
+            "fuel_tanks": {
+                "class_id": 3,
+                "detected_type": "entity",
+                "x_offset": 0,
+                "y_offset": 0,
+                "grid_origin_x": null,
+                "grid_origin_y": null,
+                "cell_w": null,
+                "cell_h": null,
+                "grid_cols": null,
+                "active_value": null,
+                "_raw_shape": null
+            },
+            "player_projectile": {
+                "class_id": 0,
+                "detected_type": "entity",
+                "x_offset": 0,
+                "y_offset": 0,
+                "grid_origin_x": null,
+                "grid_origin_y": null,
+                "cell_w": null,
+                "cell_h": null,
+                "grid_cols": null,
+                "active_value": null,
+                "_raw_shape": null
+            },
+            "house_trees": {
+                "class_id": 4,
+                "detected_type": "entity",
+                "x_offset": 0,
+                "y_offset": 0,
+                "grid_origin_x": null,
+                "grid_origin_y": null,
+                "cell_w": null,
+                "cell_h": null,
+                "grid_cols": null,
+                "active_value": null,
+                "_raw_shape": null
+            },
+            "river_left_bank": {
+                "class_id": 4,
+                "detected_type": "flat_per_row",
+                "x_offset": null,
+                "y_offset": null,
+                "grid_origin_x": null,
+                "grid_origin_y": null,
+                "cell_w": null,
+                "cell_h": null,
+                "grid_cols": null,
+                "active_value": null,
+                "_raw_shape": [
+                    4,
+                    210
+                ]
+            },
+            "river_right_bank": {
+                "class_id": 4,
+                "detected_type": "flat_per_row",
+                "x_offset": null,
+                "y_offset": null,
+                "grid_origin_x": null,
+                "grid_origin_y": null,
+                "cell_w": null,
+                "cell_h": null,
+                "grid_cols": null,
+                "active_value": null,
+                "_raw_shape": [
+                    4,
+                    210
+                ]
+            },
+            "island_left_bank": {
+                "class_id": 4,
+                "detected_type": "flat_per_row",
+                "x_offset": null,
+                "y_offset": null,
+                "grid_origin_x": null,
+                "grid_origin_y": null,
+                "cell_w": null,
+                "cell_h": null,
+                "grid_cols": null,
+                "active_value": null,
+                "_raw_shape": [
+                    4,
+                    210
+                ]
+            },
+            "island_right_bank": {
+                "class_id": 4,
+                "detected_type": "flat_per_row",
+                "x_offset": null,
+                "y_offset": null,
+                "grid_origin_x": null,
+                "grid_origin_y": null,
+                "cell_w": null,
+                "cell_h": null,
+                "grid_cols": null,
+                "active_value": null,
+                "_raw_shape": [
+                    4,
+                    210
+                ]
+            },
+            "dam_indicator": {
+                "class_id": 4,
+                "detected_type": "flat_per_row",
+                "x_offset": null,
+                "y_offset": null,
+                "grid_origin_x": null,
+                "grid_origin_y": null,
+                "cell_w": null,
+                "cell_h": null,
+                "grid_cols": null,
+                "active_value": null,
+                "_raw_shape": [
+                    4,
+                    210
+                ]
+            }
+        }
+    },
+    "seaquest": {
+        "objects": {
+            "player": {
+                "class_id": 0,
+                "detected_type": "entity",
+                "x_offset": -2,
+                "y_offset": -2,
+                "h_padding": 3,
+                "w_padding": 3,
+                "grid_origin_x": null,
+                "grid_origin_y": null,
+                "cell_w": null,
+                "cell_h": null,
+                "grid_cols": null,
+                "active_value": null,
+                "_raw_shape": null
+            },
+            "divers": {
+                "class_id": 3,
+                "detected_type": "entity",
+                "x_offset": -1,
+                "y_offset": -2,
+                "h_padding": 4,
+                "w_padding": 2,
+                "grid_origin_x": null,
+                "grid_origin_y": null,
+                "cell_w": null,
+                "cell_h": null,
+                "grid_cols": null,
+                "active_value": null,
+                "_raw_shape": null
+            },
+            "enemies": {
+                "class_id": 1,
+                "detected_type": "entity",
+                "x_offset": -2,
+                "y_offset": -1,
+                "h_padding": 1,
+                "w_padding": 3,
+                "grid_origin_x": null,
+                "grid_origin_y": null,
+                "cell_w": null,
+                "cell_h": null,
+                "grid_cols": null,
+                "active_value": null,
+                "_raw_shape": null
+            },
+            "projectiles": {
+                "class_id": 2,
+                "detected_type": "entity",
+                "x_offset": 0,
+                "y_offset": 0,
+                "grid_origin_x": null,
+                "grid_origin_y": null,
+                "cell_w": null,
+                "cell_h": null,
+                "grid_cols": null,
+                "active_value": null,
+                "_raw_shape": null
+            }
+        }
+    },
+    "sirlancelot": {
+        "objects": {
+            "player": {
+                "class_id": 0,
+                "detected_type": "entity",
+                "x_offset": -1,
+                "y_offset": -1,
+                "w_padding": 1,
+                "grid_origin_x": null,
+                "grid_origin_y": null,
+                "cell_w": null,
+                "cell_h": null,
+                "grid_cols": null,
+                "active_value": null,
+                "_raw_shape": null
+            },
+            "enemies": {
+                "class_id": 1,
+                "detected_type": "entity",
+                "x_offset": -2,
+                "y_offset": -3,
+                "grid_origin_x": null,
+                "grid_origin_y": null,
+                "cell_w": null,
+                "cell_h": null,
+                "grid_cols": null,
+                "active_value": null,
+                "_raw_shape": null
+            },
+            "dragon": {
+                "class_id": 1,
+                "detected_type": "entity",
+                "x_offset": 0,
+                "y_offset": 0,
+                "grid_origin_x": null,
+                "grid_origin_y": null,
+                "cell_w": null,
+                "cell_h": null,
+                "grid_cols": null,
+                "active_value": null,
+                "_raw_shape": null
+            },
+            "fireballs": {
+                "class_id": 2,
+                "detected_type": "entity",
+                "x_offset": 0,
+                "y_offset": 0,
+                "grid_origin_x": null,
+                "grid_origin_y": null,
+                "cell_w": null,
+                "cell_h": null,
+                "grid_cols": null,
+                "active_value": null,
+                "_raw_shape": null
+            }
+        }
+    },
+    "slotmachine": {
+        "objects": {
+            "reel_symbols": {
+                "class_id": 1,
+                "detected_type": "true_2d_grid",
+                "x_offset": null,
+                "y_offset": null,
+                "grid_origin_x": 0,
+                "grid_origin_y": 0,
+                "cell_w": 8,
+                "cell_h": 8,
+                "grid_cols": 3,
+                "active_value": 1.0,
+                "_raw_shape": [
+                    4,
+                    3,
+                    3
+                ]
+            }
+        }
+    },
+    "spaceinvaders": {
+        "objects": {
+            "player": {
+                "class_id": 0,
+                "detected_type": "entity",
+                "x_offset": 0,
+                "y_offset": 1,
+                "grid_origin_x": null,
+                "grid_origin_y": null,
+                "cell_w": null,
+                "cell_h": null,
+                "grid_cols": null,
+                "active_value": null,
+                "_raw_shape": null
+            },
+            "enemies": {
+                "class_id": 1,
+                "detected_type": "entity",
+                "x_offset": 0,
+                "y_offset": 0,
+                "grid_origin_x": null,
+                "grid_origin_y": null,
+                "cell_w": null,
+                "cell_h": null,
+                "grid_cols": null,
+                "active_value": null,
+                "_raw_shape": null
+            },
+            "player_bullet": {
+                "class_id": 2,
+                "detected_type": "entity",
+                "x_offset": 0,
+                "y_offset": 0,
+                "w_padding": null,
+                "h_padding": null,
+                "cell_w": 2,
+                "cell_h": 6
+            },
+            "enemy_bullets": {
+                "class_id": 6,
+                "detected_type": "entity",
+                "x_offset": 0,
+                "y_offset": 0,
+                "w_padding": null,
+                "h_padding": null,
+                "cell_w": 2,
+                "cell_h": 6
+            },
+            "ufo": {
+                "class_id": 5,
+                "detected_type": "entity",
+                "x_offset": -1,
+                "y_offset": -1,
+                "w_padding": 2,
+                "h_padding": 2,
+                "grid_origin_x": null,
+                "grid_origin_y": null,
+                "cell_w": null,
+                "cell_h": null,
+                "grid_cols": null,
+                "active_value": null,
+                "_raw_shape": null
+            },
+            "barricades": {
+                "class_id": null,
+                "detected_type": "entity",
+                "x_offset": 0,
+                "y_offset": 0,
+                "grid_origin_x": null,
+                "grid_origin_y": null,
+                "cell_w": null,
+                "cell_h": null,
+                "grid_cols": null,
+                "active_value": null,
+                "_raw_shape": null
+            }
+        }
+    },
+    "spacewar": {
+        "objects": {
+            "player": {
+                "class_id": 0,
+                "detected_type": "entity",
+                "x_offset": -1,
+                "y_offset": -2,
+                "w_padding": 2,
+                "h_padding": 2,
+                "grid_origin_x": null,
+                "grid_origin_y": null,
+                "cell_w": null,
+                "cell_h": null,
+                "grid_cols": null,
+                "active_value": null,
+                "_raw_shape": null
+            },
+            "player_missile": {
+                "class_id": 0,
+                "detected_type": "entity",
+                "x_offset": -2,
+                "y_offset": -1,
+                "h_padding": 5,
+                "w_padding": 3,
+                "grid_origin_x": null,
+                "grid_origin_y": null,
+                "cell_w": null,
+                "cell_h": null,
+                "grid_cols": null,
+                "active_value": null,
+                "_raw_shape": null
+            },
+            "enemy": {
+                "class_id": 1,
+                "detected_type": "entity",
+                "x_offset": -1,
+                "y_offset": 0,
+                "h_padding": 2,
+                "w_padding": 2,
+                "grid_origin_x": null,
+                "grid_origin_y": null,
+                "cell_w": null,
+                "cell_h": null,
+                "grid_cols": null,
+                "active_value": null,
+                "_raw_shape": null
+            },
+            "star_base": {
+                "class_id": 4,
+                "detected_type": "entity",
+                "x_offset": -2,
+                "y_offset": -1,
+                "h_padding": 2,
+                "w_padding": 2,
+                "grid_origin_x": null,
+                "grid_origin_y": null,
+                "cell_w": null,
+                "cell_h": null,
+                "grid_cols": null,
+                "active_value": null,
+                "_raw_shape": null
+            }
+        }
+    },
+    "tennis": {
+        "objects": {
+            "player": {
+                "class_id": 0,
+                "detected_type": "entity",
+                "x_offset": -7,
+                "y_offset": -2,
+                "h_padding": 2,
+                "grid_origin_x": null,
+                "grid_origin_y": null,
+                "cell_w": null,
+                "cell_h": null,
+                "grid_cols": null,
+                "active_value": null,
+                "_raw_shape": null
+            },
+            "enemy": {
+                "class_id": 1,
+                "detected_type": "entity",
+                "x_offset": -7,
+                "y_offset": -1,
+                "h_padding": 2,
+                "grid_origin_x": null,
+                "grid_origin_y": null,
+                "cell_w": null,
+                "cell_h": null,
+                "grid_cols": null,
+                "active_value": null,
+                "_raw_shape": null
+            },
+            "ball": {
+                "class_id": 5,
+                "detected_type": "entity",
+                "x_offset": -2,
+                "y_offset": -2,
+                "h_padding": 3,
+                "w_padding": 3,
+                "grid_origin_x": null,
+                "grid_origin_y": null,
+                "cell_w": null,
+                "cell_h": null,
+                "grid_cols": null,
+                "active_value": null,
+                "_raw_shape": null
+            }
+        }
+    },
+    "tetris": {
+        "objects": {
+            "board": {
+                "class_id": 4,
+                "detected_type": "true_2d_grid",
+                "x_offset": null,
+                "y_offset": null,
+                "grid_origin_x": 0,
+                "grid_origin_y": 0,
+                "cell_w": 8,
+                "cell_h": 8,
+                "grid_cols": 10,
+                "active_value": 1.0,
+                "_raw_shape": [
+                    4,
+                    22,
+                    10
+                ]
+            },
+            "active_piece": {
+                "class_id": 0,
+                "detected_type": "entity",
+                "x_offset": 0,
+                "y_offset": 0,
+                "grid_origin_x": null,
+                "grid_origin_y": null,
+                "cell_w": null,
+                "cell_h": null,
+                "grid_cols": null,
+                "active_value": null,
+                "_raw_shape": null
+            },
+            "next_piece": {
+                "class_id": 5,
+                "detected_type": "entity",
+                "x_offset": 0,
+                "y_offset": 0,
+                "grid_origin_x": null,
+                "grid_origin_y": null,
+                "cell_w": null,
+                "cell_h": null,
+                "grid_cols": null,
+                "active_value": null,
+                "_raw_shape": null
+            }
+        }
+    },
+    "timepilot": {
+        "objects": {
+            "player": {
+                "class_id": 0,
+                "detected_type": "entity",
+                "x_offset": -1,
+                "y_offset": -1,
+                "h_padding": 2,
+                "w_padding": 2,
+                "grid_origin_x": null,
+                "grid_origin_y": null,
+                "cell_w": null,
+                "cell_h": null,
+                "grid_cols": null,
+                "active_value": null,
+                "_raw_shape": null
+            },
+            "player_missile": {
+                "class_id": 0,
+                "detected_type": "entity",
+                "x_offset": 0,
+                "y_offset": 0,
+                "grid_origin_x": null,
+                "grid_origin_y": null,
+                "cell_w": null,
+                "cell_h": null,
+                "grid_cols": null,
+                "active_value": null,
+                "_raw_shape": null
+            },
+            "enemies": {
+                "class_id": 1,
+                "detected_type": "entity",
+                "x_offset": -2,
+                "y_offset": -2,
+                "h_padding": 2,
+                "w_padding": 3,
+                "grid_origin_x": null,
+                "grid_origin_y": null,
+                "cell_w": null,
+                "cell_h": null,
+                "grid_cols": null,
+                "active_value": null,
+                "_raw_shape": null
+            },
+            "level_boss": {
+                "class_id": 1,
+                "detected_type": "entity",
+                "x_offset": 0,
+                "y_offset": 0,
+                "grid_origin_x": null,
+                "grid_origin_y": null,
+                "cell_w": null,
+                "cell_h": null,
+                "grid_cols": null,
+                "active_value": null,
+                "_raw_shape": null
+            },
+            "enemy_missiles": {
+                "class_id": 1,
+                "detected_type": "entity",
+                "x_offset": 0,
+                "y_offset": 0,
+                "grid_origin_x": null,
+                "grid_origin_y": null,
+                "cell_w": null,
+                "cell_h": null,
+                "grid_cols": null,
+                "active_value": null,
+                "_raw_shape": null
+            },
+            "clouds": {
+                "class_id": 5,
+                "detected_type": "entity",
+                "x_offset": -2,
+                "y_offset": -1,
+                "h_padding": 2,
+                "w_padding": 2,
+                "grid_origin_x": null,
+                "grid_origin_y": null,
+                "cell_w": null,
+                "cell_h": null,
+                "grid_cols": null,
+                "active_value": null,
+                "_raw_shape": null
+            }
+        }
+    },
+    "tron": {
+        "objects": {
+            "player": {
+                "class_id": 0,
+                "detected_type": "entity",
+                "x_offset": -2,
+                "y_offset": -2,
+                "grid_origin_x": null,
+                "grid_origin_y": null,
+                "cell_w": null,
+                "cell_h": null,
+                "grid_cols": null,
+                "active_value": null,
+                "_raw_shape": null
+            },
+            "enemies": {
+                "class_id": 1,
+                "detected_type": "entity",
+                "x_offset": -3,
+                "y_offset": -2,
+                "grid_origin_x": null,
+                "grid_origin_y": null,
+                "cell_w": null,
+                "cell_h": null,
+                "grid_cols": null,
+                "active_value": null,
+                "_raw_shape": null
+            },
+            "discs": {
+                "class_id": 5,
+                "detected_type": "entity",
+                "x_offset": -1,
+                "y_offset": -1,
+                "grid_origin_x": null,
+                "grid_origin_y": null,
+                "cell_w": null,
+                "cell_h": null,
+                "grid_cols": null,
+                "active_value": null,
+                "_raw_shape": null
+            },
+            "doors": {
+                "class_id": 4,
+                "detected_type": "entity",
+                "x_offset": -2,
+                "y_offset": -2,
+                "grid_origin_x": null,
+                "grid_origin_y": null,
+                "cell_w": null,
+                "cell_h": null,
+                "grid_cols": null,
+                "active_value": null,
+                "_raw_shape": null
+            }
+        }
+    },
+    "turmoil": {
+        "objects": {
+            "player": {
+                "class_id": 0,
+                "detected_type": "entity",
+                "x_offset": -1,
+                "y_offset": -2,
+                "w_padding": 2,
+                "h_padding": 2,
+                "grid_origin_x": null,
+                "grid_origin_y": null,
+                "cell_w": null,
+                "cell_h": null,
+                "grid_cols": null,
+                "active_value": null,
+                "_raw_shape": null
+            },
+            "enemies": {
+                "class_id": 1,
+                "detected_type": "entity",
+                "x_offset": -1,
+                "y_offset": -2,
+                "w_padding": 3,
+                "h_padding": 2,
+                "grid_origin_x": null,
+                "grid_origin_y": null,
+                "cell_w": null,
+                "cell_h": null,
+                "grid_cols": null,
+                "active_value": null,
+                "_raw_shape": null
+            },
+            "prize": {
+                "class_id": 3,
+                "detected_type": "entity",
+                "x_offset": -1,
+                "y_offset": -1,
+                "w_padding": 2,
+                "h_padding": 2,
+                "grid_origin_x": null,
+                "grid_origin_y": null,
+                "cell_w": null,
+                "cell_h": null,
+                "grid_cols": null,
+                "active_value": null,
+                "_raw_shape": null
+            },
+            "bullet": {
+                "class_id": 2,
+                "detected_type": "entity",
+                "x_offset": 0,
+                "y_offset": -2,
+                "h_padding": 3,
+                "w_padding": 3,
+                "grid_origin_x": null,
+                "grid_origin_y": null,
+                "cell_w": null,
+                "cell_h": null,
+                "grid_cols": null,
+                "active_value": null,
+                "_raw_shape": null
+            }
+        }
+    },
+    "venture": {
+        "objects": {
+            "player": {
+                "class_id": 0,
+                "detected_type": "entity",
+                "x_offset": 0,
+                "y_offset": 0,
+                "grid_origin_x": null,
+                "grid_origin_y": null,
+                "cell_w": null,
+                "cell_h": null,
+                "grid_cols": null,
+                "active_value": null,
+                "_raw_shape": null
+            },
+            "monsters": {
+                "class_id": 1,
+                "detected_type": "entity",
+                "x_offset": 0,
+                "y_offset": 0,
+                "grid_origin_x": null,
+                "grid_origin_y": null,
+                "cell_w": null,
+                "cell_h": null,
+                "grid_cols": null,
+                "active_value": null,
+                "_raw_shape": null
+            },
+            "portals": {
+                "class_id": 4,
+                "detected_type": "entity",
+                "x_offset": 0,
+                "y_offset": 0,
+                "grid_origin_x": null,
+                "grid_origin_y": null,
+                "cell_w": null,
+                "cell_h": null,
+                "grid_cols": null,
+                "active_value": null,
+                "_raw_shape": null
+            },
+            "chest": {
+                "class_id": 3,
+                "detected_type": "entity",
+                "x_offset": 0,
+                "y_offset": 0,
+                "grid_origin_x": null,
+                "grid_origin_y": null,
+                "cell_w": null,
+                "cell_h": null,
+                "grid_cols": null,
+                "active_value": null,
+                "_raw_shape": null
+            },
+            "lasers": {
+                "class_id": 2,
+                "detected_type": "entity",
+                "x_offset": 0,
+                "y_offset": 0,
+                "grid_origin_x": null,
+                "grid_origin_y": null,
+                "cell_w": null,
+                "cell_h": null,
+                "grid_cols": null,
+                "active_value": null,
+                "_raw_shape": null
+            },
+            "chaser": {
+                "class_id": 1,
+                "detected_type": "entity",
+                "x_offset": 0,
+                "y_offset": 0,
+                "grid_origin_x": null,
+                "grid_origin_y": null,
+                "cell_w": null,
+                "cell_h": null,
+                "grid_cols": null,
+                "active_value": null,
+                "_raw_shape": null
+            }
+        }
+    },
+    "videocube": {
+        "objects": {
+            "player": {
+                "class_id": 0,
+                "detected_type": "entity",
+                "pixel_play_x1": 20,
+                "pixel_play_x2": 145,
+                "pixel_play_y1": 22,
+                "pixel_play_y2": 190,
+                "pixel_search_left": 45,
+                "pixel_search_right": 45,
+                "pixel_search_up": 45,
+                "pixel_search_down": 75,
+                "pixel_rare_color_max_count": 400,
+                "pixel_min_component_area": 4,
+                "pixel_min_box_width": 3,
+                "pixel_max_box_width": 24,
+                "pixel_min_box_height": 5,
+                "pixel_max_box_height": 38,
+                "pixel_maximum_distance": 70,
+                "pixel_padding_left": 1,
+                "pixel_padding_right": 1,
+                "pixel_padding_top": 1,
+                "pixel_padding_bottom": 1
+            },
+            "cube_current_view": {
+                "class_id": 4,
+                "detected_type": "true_2d_grid",
+                "x_offset": null,
+                "y_offset": null,
+                "grid_origin_x": 0,
+                "grid_origin_y": 0,
+                "cell_w": 8,
+                "cell_h": 8,
+                "grid_cols": 3,
+                "active_value": 1.0,
+                "_raw_shape": [
+                    4,
+                    3,
+                    3
+                ]
+            }
+        }
+    },
+    "videopinball": {
+        "objects": {
+            "ball": {
+                "class_id": 5,
+                "detected_type": "entity",
+                "x_offset": 0,
+                "y_offset": 0,
+                "grid_origin_x": null,
+                "grid_origin_y": null,
+                "cell_w": null,
+                "cell_h": null,
+                "grid_cols": null,
+                "active_value": null,
+                "_raw_shape": null
+            },
+            "flippers": {
+                "class_id": 4,
+                "detected_type": "entity",
+                "x_offset": 0,
+                "y_offset": 0,
+                "grid_origin_x": null,
+                "grid_origin_y": null,
+                "cell_w": null,
+                "cell_h": null,
+                "grid_cols": null,
+                "active_value": null,
+                "_raw_shape": null
+            },
+            "spinners": {
+                "class_id": 4,
+                "detected_type": "entity",
+                "x_offset": 0,
+                "y_offset": 0,
+                "grid_origin_x": null,
+                "grid_origin_y": null,
+                "cell_w": null,
+                "cell_h": null,
+                "grid_cols": null,
+                "active_value": null,
+                "_raw_shape": null
+            },
+            "plunger": {
+                "class_id": 4,
+                "detected_type": "entity",
+                "x_offset": 0,
+                "y_offset": 0,
+                "grid_origin_x": null,
+                "grid_origin_y": null,
+                "cell_w": null,
+                "cell_h": null,
+                "grid_cols": null,
+                "active_value": null,
+                "_raw_shape": null
+            },
+            "targets": {
+                "class_id": 4,
+                "detected_type": "entity",
+                "x_offset": 0,
+                "y_offset": 0,
+                "grid_origin_x": null,
+                "grid_origin_y": null,
+                "cell_w": null,
+                "cell_h": null,
+                "grid_cols": null,
+                "active_value": null,
+                "_raw_shape": null
+            },
+            "bumpers": {
+                "class_id": 4,
+                "detected_type": "entity",
+                "x_offset": 0,
+                "y_offset": 0,
+                "grid_origin_x": null,
+                "grid_origin_y": null,
+                "cell_w": null,
+                "cell_h": null,
+                "grid_cols": null,
+                "active_value": null,
+                "_raw_shape": null
+            },
+            "rollovers": {
+                "class_id": 4,
+                "detected_type": "entity",
+                "x_offset": 0,
+                "y_offset": 0,
+                "grid_origin_x": null,
+                "grid_origin_y": null,
+                "cell_w": null,
+                "cell_h": null,
+                "grid_cols": null,
+                "active_value": null,
+                "_raw_shape": null
+            },
+            "hole_plugs": {
+                "class_id": 4,
+                "detected_type": "entity",
+                "x_offset": 0,
+                "y_offset": 0,
+                "grid_origin_x": null,
+                "grid_origin_y": null,
+                "cell_w": null,
+                "cell_h": null,
+                "grid_cols": null,
+                "active_value": null,
+                "_raw_shape": null
+            }
+        }
+    },
+    "wordzapper": {
+        "objects": {
+            "player": {
+                "class_id": 0,
+                "detected_type": "entity",
+                "x_offset": -2,
+                "y_offset": -2,
+                "w_padding": 3,
+                "h_padding": 2,
+                "grid_origin_x": null,
+                "grid_origin_y": null,
+                "cell_w": null,
+                "cell_h": null,
+                "grid_cols": null,
+                "active_value": null,
+                "_raw_shape": null
+            },
+            "player_missile": {
+                "class_id": 0,
+                "detected_type": "entity",
+                "x_offset": -3,
+                "y_offset": -2,
+                "w_padding": 3,
+                "h_padding": 3,
+                "grid_origin_x": null,
+                "grid_origin_y": null,
+                "cell_w": null,
+                "cell_h": null,
+                "grid_cols": null,
+                "active_value": null,
+                "_raw_shape": null
+            },
+            "player_zapper": {
+                "class_id": 0,
+                "detected_type": "entity",
+                "x_offset": 0,
+                "y_offset": 0,
+                "grid_origin_x": null,
+                "grid_origin_y": null,
+                "cell_w": null,
+                "cell_h": null,
+                "grid_cols": null,
+                "active_value": null,
+                "_raw_shape": null
+            },
+            "letters": {
+                "class_id": 3,
+                "detected_type": "entity",
+                "x_offset": -2,
+                "y_offset": 0,
+                "h_padding": 4,
+                "w_padding": 4,
+                "grid_origin_x": null,
+                "grid_origin_y": null,
+                "cell_w": null,
+                "cell_h": null,
+                "grid_cols": null,
+                "active_value": null,
+                "_raw_shape": null
+            },
+            "enemies": {
+                "class_id": 1,
+                "detected_type": "entity",
+                "x_offset": -2,
+                "y_offset": -1,
+                "h_padding": 4,
+                "w_padding": 4,
+                "grid_origin_x": null,
+                "grid_origin_y": null,
+                "cell_w": null,
+                "cell_h": null,
+                "grid_cols": null,
+                "active_value": null,
+                "_raw_shape": null
+            },
+            "target_word": {
+                "class_id": 3,
+                "detected_type": "slot_flags",
+                "x_offset": null,
+                "y_offset": null,
+                "grid_origin_x": null,
+                "grid_origin_y": null,
+                "cell_w": null,
+                "cell_h": null,
+                "grid_cols": null,
+                "active_value": null,
+                "_raw_shape": [
+                    4,
+                    6
+                ]
+            }
+        }
+    },
+    "mspacman": {
+        "objects": {
+            "pellets": {
+                "class_id": 3,
+                "detected_type": "static_entity",
+                "static_boxes": []
+            },
+            "power_pellets": {
+                "class_id": 3,
+                "detected_type": "slot_flags",
+                "x_offset": null,
+                "y_offset": null,
+                "grid_origin_x": null,
+                "grid_origin_y": null,
+                "cell_w": null,
+                "cell_h": null,
+                "grid_cols": null,
+                "active_value": null,
+                "_raw_shape": [
+                    4,
+                    4
+                ]
+            },
+            "player": {
+                "class_id": 0,
+                "detected_type": "entity",
+                "x_offset": 0,
+                "y_offset": 0,
+                "grid_origin_x": null,
+                "grid_origin_y": null,
+                "cell_w": null,
+                "cell_h": null,
+                "grid_cols": null,
+                "active_value": null,
+                "_raw_shape": null
+            },
+            "ghosts": {
+                "class_id": 1,
+                "detected_type": "entity",
+                "x_offset": 0,
+                "y_offset": 0,
+                "grid_origin_x": null,
+                "grid_origin_y": null,
+                "cell_w": null,
+                "cell_h": null,
+                "grid_cols": null,
+                "active_value": null,
+                "_raw_shape": null
+            },
+            "fruit": {
+                "class_id": 3,
+                "detected_type": "entity",
+                "x_offset": 0,
+                "y_offset": 0,
+                "grid_origin_x": null,
+                "grid_origin_y": null,
+                "cell_w": null,
+                "cell_h": null,
+                "grid_cols": null,
+                "active_value": null,
+                "_raw_shape": null
+            }
+        }
+    },
+    "montezumarevenge": {
+        "objects": {
+            "player": {
+                "class_id": 0,
+                "detected_type": "entity",
+                "x_offset": 0,
+                "y_offset": 45,
+                "grid_origin_x": null,
+                "grid_origin_y": null,
+                "cell_w": null,
+                "cell_h": null,
+                "grid_cols": null,
+                "active_value": null,
+                "_raw_shape": null
+            },
+            "enemies": {
+                "class_id": 1,
+                "detected_type": "entity",
+                "x_offset": 0,
+                "y_offset": 45,
+                "grid_origin_x": null,
+                "grid_origin_y": null,
+                "cell_w": null,
+                "cell_h": null,
+                "grid_cols": null,
+                "active_value": null,
+                "_raw_shape": null
+            },
+            "items": {
+                "class_id": 3,
+                "detected_type": "entity",
+                "x_offset": 0,
+                "y_offset": 45,
+                "h_padding": 8,
+                "grid_origin_x": null,
+                "grid_origin_y": null,
+                "cell_w": null,
+                "cell_h": null,
+                "grid_cols": null,
+                "active_value": null,
+                "_raw_shape": null
+            },
+            "conveyors": {
+                "class_id": 4,
+                "detected_type": "entity",
+                "x_offset": 0,
+                "y_offset": 46,
+                "grid_origin_x": null,
+                "grid_origin_y": null,
+                "cell_w": null,
+                "cell_h": null,
+                "grid_cols": null,
+                "active_value": null,
+                "_raw_shape": null
+            },
+            "doors": {
+                "class_id": 4,
+                "detected_type": "entity",
+                "x_offset": 0,
+                "y_offset": 45,
+                "grid_origin_x": null,
+                "grid_origin_y": null,
+                "cell_w": null,
+                "cell_h": null,
+                "grid_cols": null,
+                "active_value": null,
+                "_raw_shape": null
+            },
+            "ropes": {
+                "class_id": 4,
+                "detected_type": "entity",
+                "x_offset": 0,
+                "y_offset": 45,
+                "grid_origin_x": null,
+                "grid_origin_y": null,
+                "cell_w": null,
+                "cell_h": null,
+                "grid_cols": null,
+                "active_value": null,
+                "_raw_shape": null
+            },
+            "platforms": {
+                "class_id": 4,
+                "detected_type": "entity",
+                "x_offset": 0,
+                "y_offset": 45,
+                "grid_origin_x": null,
+                "grid_origin_y": null,
+                "cell_w": null,
+                "cell_h": null,
+                "grid_cols": null,
+                "active_value": null,
+                "_raw_shape": null
+            }
+        }
+    },
+    "airraid": {
+        "objects": {
+            "player": {
+                "class_id": 0,
+                "detected_type": "entity",
+                "x_offset": 0,
+                "y_offset": 0,
+                "grid_origin_x": null,
+                "grid_origin_y": null,
+                "cell_w": null,
+                "cell_h": null,
+                "grid_cols": null,
+                "active_value": null,
+                "_raw_shape": null
+            },
+            "buildings": {
+                "class_id": 4,
+                "detected_type": "entity",
+                "x_offset": 0,
+                "y_offset": 0,
+                "grid_origin_x": null,
+                "grid_origin_y": null,
+                "cell_w": null,
+                "cell_h": null,
+                "grid_cols": null,
+                "active_value": null,
+                "_raw_shape": null
+            },
+            "enemies": {
+                "class_id": 1,
+                "detected_type": "entity",
+                "x_offset": 0,
+                "y_offset": 0,
+                "grid_origin_x": null,
+                "grid_origin_y": null,
+                "cell_w": null,
+                "cell_h": null,
+                "grid_cols": null,
+                "active_value": null,
+                "_raw_shape": null
+            },
+            "player_missiles": {
+                "class_id": 2,
+                "detected_type": "entity",
+                "x_offset": 0,
+                "y_offset": 0,
+                "grid_origin_x": null,
+                "grid_origin_y": null,
+                "cell_w": null,
+                "cell_h": null,
+                "grid_cols": null,
+                "active_value": null,
+                "_raw_shape": null
+            },
+            "enemy_missiles": {
+                "class_id": 6,
+                "detected_type": "entity",
+                "x_offset": 0,
+                "y_offset": 0,
+                "grid_origin_x": null,
+                "grid_origin_y": null,
+                "cell_w": null,
+                "cell_h": null,
+                "grid_cols": null,
+                "active_value": null,
+                "_raw_shape": null
+            }
+        }
+    },
+    "assault": {
+        "objects": {
+            "player": {
+                "class_id": 0,
+                "detected_type": "entity",
+                "x_offset": 0,
+                "y_offset": 0,
+                "grid_origin_x": null,
+                "grid_origin_y": null,
+                "cell_w": null,
+                "cell_h": null,
+                "grid_cols": null,
+                "active_value": null,
+                "_raw_shape": null
+            },
+            "mothership": {
+                "class_id": 1,
+                "detected_type": "entity",
+                "x_offset": 0,
+                "y_offset": 0,
+                "grid_origin_x": null,
+                "grid_origin_y": null,
+                "cell_w": null,
+                "cell_h": null,
+                "grid_cols": null,
+                "active_value": null,
+                "_raw_shape": null
+            },
+            "enemy_1": {
+                "class_id": 1,
+                "detected_type": "entity",
+                "x_offset": 0,
+                "y_offset": 0,
+                "grid_origin_x": null,
+                "grid_origin_y": null,
+                "cell_w": null,
+                "cell_h": null,
+                "grid_cols": null,
+                "active_value": null,
+                "_raw_shape": null
+            },
+            "enemy_2": {
+                "class_id": 1,
+                "detected_type": "entity",
+                "x_offset": 0,
+                "y_offset": 0,
+                "grid_origin_x": null,
+                "grid_origin_y": null,
+                "cell_w": null,
+                "cell_h": null,
+                "grid_cols": null,
+                "active_value": null,
+                "_raw_shape": null
+            },
+            "enemy_3": {
+                "class_id": 1,
+                "detected_type": "entity",
+                "x_offset": 0,
+                "y_offset": 0,
+                "grid_origin_x": null,
+                "grid_origin_y": null,
+                "cell_w": null,
+                "cell_h": null,
+                "grid_cols": null,
+                "active_value": null,
+                "_raw_shape": null
+            },
+            "enemy_4": {
+                "class_id": 1,
+                "detected_type": "entity",
+                "x_offset": 0,
+                "y_offset": 0,
+                "grid_origin_x": null,
+                "grid_origin_y": null,
+                "cell_w": null,
+                "cell_h": null,
+                "grid_cols": null,
+                "active_value": null,
+                "_raw_shape": null
+            },
+            "enemy_5": {
+                "class_id": 1,
+                "detected_type": "entity",
+                "x_offset": 0,
+                "y_offset": 0,
+                "grid_origin_x": null,
+                "grid_origin_y": null,
+                "cell_w": null,
+                "cell_h": null,
+                "grid_cols": null,
+                "active_value": null,
+                "_raw_shape": null
+            },
+            "enemy_6": {
+                "class_id": 1,
+                "detected_type": "entity",
+                "x_offset": 0,
+                "y_offset": 0,
+                "grid_origin_x": null,
+                "grid_origin_y": null,
+                "cell_w": null,
+                "cell_h": null,
+                "grid_cols": null,
+                "active_value": null,
+                "_raw_shape": null
+            },
+            "enemy_projectile": {
+                "class_id": 6,
+                "detected_type": "entity",
+                "x_offset": 0,
+                "y_offset": 0,
+                "grid_origin_x": null,
+                "grid_origin_y": null,
+                "cell_w": null,
+                "cell_h": null,
+                "grid_cols": null,
+                "active_value": null,
+                "_raw_shape": null
+            },
+            "player_projectile": {
+                "class_id": 2,
+                "detected_type": "entity",
+                "x_offset": 0,
+                "y_offset": 0,
+                "grid_origin_x": null,
+                "grid_origin_y": null,
+                "cell_w": null,
+                "cell_h": null,
+                "grid_cols": null,
+                "active_value": null,
+                "_raw_shape": null
+            }
+        }
+    },
+    "boxing": {
+        "objects": {
+            "left_boxer": {
+                "class_id": 0,
+                "detected_type": "entity",
+                "x_offset": 0,
+                "y_offset": 0,
+                "grid_origin_x": null,
+                "grid_origin_y": null,
+                "cell_w": null,
+                "cell_h": null,
+                "grid_cols": null,
+                "active_value": null,
+                "_raw_shape": null
+            },
+            "right_boxer": {
+                "class_id": 1,
+                "detected_type": "entity",
+                "x_offset": 0,
+                "y_offset": 0,
+                "grid_origin_x": null,
+                "grid_origin_y": null,
+                "cell_w": null,
+                "cell_h": null,
+                "grid_cols": null,
+                "active_value": null,
+                "_raw_shape": null
+            }
+        }
+    },
+    "donkeykong": {
+        "objects": {
+            "mario": {
+                "class_id": 0,
+                "detected_type": "entity",
+                "x_offset": 0,
+                "y_offset": 0,
+                "grid_origin_x": null,
+                "grid_origin_y": null,
+                "cell_w": null,
+                "cell_h": null,
+                "grid_cols": null,
+                "active_value": null,
+                "_raw_shape": null
+            },
+            "hammer": {
+                "class_id": 3,
+                "detected_type": "entity",
+                "x_offset": 0,
+                "y_offset": 0,
+                "grid_origin_x": null,
+                "grid_origin_y": null,
+                "cell_w": null,
+                "cell_h": null,
+                "grid_cols": null,
+                "active_value": null,
+                "_raw_shape": null
+            },
+            "barrels": {
+                "class_id": 1,
+                "detected_type": "entity",
+                "x_offset": 0,
+                "y_offset": 0,
+                "grid_origin_x": null,
+                "grid_origin_y": null,
+                "cell_w": null,
+                "cell_h": null,
+                "grid_cols": null,
+                "active_value": null,
+                "_raw_shape": null
+            },
+            "fires": {
+                "class_id": 1,
+                "detected_type": "entity",
+                "x_offset": 0,
+                "y_offset": 0,
+                "grid_origin_x": null,
+                "grid_origin_y": null,
+                "cell_w": null,
+                "cell_h": null,
+                "grid_cols": null,
+                "active_value": null,
+                "_raw_shape": null
+            },
+            "traps": {
+                "class_id": 1,
+                "detected_type": "entity",
+                "x_offset": 0,
+                "y_offset": 0,
+                "grid_origin_x": null,
+                "grid_origin_y": null,
+                "cell_w": null,
+                "cell_h": null,
+                "grid_cols": null,
+                "active_value": null,
+                "_raw_shape": null
+            },
+            "ladders": {
+                "class_id": 4,
+                "detected_type": "entity",
+                "x_offset": 0,
+                "y_offset": 0,
+                "grid_origin_x": null,
+                "grid_origin_y": null,
+                "cell_w": null,
+                "cell_h": null,
+                "grid_cols": null,
+                "active_value": null,
+                "_raw_shape": null
+            }
+        }
+    },
+    "gopher": {
+        "objects": {
+            "player": {
+                "class_id": 0,
+                "detected_type": "entity",
+                "x_offset": 0,
+                "y_offset": 0,
+                "grid_origin_x": null,
+                "grid_origin_y": null,
+                "cell_w": null,
+                "cell_h": null,
+                "grid_cols": null,
+                "active_value": null,
+                "_raw_shape": null
+            },
+            "gopher": {
+                "class_id": 1,
+                "detected_type": "entity",
+                "x_offset": 0,
+                "y_offset": 0,
+                "grid_origin_x": null,
+                "grid_origin_y": null,
+                "cell_w": null,
+                "cell_h": null,
+                "grid_cols": null,
+                "active_value": null,
+                "_raw_shape": null
+            },
+            "duck": {
+                "class_id": 5,
+                "detected_type": "entity",
+                "x_offset": 0,
+                "y_offset": 0,
+                "grid_origin_x": null,
+                "grid_origin_y": null,
+                "cell_w": null,
+                "cell_h": null,
+                "grid_cols": null,
+                "active_value": null,
+                "_raw_shape": null
+            },
+            "carrots": {
+                "class_id": 3,
+                "detected_type": "entity",
+                "x_offset": 0,
+                "y_offset": 0,
+                "grid_origin_x": null,
+                "grid_origin_y": null,
+                "cell_w": null,
+                "cell_h": null,
+                "grid_cols": null,
+                "active_value": null,
+                "_raw_shape": null
+            },
+            "seed": {
+                "class_id": 3,
+                "detected_type": "entity",
+                "x_offset": 0,
+                "y_offset": 0,
+                "grid_origin_x": null,
+                "grid_origin_y": null,
+                "cell_w": null,
+                "cell_h": null,
+                "grid_cols": null,
+                "active_value": null,
+                "_raw_shape": null
+            },
+            "holes": {
+                "class_id": 4,
+                "detected_type": "entity",
+                "x_offset": 0,
+                "y_offset": 0,
+                "grid_origin_x": null,
+                "grid_origin_y": null,
+                "cell_w": null,
+                "cell_h": null,
+                "grid_cols": null,
+                "active_value": null,
+                "_raw_shape": null
+            },
+            "tunnels": {
+                "class_id": 4,
+                "detected_type": "entity",
+                "x_offset": 0,
+                "y_offset": 0,
+                "grid_origin_x": null,
+                "grid_origin_y": null,
+                "cell_w": null,
+                "cell_h": null,
+                "grid_cols": null,
+                "active_value": null,
+                "_raw_shape": null
+            }
+        }
+    },
+    "gravitar": {
+        "objects": {
+            "ship": {
+                "class_id": 0,
+                "detected_type": "entity",
+                "x_offset": 0,
+                "y_offset": 0,
+                "grid_origin_x": null,
+                "grid_origin_y": null,
+                "cell_w": null,
+                "cell_h": null,
+                "grid_cols": null,
+                "active_value": null,
+                "_raw_shape": null
+            },
+            "enemies": {
+                "class_id": 1,
+                "detected_type": "entity",
+                "x_offset": 0,
+                "y_offset": 0,
+                "grid_origin_x": null,
+                "grid_origin_y": null,
+                "cell_w": null,
+                "cell_h": null,
+                "grid_cols": null,
+                "active_value": null,
+                "_raw_shape": null
+            },
+            "fuel_tanks": {
+                "class_id": 3,
+                "detected_type": "entity",
+                "x_offset": 0,
+                "y_offset": 0,
+                "grid_origin_x": null,
+                "grid_origin_y": null,
+                "cell_w": null,
+                "cell_h": null,
+                "grid_cols": null,
+                "active_value": null,
+                "_raw_shape": null
+            },
+            "saucer": {
+                "class_id": 1,
+                "detected_type": "entity",
+                "x_offset": 0,
+                "y_offset": 0,
+                "grid_origin_x": null,
+                "grid_origin_y": null,
+                "cell_w": null,
+                "cell_h": null,
+                "grid_cols": null,
+                "active_value": null,
+                "_raw_shape": null
+            },
+            "ufo": {
+                "class_id": 1,
+                "detected_type": "entity",
+                "x_offset": 0,
+                "y_offset": 0,
+                "grid_origin_x": null,
+                "grid_origin_y": null,
+                "cell_w": null,
+                "cell_h": null,
+                "grid_cols": null,
+                "active_value": null,
+                "_raw_shape": null
+            },
+            "planets": {
+                "class_id": 4,
+                "detected_type": "entity",
+                "x_offset": 0,
+                "y_offset": 0,
+                "grid_origin_x": null,
+                "grid_origin_y": null,
+                "cell_w": null,
+                "cell_h": null,
+                "grid_cols": null,
+                "active_value": null,
+                "_raw_shape": null
+            },
+            "projectiles": {
+                "class_id": 2,
+                "detected_type": "entity",
+                "x_offset": 0,
+                "y_offset": 0,
+                "grid_origin_x": null,
+                "grid_origin_y": null,
+                "cell_w": null,
+                "cell_h": null,
+                "grid_cols": null,
+                "active_value": null,
+                "_raw_shape": null
+            },
+            "terrain": {
+                "class_id": null,
+                "detected_type": "entity",
+                "x_offset": 0,
+                "y_offset": 0,
+                "grid_origin_x": null,
+                "grid_origin_y": null,
+                "cell_w": null,
+                "cell_h": null,
+                "grid_cols": null,
+                "active_value": null,
+                "_raw_shape": null
+            },
+            "reactor_destination": {
+                "class_id": 4,
+                "detected_type": "entity",
+                "x_offset": 0,
+                "y_offset": 0,
+                "grid_origin_x": null,
+                "grid_origin_y": null,
+                "cell_w": null,
+                "cell_h": null,
+                "grid_cols": null,
+                "active_value": null,
+                "_raw_shape": null
+            }
+        }
+    },
+    "journeyescape": {
+        "objects": {
+            "player": {
+                "class_id": 0,
+                "detected_type": "entity",
+                "x_offset": 0,
+                "y_offset": 0,
+                "grid_origin_x": null,
+                "grid_origin_y": null,
+                "cell_w": null,
+                "cell_h": null,
+                "grid_cols": null,
+                "active_value": null,
+                "_raw_shape": null
+            },
+            "obstacles": {
+                "class_id": 1,
+                "detected_type": "entity",
+                "x_offset": 0,
+                "y_offset": 0,
+                "grid_origin_x": null,
+                "grid_origin_y": null,
+                "cell_w": null,
+                "cell_h": null,
+                "grid_cols": null,
+                "active_value": null,
+                "_raw_shape": null
+            }
+        }
+    },
+    "kaboom": {
+        "objects": {
+            "mad_bomber_pos": {
+                "class_id": 1,
+                "detected_type": "entity",
+                "x_offset": 0,
+                "y_offset": 0,
+                "grid_origin_x": null,
+                "grid_origin_y": null,
+                "cell_w": null,
+                "cell_h": null,
+                "grid_cols": null,
+                "active_value": null,
+                "_raw_shape": null
+            },
+            "buckets_pos": {
+                "class_id": 0,
+                "detected_type": "entity",
+                "x_offset": 0,
+                "y_offset": 0,
+                "grid_origin_x": null,
+                "grid_origin_y": null,
+                "cell_w": null,
+                "cell_h": null,
+                "grid_cols": null,
+                "active_value": null,
+                "_raw_shape": null
+            },
+            "bombs": {
+                "class_id": 6,
+                "detected_type": "entity",
+                "x_offset": 0,
+                "y_offset": 0,
+                "grid_origin_x": null,
+                "grid_origin_y": null,
+                "cell_w": null,
+                "cell_h": null,
+                "grid_cols": null,
+                "active_value": null,
+                "_raw_shape": null
+            }
+        }
+    },
+    "klax": {
+        "objects": {
+            "player": {
+                "class_id": 0,
+                "detected_type": "entity",
+                "x_offset": 0,
+                "y_offset": 0,
+                "grid_origin_x": null,
+                "grid_origin_y": null,
+                "cell_w": null,
+                "cell_h": null,
+                "grid_cols": null,
+                "active_value": null,
+                "_raw_shape": null
+            },
+            "tiles": {
+                "class_id": 3,
+                "detected_type": "entity",
+                "x_offset": 0,
+                "y_offset": 0,
+                "grid_origin_x": null,
+                "grid_origin_y": null,
+                "cell_w": null,
+                "cell_h": null,
+                "grid_cols": null,
+                "active_value": null,
+                "_raw_shape": null
+            },
+            "backpack_items": {
+                "class_id": 3,
+                "detected_type": "entity",
+                "x_offset": 0,
+                "y_offset": 0,
+                "grid_origin_x": null,
+                "grid_origin_y": null,
+                "cell_w": null,
+                "cell_h": null,
+                "grid_cols": null,
+                "active_value": null,
+                "_raw_shape": null
+            },
+            "board": {
+                "class_id": 4,
+                "detected_type": "true_2d_grid",
+                "x_offset": null,
+                "y_offset": null,
+                "grid_origin_x": 0,
+                "grid_origin_y": 0,
+                "cell_w": 8,
+                "cell_h": 8,
+                "grid_cols": 5,
+                "active_value": 1.0,
+                "_raw_shape": [
+                    4,
+                    5,
+                    5
+                ]
+            }
+        }
+    },
+    "miniaturegolf": {
+        "objects": {
+            "player": {
+                "class_id": 0,
+                "detected_type": "entity",
+                "x_offset": 0,
+                "y_offset": 0,
+                "grid_origin_x": null,
+                "grid_origin_y": null,
+                "cell_w": null,
+                "cell_h": null,
+                "grid_cols": null,
+                "active_value": null,
+                "_raw_shape": null
+            },
+            "hole": {
+                "class_id": 4,
+                "detected_type": "entity",
+                "x_offset": 0,
+                "y_offset": 0,
+                "grid_origin_x": null,
+                "grid_origin_y": null,
+                "cell_w": null,
+                "cell_h": null,
+                "grid_cols": null,
+                "active_value": null,
+                "_raw_shape": null
+            },
+            "ball": {
+                "class_id": 5,
+                "detected_type": "entity",
+                "x_offset": 0,
+                "y_offset": 0,
+                "grid_origin_x": null,
+                "grid_origin_y": null,
+                "cell_w": null,
+                "cell_h": null,
+                "grid_cols": null,
+                "active_value": null,
+                "_raw_shape": null
+            },
+            "obstacle": {
+                "class_id": 4,
+                "detected_type": "entity",
+                "x_offset": 0,
+                "y_offset": 0,
+                "grid_origin_x": null,
+                "grid_origin_y": null,
+                "cell_w": null,
+                "cell_h": null,
+                "grid_cols": null,
+                "active_value": null,
+                "_raw_shape": null
+            }
+        }
+    },
+    "pacman": {
+        "objects": {
+            "player": {
+                "class_id": 0,
+                "detected_type": "entity",
+                "x_offset": 0,
+                "y_offset": 0,
+                "grid_origin_x": null,
+                "grid_origin_y": null,
+                "cell_w": null,
+                "cell_h": null,
+                "grid_cols": null,
+                "active_value": null,
+                "_raw_shape": null
+            },
+            "ghosts": {
+                "class_id": 1,
+                "detected_type": "entity",
+                "x_offset": 0,
+                "y_offset": 0,
+                "grid_origin_x": null,
+                "grid_origin_y": null,
+                "cell_w": null,
+                "cell_h": null,
+                "grid_cols": null,
+                "active_value": null,
+                "_raw_shape": null
+            },
+            "fruit": {
+                "class_id": 3,
+                "detected_type": "entity",
+                "x_offset": 0,
+                "y_offset": 0,
+                "grid_origin_x": null,
+                "grid_origin_y": null,
+                "cell_w": null,
+                "cell_h": null,
+                "grid_cols": null,
+                "active_value": null,
+                "_raw_shape": null
+            },
+            "power_pellets": {
+                "class_id": 3,
+                "detected_type": "entity",
+                "x_offset": 0,
+                "y_offset": 0,
+                "grid_origin_x": null,
+                "grid_origin_y": null,
+                "cell_w": null,
+                "cell_h": null,
+                "grid_cols": null,
+                "active_value": null,
+                "_raw_shape": null
+            },
+            "pellets": {
+                "class_id": 3,
+                "detected_type": "entity",
+                "x_offset": 0,
+                "y_offset": 0,
+                "grid_origin_x": null,
+                "grid_origin_y": null,
+                "cell_w": null,
+                "cell_h": null,
+                "grid_cols": null,
+                "active_value": null,
+                "_raw_shape": null
+            }
+        }
+    },
+    "roadrunner": {
+        "objects": {
+            "player": {
+                "class_id": 0,
+                "detected_type": "entity",
+                "x_offset": 0,
+                "y_offset": 0,
+                "grid_origin_x": null,
+                "grid_origin_y": null,
+                "cell_w": null,
+                "cell_h": null,
+                "grid_cols": null,
+                "active_value": null,
+                "_raw_shape": null
+            },
+            "enemy": {
+                "class_id": 1,
+                "detected_type": "entity",
+                "x_offset": 0,
+                "y_offset": 0,
+                "grid_origin_x": null,
+                "grid_origin_y": null,
+                "cell_w": null,
+                "cell_h": null,
+                "grid_cols": null,
+                "active_value": null,
+                "_raw_shape": null,
+                "w_padding": 4,
+                "h_padding": 28
+            },
+            "ravines": {
+                "class_id": 4,
+                "detected_type": "entity",
+                "x_offset": 0,
+                "y_offset": 0,
+                "grid_origin_x": null,
+                "grid_origin_y": null,
+                "cell_w": null,
+                "cell_h": null,
+                "grid_cols": null,
+                "active_value": null,
+                "_raw_shape": null
+            },
+            "seeds": {
+                "class_id": 3,
+                "detected_type": "entity",
+                "x_offset": 0,
+                "y_offset": 0,
+                "grid_origin_x": null,
+                "grid_origin_y": null,
+                "cell_w": null,
+                "cell_h": null,
+                "grid_cols": null,
+                "active_value": null,
+                "_raw_shape": null
+            },
+            "truck": {
+                "class_id": 1,
+                "detected_type": "entity",
+                "x_offset": 0,
+                "y_offset": 0,
+                "grid_origin_x": null,
+                "grid_origin_y": null,
+                "cell_w": null,
+                "cell_h": null,
+                "grid_cols": null,
+                "active_value": null,
+                "_raw_shape": null
+            },
+            "landmine": {
+                "class_id": 1,
+                "detected_type": "entity",
+                "x_offset": 0,
+                "y_offset": 0,
+                "grid_origin_x": null,
+                "grid_origin_y": null,
+                "cell_w": null,
+                "cell_h": null,
+                "grid_cols": null,
+                "active_value": null,
+                "_raw_shape": null
+            },
+            "bullet": {
+                "class_id": 6,
+                "detected_type": "entity",
+                "x_offset": 0,
+                "y_offset": 0,
+                "grid_origin_x": null,
+                "grid_origin_y": null,
+                "cell_w": null,
+                "cell_h": null,
+                "grid_cols": null,
+                "active_value": null,
+                "_raw_shape": null
+            },
+            "cannon": {
+                "class_id": 1,
+                "detected_type": "entity",
+                "x_offset": 0,
+                "y_offset": 0,
+                "grid_origin_x": null,
+                "grid_origin_y": null,
+                "cell_w": null,
+                "cell_h": null,
+                "grid_cols": null,
+                "active_value": null,
+                "_raw_shape": null
+            }
+        }
+    },
+    "skiing": {
+        "objects": {
+            "skier": {
+                "class_id": 0,
+                "detected_type": "entity",
+                "x_offset": 0,
+                "y_offset": 0,
+                "grid_origin_x": null,
+                "grid_origin_y": null,
+                "cell_w": null,
+                "cell_h": null,
+                "grid_cols": null,
+                "active_value": null,
+                "_raw_shape": null
+            },
+            "flags": {
+                "class_id": 3,
+                "detected_type": "entity",
+                "x_offset": 0,
+                "y_offset": 0,
+                "grid_origin_x": null,
+                "grid_origin_y": null,
+                "cell_w": null,
+                "cell_h": null,
+                "grid_cols": null,
+                "active_value": null,
+                "_raw_shape": null
+            },
+            "trees": {
+                "class_id": 1,
+                "detected_type": "entity",
+                "x_offset": 0,
+                "y_offset": 0,
+                "grid_origin_x": null,
+                "grid_origin_y": null,
+                "cell_w": null,
+                "cell_h": null,
+                "grid_cols": null,
+                "active_value": null,
+                "_raw_shape": null
+            },
+            "moguls": {
+                "class_id": 4,
+                "detected_type": "entity",
+                "x_offset": 0,
+                "y_offset": 0,
+                "grid_origin_x": null,
+                "grid_origin_y": null,
+                "cell_w": null,
+                "cell_h": null,
+                "grid_cols": null,
+                "active_value": null,
+                "_raw_shape": null
+            }
+        }
+    },
+    "surround": {
+        "objects": {
+            "trail": {
+                "class_id": 4,
+                "detected_type": "entity",
+                "x_offset": 0,
+                "y_offset": 0,
+                "grid_origin_x": null,
+                "grid_origin_y": null,
+                "cell_w": null,
+                "cell_h": null,
+                "grid_cols": null,
+                "active_value": null,
+                "_raw_shape": null
+            },
+            "player1": {
+                "class_id": 0,
+                "detected_type": "entity",
+                "x_offset": 0,
+                "y_offset": 0,
+                "grid_origin_x": null,
+                "grid_origin_y": null,
+                "cell_w": null,
+                "cell_h": null,
+                "grid_cols": null,
+                "active_value": null,
+                "_raw_shape": null
+            },
+            "player2": {
+                "class_id": 1,
+                "detected_type": "entity",
+                "x_offset": 0,
+                "y_offset": 0,
+                "grid_origin_x": null,
+                "grid_origin_y": null,
+                "cell_w": null,
+                "cell_h": null,
+                "grid_cols": null,
+                "active_value": null,
+                "_raw_shape": null
+            }
+        }
+    },
+    "upndown": {
+        "objects": {
+            "player": {
+                "class_id": 0,
+                "detected_type": "entity",
+                "x_offset": 0,
+                "y_offset": 0,
+                "grid_origin_x": null,
+                "grid_origin_y": null,
+                "cell_w": null,
+                "cell_h": null,
+                "grid_cols": null,
+                "active_value": null,
+                "_raw_shape": null
+            },
+            "enemies": {
+                "class_id": 1,
+                "detected_type": "entity",
+                "x_offset": 0,
+                "y_offset": 0,
+                "grid_origin_x": null,
+                "grid_origin_y": null,
+                "cell_w": null,
+                "cell_h": null,
+                "grid_cols": null,
+                "active_value": null,
+                "_raw_shape": null
+            },
+            "flags": {
+                "class_id": 3,
+                "detected_type": "entity",
+                "x_offset": 0,
+                "y_offset": 0,
+                "grid_origin_x": null,
+                "grid_origin_y": null,
+                "cell_w": null,
+                "cell_h": null,
+                "grid_cols": null,
+                "active_value": null,
+                "_raw_shape": null
+            },
+            "collectibles": {
+                "class_id": 3,
+                "detected_type": "entity",
+                "x_offset": 0,
+                "y_offset": 0,
+                "grid_origin_x": null,
+                "grid_origin_y": null,
+                "cell_w": null,
+                "cell_h": null,
+                "grid_cols": null,
+                "active_value": null,
+                "_raw_shape": null
+            },
+            "flags_collected_mask": {
+                "class_id": null,
+                "detected_type": "slot_flags",
+                "x_offset": null,
+                "y_offset": null,
+                "grid_origin_x": null,
+                "grid_origin_y": null,
+                "cell_w": null,
+                "cell_h": null,
+                "grid_cols": null,
+                "active_value": null,
+                "_raw_shape": [
+                    4,
+                    8
+                ]
+            }
+        }
+    },
+    "yarsrevenge": {
+        "objects": {
+            "yar": {
+                "class_id": 0,
+                "detected_type": "entity",
+                "x_offset": 0,
+                "y_offset": 0,
+                "grid_origin_x": null,
+                "grid_origin_y": null,
+                "cell_w": null,
+                "cell_h": null,
+                "grid_cols": null,
+                "active_value": null,
+                "_raw_shape": null
+            },
+            "qotile": {
+                "class_id": 1,
+                "detected_type": "entity",
+                "x_offset": 0,
+                "y_offset": 0,
+                "grid_origin_x": null,
+                "grid_origin_y": null,
+                "cell_w": null,
+                "cell_h": null,
+                "grid_cols": null,
+                "active_value": null,
+                "_raw_shape": null
+            },
+            "destroyer": {
+                "class_id": 6,
+                "detected_type": "entity",
+                "x_offset": 0,
+                "y_offset": 0,
+                "grid_origin_x": null,
+                "grid_origin_y": null,
+                "cell_w": null,
+                "cell_h": null,
+                "grid_cols": null,
+                "active_value": null,
+                "_raw_shape": null
+            },
+            "swirl": {
+                "class_id": 6,
+                "detected_type": "entity",
+                "x_offset": 0,
+                "y_offset": 0,
+                "grid_origin_x": null,
+                "grid_origin_y": null,
+                "cell_w": null,
+                "cell_h": null,
+                "grid_cols": null,
+                "active_value": null,
+                "_raw_shape": null
+            },
+            "energy_missile": {
+                "class_id": 2,
+                "detected_type": "entity",
+                "x_offset": 0,
+                "y_offset": 0,
+                "grid_origin_x": null,
+                "grid_origin_y": null,
+                "cell_w": null,
+                "cell_h": null,
+                "grid_cols": null,
+                "active_value": null,
+                "_raw_shape": null
+            },
+            "cannon": {
+                "class_id": 2,
+                "detected_type": "entity",
+                "x_offset": 0,
+                "y_offset": 0,
+                "grid_origin_x": null,
+                "grid_origin_y": null,
+                "cell_w": null,
+                "cell_h": null,
+                "grid_cols": null,
+                "active_value": null,
+                "_raw_shape": null
+            },
+            "energy_shield": {
+                "class_id": 4,
+                "detected_type": "entity",
+                "x_offset": 0,
+                "y_offset": 0,
+                "grid_origin_x": null,
+                "grid_origin_y": null,
+                "cell_w": null,
+                "cell_h": null,
+                "grid_cols": null,
+                "active_value": null,
+                "_raw_shape": null
+            },
+            "energy_shield_state": {
+                "class_id": null,
+                "detected_type": "true_2d_grid",
+                "x_offset": null,
+                "y_offset": null,
+                "grid_origin_x": 0,
+                "grid_origin_y": 0,
+                "cell_w": 8,
+                "cell_h": 8,
+                "grid_cols": 8,
+                "active_value": 1.0,
+                "_raw_shape": [
+                    4,
+                    16,
+                    8
+                ]
+            }
+        }
+    }
+}

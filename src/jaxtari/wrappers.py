@@ -1268,3 +1268,11 @@ class ContinuousActionWrapper(JaxtariWrapper):
 
 # Backward-compatible aliases from the jaxatari → jaxtari rename.
 JaxatariWrapper = JaxtariWrapper
+
+
+def __getattr__(name):
+    # the detector-based wrapper lives in jaxtari.detection (lazy import avoids a circular import)
+    if name in ("YOLOObjectCentricWrapper", "YOLOObjectCentricState"):
+        from jaxtari import detection
+        return getattr(detection, name)
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

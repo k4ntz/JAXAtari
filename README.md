@@ -262,6 +262,24 @@ base env  →  [MultiRewardWrapper]  →  AtariWrapper  →  <obs wrapper>  → 
 | `MultiRewardWrapper`          | Computes multiple reward functions at every step. Apply before `AtariWrapper`.                                                         |
 | `MultiRewardLogWrapper`       | Tracks multiple reward components separately. Use with `MultiRewardWrapper`.                                                           |
 | `ContinuousActionWrapper`     | Converts a 3D continuous action (r, theta, fire) into discrete Atari actions. Requires full_action_space=True in AtariWrapper. Place this wrapper after all other wrappers (i.e., at the outermost layer)        |
+| `YOLOObjectCentricWrapper`    | Object-centric features from a YOLO detector instead of the game state; same layout as `ObjectCentricWrapper`. See below.               |
+
+### Object-centric observations from object detection
+
+`jaxtari.detection.YOLOObjectCentricWrapper` is a drop-in replacement for `ObjectCentricWrapper` whose
+observations come from a YOLOv8 detector running on the rendered frames, so agents can be trained and
+evaluated on *perceived* rather than ground-truth object positions. It is pure JAX (jittable and
+vmappable, no torch); values the detector cannot provide are `-1`.
+
+```python
+from jaxtari.detection import YOLOObjectCentricWrapper
+
+env = YOLOObjectCentricWrapper(AtariWrapper(jaxtari.make("pong")), "gray96/pong")
+obs, state = jax.vmap(env.reset)(jax.random.split(key, 1024))   # obs: (1024, 4, 26), as ObjectCentricWrapper
+```
+
+Install the detector checkpoints with `python3 -m jaxtari.install_detection` (or `.venv/bin/install-detection`).
+Detector checkpoints, dataset generation, training and evaluation are described in [train_detection/README.md](train_detection/README.md).
 
 ---
 
@@ -278,6 +296,8 @@ Jaxtari/
 │   ├── renderers.py         # JAX rendering utilities
 │   ├── spaces.py            # action/observation space definitions
 │   ├── install_sprites.py   # sprite download script
+│   ├── install_detection.py # detector checkpoint download script
+│   ├── detection/           # YOLO detector + YOLOObjectCentricWrapper (pure JAX), quirks registry
 │   └── games/
 │       ├── jax_<game>.py    # one file per environment
 │       └── mods/
@@ -287,6 +307,7 @@ Jaxtari/
 ├── scripts/                 # see scripts/README.md for a full description
 │   ├── play.py              # interactive human play
 │   └── benchmarks/          # PPO/PQN training and evaluation scripts
+├── train_detection/         # detector tooling (datasets, training, evaluation, videos)
 ├── tests/                   # pytest test suite
 ├── docs/                    # Sphinx documentation source
 ├── games_covered.md         # full environment status table
