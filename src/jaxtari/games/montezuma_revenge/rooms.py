@@ -518,8 +518,9 @@ def load_room(room_id: jnp.ndarray, state: MontezumaRevengeState, consts: Montez
         lb = lb.at[0].set(47)
         la = la.at[0].set(1)
 
-        # item: sword
-        ix = ix.at[0].set(12)
+        # Native RAM44 is one past the visible object anchor.
+        # Keep the sword's narrow collision bitmap at that same position.
+        ix = ix.at[0].set(11)
         iy = iy.at[0].set(7)
         ia = ia.at[0].set(1)
 

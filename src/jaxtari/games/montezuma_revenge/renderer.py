@@ -955,19 +955,45 @@ class MontezumaRevengeRenderer(JAXGameRenderer):
         )
         
         player_mask = self.SHAPE_MASKS["player"][player_sprite_idx]
-        # Native climb pointers describe the pose rendered before this tick's
-        # movement. Keep its fixed/clocked bitmap, facing and ladder scanlines.
-        climb_render = jnp.logical_and(state.level == 2, jnp.logical_and(~is_dying,
-            jnp.logical_or(state.is_climbing == 1,
-                jnp.logical_and(state.collision_player_pose >= 3, state.collision_player_pose <= 6))))
-        retained_mask = self.SHAPE_MASKS["player"][state.collision_player_pose]
-        player_mask = jnp.where(climb_render, retained_mask, player_mask)
-        retained_flip = jnp.where(jnp.isin(state.collision_player_pose, jnp.array([1,2,7])),
+        # Preserve the existing custom-room climb renderer independently
+        # of the measured native pointer pipeline below.
+        custom_climb_render = jnp.logical_and(self.consts.CUSTOM_ROOMS,
+            jnp.logical_and(state.level == 2, jnp.logical_and(~is_dying,
+                jnp.logical_or(state.is_climbing == 1,
+                    jnp.logical_and(state.collision_player_pose >= 3, state.collision_player_pose <= 6)))))
+        custom_mask = self.SHAPE_MASKS["player"][state.collision_player_pose]
+        custom_flip = jnp.where(jnp.isin(state.collision_player_pose, jnp.array([1,2,7])),
             state.collision_player_dir == 1, state.collision_player_dir == -1)
-        flip_player = jnp.where(climb_render, retained_flip, flip_player)
-        render_x = jnp.where(climb_render, state.collision_player_x, state.player_x)
-        climb_offset = jnp.isin(state.collision_player_pose, jnp.array([3,4])).astype(jnp.int32) * 2
-        render_y = jnp.where(climb_render, state.collision_player_y + climb_offset, state.player_y)
+        player_mask = jnp.where(custom_climb_render, custom_mask, player_mask)
+        flip_player = jnp.where(custom_climb_render, custom_flip, flip_player)
+        render_x = jnp.where(custom_climb_render, state.collision_player_x, state.player_x)
+        custom_y_offset = jnp.isin(state.collision_player_pose, jnp.array([3,4])).astype(jnp.int32) * 2
+        render_y = jnp.where(custom_climb_render,
+            state.collision_player_y + custom_y_offset, state.player_y)
+        # A native frame draws the old graphics pointer at the pre-movement
+        # coordinates. Walking uses the original eight-column bitmap; ladder
+        # and measured beam kernels draw one scanline below the gameplay Y.
+        retained_render = jnp.logical_and(not self.consts.CUSTOM_ROOMS,
+            jnp.logical_and(jnp.logical_or(~is_dying, state.render_ladder_death),
+                state.render_player_x >= 0))
+        visible_pose = state.render_player_pose
+        retained_mask = self.SHAPE_MASKS["player"][visible_pose]
+        retained_mask = jnp.where(visible_pose == 2, self.ORIGINAL_WALK_1, retained_mask)
+        retained_flip = jnp.where(jnp.isin(visible_pose, jnp.array([1,2,7])),
+            state.render_player_dir == 1,
+            jnp.logical_and(visible_pose == 0, state.render_player_dir == -1))
+        retained_flip = jnp.logical_or(retained_flip,
+            jnp.isin(visible_pose, jnp.array([10,11])))
+        player_mask = jnp.where(retained_render, retained_mask, player_mask)
+        flip_player = jnp.where(retained_render, retained_flip, flip_player)
+        render_x = jnp.where(retained_render, state.render_player_x, render_x)
+        beam_walk = jnp.logical_and(state.level == 2,
+            jnp.logical_and(jnp.isin(state.room_id, jnp.array([3,14,21])),
+                jnp.isin(visible_pose, jnp.array([0,1,2]))))
+        pose_y_offset = jnp.logical_or(
+            jnp.isin(visible_pose, jnp.array([3,4])), beam_walk).astype(jnp.int32)
+        render_y = jnp.where(retained_render,
+            state.render_player_y + pose_y_offset, render_y)
         raster = self.jr.render_at(raster, render_x, render_y + 47, player_mask, flip_horizontal=flip_player)
 
         # Render Score

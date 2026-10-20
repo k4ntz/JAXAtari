@@ -171,6 +171,14 @@ class MontezumaRevengeState:
     collision_player_y: jnp.ndarray = -1
     collision_player_pose: jnp.ndarray = 0
     collision_player_dir: jnp.ndarray = -1
+    # Graphics pointers update after the visible kernel has drawn its frame.
+    # Keep their phase separate from both movement and contact geometry.
+    render_pointer_pose: jnp.ndarray = -1
+    render_player_x: jnp.ndarray = -1
+    render_player_y: jnp.ndarray = -1
+    render_player_pose: jnp.ndarray = 0
+    render_player_dir: jnp.ndarray = -1
+    render_ladder_death: jnp.ndarray = False
     # RAM52 bit2 survives landing; a later floor collapse reuses this drift.
     native_jump_momentum: jnp.ndarray = False
     # RAM53 selects a fixed hanging pose or a globally clocked climb cycle.
