@@ -96,12 +96,17 @@ class NoiseWrapper(JaxtariWrapper):
     @functools.partial(jax.jit, static_argnums=(0,))
     def reset(self, key: chex.PRNGKey) -> Tuple[chex.ArrayTree, Any]:
         """Reset the environment and apply noise to the initial observation."""
+        return self._reset_active(key, True)
+
+    @functools.partial(jax.jit, static_argnums=(0,))
+    def _reset_active(self, key: chex.PRNGKey, active: chex.Array = True) -> Tuple[chex.ArrayTree, Any]:
+        """Reset the environment and apply noise to the initial observation."""
         if self.std_dev > 0.0 or self.detect_prob < 1.0:
             obs_key, env_key = jax.random.split(key)
-            obs, env_state = self._env.reset(env_key)
+            obs, env_state = _reset_with_active(self._env, env_key, active)
             obs = self._add_noise_to_obs(obs, obs_key)
         else:
-            obs, env_state = self._env.reset(key)
+            obs, env_state = _reset_with_active(self._env, key, active)
         return obs, env_state
 
     @functools.partial(jax.jit, static_argnums=(0,))
@@ -168,14 +173,110 @@ class MultiRewardWrapper(JaxtariWrapper):
         return obs, new_state, reward, done, info 
 
 
-def _has_atari_wrapper(env) -> bool:
-    """Check whether an AtariWrapper exists anywhere in the wrapper chain."""
+def _find_atari_wrapper(env) -> Optional["AtariWrapper"]:
+    """Return the ``AtariWrapper`` in ``env``'s wrapper chain, or ``None``."""
     current = env
     while isinstance(current, JaxtariWrapper):
         if isinstance(current, AtariWrapper):
-            return True
+            return current
         current = current._env
-    return False
+    return None
+
+
+def _has_atari_wrapper(env) -> bool:
+    """Check whether an AtariWrapper exists anywhere in the wrapper chain."""
+    return _find_atari_wrapper(env) is not None
+
+
+def _reset_with_active(env, key: chex.PRNGKey, active: chex.Array = True):
+    """Use the private mask protocol only for built-ins; honor custom resets."""
+    if type(env) in (
+        AtariWrapper, NoiseWrapper, ObjectCentricWrapper, PixelObsWrapper,
+        PixelAndObjectCentricWrapper, PixelAndObjectObsWrapper,
+    ):
+        return env._reset_active(key, active)
+    return env.reset(key)
+
+
+def _tree_where(condition: chex.Array, x, y):
+    """Select ``x`` when ``condition`` is true, else ``y`` (works under ``vmap``)."""
+    return jax.tree.map(lambda a, b: jnp.where(condition, a, b), x, y)
+
+
+def _bcast_where(condition: chex.Array, x, y):
+    """Like ``_tree_where``, but broadcasts a leading/batch ``condition`` over leaf dims."""
+    def select(a, b):
+        cond = jnp.asarray(condition)
+        if cond.ndim > 0 and a.ndim >= cond.ndim:
+            cond = cond.reshape(cond.shape + (1,) * (a.ndim - cond.ndim))
+        return jnp.where(cond, a, b)
+
+    return jax.tree.map(select, x, y)
+
+
+def speculative_cond(pred_fn: Callable, rare_fn: Callable, common_fn: Callable):
+    """Skip batched rare work when no lane needs it, preserving ``cond`` AD.
+
+    Branches must be pure. Batched execution computes the common branch for all
+    lanes and, if any predicate is true, the rare branch for all lanes. Nested
+    vmaps retain a scalar guard. Differentiation uses ordinary ``lax.cond``;
+    its usual batching and differentiation limitations still apply.
+    """
+    from jax.custom_batching import custom_vmap
+
+    def batchable(predicate, rare, common):
+        @custom_vmap
+        def forward(*args):
+            pred = jnp.asarray(predicate(*args))
+            if pred.ndim == 0:
+                return jax.lax.cond(pred, rare, common, *args)
+            out = common(*args)
+            return jax.lax.cond(
+                jnp.any(pred),
+                lambda out: _bcast_where(pred, rare(*args), out),
+                lambda out: out,
+                out,
+            )
+
+        @forward.def_vmap
+        def rule(axis_size, in_batched, *args):
+            del axis_size
+            in_axes = tuple(jax.tree.map(lambda b: 0 if b else None, ib) for ib in in_batched)
+            batched = batchable(
+                jax.vmap(predicate, in_axes=in_axes),
+                jax.vmap(rare, in_axes=in_axes),
+                jax.vmap(common, in_axes=in_axes),
+            )
+            out = batched(*args)
+            return out, jax.tree.map(lambda _: True, out)
+
+        return forward
+
+    forward = batchable(pred_fn, rare_fn, common_fn)
+
+    def reference(*args):
+        return jax.lax.cond(pred_fn(*args), rare_fn, common_fn, *args)
+
+    # Keep batching ahead of differentiation. A custom_jvp around custom_vmap
+    # can batch an already-linearized cond, inserting stop_gradient on tangents
+    # in JAX 0.7 (jax-ml/jax#22011). This small operation instead delegates AD
+    # to the ordinary cond at the current batch shape.
+    from jaxtari._conditional import conditional_call
+
+    return lambda *args: conditional_call(forward, reference, *args)
+
+
+def _reduce_frame_skip_infos(infos: list) -> Dict[Any, Any]:
+    """Fold per-skip info dicts the same way the old ``lax.scan`` + reduce did."""
+    def reduce_info(k, values):
+        if k in ["env_reward", "all_rewards"]:
+            return jnp.sum(jnp.stack(values), axis=0)
+        if k == "env_done":
+            return jnp.any(jnp.stack(values))
+        return values[-1]
+
+    keys = infos[0].keys()
+    return {k: reduce_info(k, [info[k] for info in infos]) for k in keys}
 
 
 @struct.dataclass
@@ -247,6 +348,10 @@ class AtariWrapper(JaxtariWrapper):
 
     @functools.partial(jax.jit, static_argnums=(0,))
     def reset(self, key: chex.PRNGKey) -> Tuple[chex.Array, AtariState]:
+        return self._reset_active(key, True)
+
+    @functools.partial(jax.jit, static_argnums=(0,))
+    def _reset_active(self, key: chex.PRNGKey, active: chex.Array = True) -> Tuple[chex.Array, AtariState]:
         # Split keys for all potential random operations
         env_key, wrapper_key, noop_key = jax.random.split(key, 3)
         obs, env_state = self._env.reset(env_key)
@@ -254,55 +359,38 @@ class AtariWrapper(JaxtariWrapper):
         prev_action = jnp.array(0, dtype=jnp.int32)
 
         # ========== NOOP RESET ==========
-        def perform_noop_reset(carry):
-            # This function will be executed if self.noop_reset is True
-            env_state, obs, step = carry
-            # Generate the random number of no-op steps to take.
+        # Python `if`: noop_reset / first_fire are static __init__ flags. Using
+        # lax.cond here would still trace both branches into every reset jaxpr.
+        if self.noop_reset:
             num_noops = jax.random.randint(noop_key, shape=(), minval=0, maxval=self.noop_max + 1)
+            # During speculative autoreset under vmap, non-done lanes are discarded
+            # after the call; zeroing their noop count prevents them from inflating
+            # the batch-wide fori_loop upper bound while keeping done lanes exact.
+            num_noops = jnp.where(active, num_noops, jnp.int32(0))
+
+            # Snapshot from the initial reset; under vmap, lax.cond(reset) would
+            # evaluate a full env.reset on every noop iteration for every env.
+            initial_obs, initial_env_state = obs, env_state
 
             def noop_body_fn(i, loop_carry):
                 current_obs, current_env_state = loop_carry
-                # We always compute the next step for static graph tracing...
-                next_obs, next_env_state, reward, done, info = self._env.step(current_env_state, Action.NOOP)
-                # Might be done from the no-op step, in which case we reset. 
-                next_obs, next_env_state = jax.lax.cond(
-                    done,
-                    lambda: self._env.reset(env_key),
-                    lambda: (next_obs, next_env_state) 
+                next_obs, next_env_state, reward, done, info = self._env.step(
+                    current_env_state, Action.NOOP
                 )
+                # If a noop ends the episode, restore the initial reset snapshot.
+                next_obs = _tree_where(done, initial_obs, next_obs)
+                next_env_state = _tree_where(done, initial_env_state, next_env_state)
                 return next_obs, next_env_state
 
-            # Loop for the static maximum number of no-ops.
-            final_obs, final_env_state = jax.lax.fori_loop(0, num_noops, noop_body_fn, (obs, env_state)) 
-            
-            # Update the step counter by the dynamic number of no-ops performed.
-            final_step = step + num_noops
-            return final_env_state, final_obs, final_step
-
-        # Use lax.cond to conditionally apply the whole no-op block based on the static self.noop_reset flag.
-        env_state, obs, step = jax.lax.cond(
-            self.noop_reset,
-            lambda carry: perform_noop_reset(carry),
-            lambda carry: carry,
-            (env_state, obs, step)
-        )
+            # Dynamic upper bound: under vmap this runs until the batch max.
+            obs, env_state = jax.lax.fori_loop(0, num_noops, noop_body_fn, (obs, env_state))
+            step = step + num_noops
 
         # ========== FIRST FIRE ==========
-        def perform_first_fire(carry):
-            env_state, obs, step, _ = carry
-            fire_obs, fire_env_state, _, _, _ = self._env.step(env_state, self.fire_action_index)
-            return fire_env_state, fire_obs, step + 1, self.fire_action_index
-
-        def identity_fire(carry):
-            return carry
-        
-        # Conditionally apply the fire action based on the static self.first_fire flag.
-        env_state, obs, step, prev_action = jax.lax.cond(
-            self.first_fire,
-            perform_first_fire,
-            identity_fire,
-            (env_state, obs, step, prev_action)
-        )
+        if self.first_fire:
+            obs, env_state, _, _, _ = self._env.step(env_state, self.fire_action_index)
+            step = step + 1
+            prev_action = jnp.asarray(self.fire_action_index, dtype=jnp.int32)
 
         return obs, AtariState(env_state, wrapper_key, step, prev_action)
 
@@ -347,6 +435,36 @@ class AtariWrapper(JaxtariWrapper):
         return obs, next_state, reward, terminated, truncated, info_dict
 
 
+def _unroll_frame_skip(env, atari_state: AtariState, action: int, frame_skip: int):
+    """Unroll a static ``frame_skip`` of ``env.step`` calls.
+
+    Prefer this over nesting ``lax.scan`` inside an outer rollout ``scan``: on GPU
+    the nested scan was several× slower for the same number of base steps.
+    """
+    rewards = []
+    terminations = []
+    truncations = []
+    infos = []
+    obs = None
+    env_states = []
+    for _ in range(frame_skip):
+        obs, atari_state, reward, terminated, truncated, info = env.step(atari_state, action)
+        rewards.append(reward)
+        terminations.append(terminated)
+        truncations.append(truncated)
+        infos.append(info)
+        env_states.append(atari_state.env_state)
+    return (
+        atari_state,
+        obs,
+        env_states,
+        jnp.stack(rewards),
+        jnp.stack(terminations),
+        jnp.stack(truncations),
+        _reduce_frame_skip_infos(infos),
+    )
+
+
 @struct.dataclass
 class ObjectCentricState:
     atari_state: AtariState
@@ -361,7 +479,9 @@ class ObjectCentricWrapper(JaxtariWrapper):
 
     def __init__(self, env, frame_stack_size: int = 4, frame_skip: int = 4, clip_reward: bool = True):
         super().__init__(env)
-        assert _has_atari_wrapper(env), "ObjectCentricWrapper must be applied after AtariWrapper"
+        atari_wrapper = _find_atari_wrapper(env)
+        assert atari_wrapper is not None, "ObjectCentricWrapper must be applied after AtariWrapper"
+        self._speculative_autoreset = bool(atari_wrapper.noop_reset or atari_wrapper.first_fire)
         self.frame_stack_size = frame_stack_size
         self.frame_skip = frame_skip
         self.clip_reward = clip_reward
@@ -408,7 +528,13 @@ class ObjectCentricWrapper(JaxtariWrapper):
     def reset(
         self, key: chex.PRNGKey
     ) -> Tuple[chex.Array, ObjectCentricState]:
-        obs, atari_state = self._env.reset(key)
+        return self._reset_active(key, True)
+
+    @functools.partial(jax.jit, static_argnums=(0,))
+    def _reset_active(
+        self, key: chex.PRNGKey, active: chex.Array = True
+    ) -> Tuple[chex.Array, ObjectCentricState]:
+        obs, atari_state = _reset_with_active(self._env, key, active)
         flat_obs = self._flatten_single_obs(obs)
         obs_stack = jnp.stack([flat_obs] * self.frame_stack_size)
         return obs_stack, ObjectCentricState(atari_state, obs_stack)
@@ -419,20 +545,10 @@ class ObjectCentricWrapper(JaxtariWrapper):
         state: ObjectCentricState,
         action: int,
     ) -> Tuple[chex.Array, ObjectCentricState, float, bool, bool, Dict[Any, Any]]:
-
-        def body_fn(carry, _):
-            atari_state, action = carry
-            obs, new_atari_state, reward, terminated, truncated, info = self._env.step(atari_state, action)
-            return (new_atari_state, action), (obs, reward, terminated, truncated, info)
-
-        (atari_state, _), (obs, rewards, terminations, truncations, infos) = jax.lax.scan(
-            body_fn,
-            (state.atari_state, action),
-            None,
-            length=self.frame_skip,
+        atari_state, latest_obs, _, rewards, terminations, truncations, info_dict = _unroll_frame_skip(
+            self._env, state.atari_state, action, self.frame_skip
         )
 
-        latest_obs = jax.tree.map(lambda x: x[-1], obs)
         flat_latest_obs = self._flatten_single_obs(latest_obs)
         obs_stack = jnp.concatenate([state.obs_stack[1:], jnp.expand_dims(flat_latest_obs, axis=0)], axis=0)
 
@@ -442,21 +558,21 @@ class ObjectCentricWrapper(JaxtariWrapper):
 
         terminated = terminations.any()
         truncated = truncations.any()
-        # Autoreset (gym's SAME_STEP mode) -> reset whole stack
-        obs_stack, oc_state = jax.lax.cond(
-            jnp.logical_or(infos["env_done"].any(), truncated),  # use actual env_done for reset condition, not affected by episodic life
-            lambda: self.reset(atari_state.key),  # reset if done, using the current key for proper random state advancement
-            lambda: (obs_stack, ObjectCentricState(atari_state, obs_stack)),  # step if not done
-        )
-
-        def reduce_info(k, v):
-            if k in ["env_reward", "all_rewards"]:
-                return jnp.sum(v, axis=0)
-            if k == "env_done":
-                return jnp.any(v)
-            return v[-1]
-
-        info_dict = {k: reduce_info(k, v) for k, v in infos.items()}
+        # Autoreset (gym SAME_STEP): real reset(key). Use speculative_cond when reset
+        # runs noop/fire steps; when reset is a single base init (noop_max=0,
+        # first_fire=False), direct _bcast_where avoids a lax.cond kernel break per step.
+        done = jnp.logical_or(info_dict["env_done"], truncated)
+        step_state = ObjectCentricState(atari_state, obs_stack)
+        if self._speculative_autoreset:
+            obs_stack, oc_state = speculative_cond(
+                lambda done, state: done,
+                lambda done, state: _reset_with_active(self, state.atari_state.key, done),
+                lambda done, state: (state.obs_stack, state),
+            )(done, step_state)
+        else:
+            obs_stack, oc_state = _bcast_where(
+                done, _reset_with_active(self, atari_state.key, done), (obs_stack, step_state)
+            )
         return obs_stack, oc_state, reward, terminated, truncated, info_dict
 
 
@@ -567,11 +683,14 @@ class PixelObsWrapper(JaxtariWrapper):
     def observation_space(self) -> spaces.Space:
         """Returns the stacked image space."""
         return self._observation_space
-    
 
     @functools.partial(jax.jit, static_argnums=(0,))
     def reset(self, key: chex.PRNGKey) -> Tuple[chex.Array, PixelState]:
-        _, atari_state = self._env.reset(key)
+        return self._reset_active(key, True)
+
+    @functools.partial(jax.jit, static_argnums=(0,))
+    def _reset_active(self, key: chex.PRNGKey, active: chex.Array = True) -> Tuple[chex.Array, PixelState]:
+        _, atari_state = _reset_with_active(self._env, key, active)
         image = self._env.render(atari_state.env_state)
         processed_image = preprocess_image(self, image)
 
@@ -584,24 +703,14 @@ class PixelObsWrapper(JaxtariWrapper):
         state: PixelState,
         action: int,
     ) -> Tuple[chex.Array, PixelState, float, bool, bool, Dict[Any, Any]]:
-
-        def body_fn(carry, _):
-            atari_state, action = carry
-            _, new_atari_state, reward, terminated, truncated, info = self._env.step(atari_state, action)
-            return (new_atari_state, action), (new_atari_state.env_state, reward, terminated, truncated, info)
-
-        (atari_state, _), (env_states, rewards, terminations, truncations, infos) = jax.lax.scan(
-            body_fn,
-            (state.atari_state, action),
-            None,
-            length=self.frame_skip,
+        atari_state, _, env_states, rewards, terminations, truncations, info_dict = _unroll_frame_skip(
+            self._env, state.atari_state, action, self.frame_skip
         )
 
-        last_env_state = jax.tree.map(lambda x: x[-1], env_states)
+        last_env_state = env_states[-1]
         if self.max_pooling and self.frame_skip > 1:
             image = self._env.render(last_env_state)
-            prev_env_state = jax.tree.map(lambda x: x[-2], env_states)
-            prev_image = self._env.render(prev_env_state)
+            prev_image = self._env.render(env_states[-2])
             latest_image = jnp.maximum(image, prev_image)
         else:
             latest_image = self._env.render(last_env_state)
@@ -613,21 +722,14 @@ class PixelObsWrapper(JaxtariWrapper):
             reward = jnp.sign(reward)
         terminated = terminations.any()
         truncated = truncations.any()
-        # Autoreset (gym's SAME_STEP mode) -> reset whole stack
-        image_stack, pixel_state = jax.lax.cond(
-            jnp.logical_or(infos["env_done"].any(), truncated),  # use actual env_done for reset condition, not affected by episodic life
-            lambda: self.reset(atari_state.key),  
-            lambda: (image_stack, PixelState(atari_state, image_stack))
-        )
-
-        def reduce_info(k, v):
-            if k in ["env_reward", "all_rewards"]:
-                return jnp.sum(v, axis=0)
-            if k == "env_done":
-                return jnp.any(v)
-            return v[-1]
-
-        info_dict = {k: reduce_info(k, v) for k, v in infos.items()}
+        # Autoreset (gym SAME_STEP): real reset(key), skipped under vmap when none done.
+        done = jnp.logical_or(info_dict["env_done"], truncated)
+        step_state = PixelState(atari_state, image_stack)
+        image_stack, pixel_state = speculative_cond(
+            lambda done, state: done,
+            lambda done, state: _reset_with_active(self, state.atari_state.key, done),
+            lambda done, state: (state.image_stack, state),
+        )(done, step_state)
         return image_stack, pixel_state, reward, terminated, truncated, info_dict
 
 @struct.dataclass 
@@ -717,8 +819,7 @@ class PixelAndObjectCentricWrapper(JaxtariWrapper):
             stacked_image_space,
             stacked_object_space_flat
         ))
-    
-    
+
     def observation_space(self) -> spaces.Tuple:
         """Returns a Tuple space containing stacked image and object spaces."""
         return self._observation_space
@@ -732,7 +833,13 @@ class PixelAndObjectCentricWrapper(JaxtariWrapper):
     def reset(
         self, key: chex.PRNGKey
     ) -> Tuple[Tuple[chex.Array, chex.Array], PixelAndObjectCentricState]:
-        obs, atari_state = self._env.reset(key)
+        return self._reset_active(key, True)
+
+    @functools.partial(jax.jit, static_argnums=(0,))
+    def _reset_active(
+        self, key: chex.PRNGKey, active: chex.Array = True
+    ) -> Tuple[Tuple[chex.Array, chex.Array], PixelAndObjectCentricState]:
+        obs, atari_state = _reset_with_active(self._env, key, active)
         flat_obs = self._flatten_single_obs(obs)
         obs_stack = jnp.stack([flat_obs] * self.frame_stack_size)
 
@@ -749,27 +856,17 @@ class PixelAndObjectCentricWrapper(JaxtariWrapper):
         state: PixelAndObjectCentricState,
         action: int,
     ) -> Tuple[Tuple[chex.Array, chex.Array], PixelAndObjectCentricState, float, bool, bool, Dict[Any, Any]]:
-        def body_fn(carry, _):
-            atari_state, action = carry
-            obs, new_atari_state, reward, terminated, truncated, info = self._env.step(atari_state, action)
-            return (new_atari_state, action), (obs, new_atari_state.env_state, reward, terminated, truncated, info)
-
-        (atari_state, _), (obs, env_states, rewards, terminations, truncations, infos) = jax.lax.scan(
-            body_fn,
-            (state.atari_state, action),
-            None,
-            length=self.frame_skip,
+        atari_state, latest_obs, env_states, rewards, terminations, truncations, info_dict = _unroll_frame_skip(
+            self._env, state.atari_state, action, self.frame_skip
         )
 
-        latest_obs = jax.tree.map(lambda x: x[-1], obs)
         flat_latest_obs = self._flatten_single_obs(latest_obs)
         obs_stack = jnp.concatenate([state.obs_stack[1:], jnp.expand_dims(flat_latest_obs, axis=0)], axis=0)
 
-        last_env_state = jax.tree.map(lambda x: x[-1], env_states)
+        last_env_state = env_states[-1]
         if self.max_pooling and self.frame_skip > 1:
             image = self._env.render(last_env_state)
-            prev_env_state = jax.tree.map(lambda x: x[-2], env_states)
-            prev_image = self._env.render(prev_env_state)
+            prev_image = self._env.render(env_states[-2])
             latest_image = jnp.maximum(image, prev_image)
         else:
             latest_image = self._env.render(last_env_state)
@@ -782,22 +879,15 @@ class PixelAndObjectCentricWrapper(JaxtariWrapper):
             reward = jnp.sign(reward)
         terminated = terminations.any()
         truncated = truncations.any()
-        # Autoreset (gym's SAME_STEP mode) -> reset whole stack
-        (image_stack, obs_stack), pixel_oc_state = jax.lax.cond(
-            jnp.logical_or(infos["env_done"].any(), truncated),  # use actual env_done for reset condition, not affected by episodic life
-            lambda: self.reset(atari_state.key),
-            lambda: ((image_stack, obs_stack), PixelAndObjectCentricState(atari_state, image_stack, obs_stack))
-        )
-
-        def reduce_info(k, v):
-            if k in ["env_reward", "all_rewards"]:
-                return jnp.sum(v, axis=0)
-            if k == "env_done":
-                return jnp.any(v)
-            return v[-1]
-
-        info_dict = {k: reduce_info(k, v) for k, v in infos.items()}
-        return (image_stack, obs_stack), pixel_oc_state, reward, terminated, truncated, info_dict
+        # Autoreset (gym SAME_STEP): real reset(key), skipped under vmap when none done.
+        done = jnp.logical_or(info_dict["env_done"], truncated)
+        step_state = PixelAndObjectCentricState(atari_state, image_stack, obs_stack)
+        out_obs, pixel_oc_state = speculative_cond(
+            lambda done, state: done,
+            lambda done, state: _reset_with_active(self, state.atari_state.key, done),
+            lambda done, state: ((state.image_stack, state.obs_stack), state),
+        )(done, step_state)
+        return out_obs, pixel_oc_state, reward, terminated, truncated, info_dict
 
 class PixelAndObjectObsWrapper(PixelAndObjectCentricWrapper):
     """
@@ -808,7 +898,13 @@ class PixelAndObjectObsWrapper(PixelAndObjectCentricWrapper):
     def reset(
         self, key: chex.PRNGKey
     ) -> Tuple[Tuple[chex.Array, Any], PixelAndObjectCentricState]:
-        obs, atari_state = self._env.reset(key)
+        return self._reset_active(key, True)
+
+    @functools.partial(jax.jit, static_argnums=(0,))
+    def _reset_active(
+        self, key: chex.PRNGKey, active: chex.Array = True
+    ) -> Tuple[Tuple[chex.Array, Any], PixelAndObjectCentricState]:
+        obs, atari_state = _reset_with_active(self._env, key, active)
         image = self._env.render(atari_state.env_state)
         processed_image = preprocess_image(self, image)
         image_stack = jnp.stack([processed_image] * self.frame_stack_size)
@@ -827,30 +923,22 @@ class PixelAndObjectObsWrapper(PixelAndObjectCentricWrapper):
         state: PixelAndObjectCentricState,
         action: int,
     ) -> Tuple[Tuple[chex.Array, chex.Array], PixelAndObjectCentricState, float, bool, bool, Dict[Any, Any]]:
-        def body_fn(carry, _):
-            atari_state, action = carry
-            obs, new_atari_state, reward, terminated, truncated, info = self._env.step(atari_state, action)
-            return (new_atari_state, action), (obs, new_atari_state.env_state, reward, terminated, truncated, info)
-
-        (atari_state, _), (obs, env_states, rewards, terminations, truncations, infos) = jax.lax.scan(
-            body_fn,
-            (state.atari_state, action),
-            None,
-            length=self.frame_skip,
+        atari_state, latest_obs, env_states, rewards, terminations, truncations, info_dict = _unroll_frame_skip(
+            self._env, state.atari_state, action, self.frame_skip
         )
 
-        latest_obs = jax.tree.map(lambda x: x[-1], obs)
         obs_stack = jax.tree.map(
-            lambda stack_leaf, obs_leaf: jnp.concatenate([stack_leaf[1:], jnp.expand_dims(obs_leaf, axis=0)], axis=0),
+            lambda stack_leaf, obs_leaf: jnp.concatenate(
+                [stack_leaf[1:], jnp.expand_dims(obs_leaf, axis=0)], axis=0
+            ),
             state.obs_stack,
             latest_obs,
         )
 
-        last_env_state = jax.tree.map(lambda x: x[-1], env_states)
+        last_env_state = env_states[-1]
         if self.max_pooling and self.frame_skip > 1:
             image = self._env.render(last_env_state)
-            prev_env_state = jax.tree.map(lambda x: x[-2], env_states)
-            prev_image = self._env.render(prev_env_state)
+            prev_image = self._env.render(env_states[-2])
             latest_image = jnp.maximum(image, prev_image)
         else:
             latest_image = self._env.render(last_env_state)
@@ -861,23 +949,15 @@ class PixelAndObjectObsWrapper(PixelAndObjectCentricWrapper):
         reward = jnp.sum(rewards)
         terminated = terminations.any()
         truncated = truncations.any()
-        # Autoreset (gym's SAME_STEP mode) -> reset whole stack
-        (image_stack, obs_stack), pixel_oc_state = jax.lax.cond(
-            jnp.logical_or(infos["env_done"].any(), truncated),  # use actual env_done for reset condition, not affected by episodic life
-            lambda: self.reset(atari_state.key),
-            lambda: ((image_stack, obs_stack), PixelAndObjectCentricState(atari_state, image_stack, obs_stack)),
-        )
-
-        def reduce_info(k, v):
-            if k in ["env_reward", "all_rewards"]:
-                return jnp.sum(v, axis=0)
-            if k == "env_done":
-                return jnp.any(v)
-            return v[-1]
-
-        info_dict = {k: reduce_info(k, v) for k, v in infos.items()}
-        new_state = PixelAndObjectCentricState(atari_state, image_stack, obs_stack)
-        return (image_stack, obs_stack), pixel_oc_state, reward, terminated, truncated, info_dict
+        # Autoreset (gym SAME_STEP): real reset(key), skipped under vmap when none done.
+        done = jnp.logical_or(info_dict["env_done"], truncated)
+        step_state = PixelAndObjectCentricState(atari_state, image_stack, obs_stack)
+        out_obs, pixel_oc_state = speculative_cond(
+            lambda done, state: done,
+            lambda done, state: _reset_with_active(self, state.atari_state.key, done),
+            lambda done, state: ((state.image_stack, state.obs_stack), state),
+        )(done, step_state)
+        return out_obs, pixel_oc_state, reward, terminated, truncated, info_dict
 
 
 class FlattenObservationWrapper(JaxtariWrapper):
@@ -996,13 +1076,8 @@ class NormalizeObservationWrapper(JaxtariWrapper):
         # Normalize to [0, 1]
         normalized_0_1 = (obs_leaf - low_leaf.astype(self._dtype)) * scale
 
-        # Conditionally shift to [-1, 1]
-        final_normalized = jax.lax.cond(
-            self._to_neg_one,
-            lambda x: 2.0 * x - 1.0,
-            lambda x: x,
-            normalized_0_1
-        )
+        # Conditionally shift to [-1, 1] (static Python bool).
+        final_normalized = 2.0 * normalized_0_1 - 1.0 if self._to_neg_one else normalized_0_1
         
         # Clip to ensure values are within the target range
         clip_low = -1.0 if self._to_neg_one else 0.0

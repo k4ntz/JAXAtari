@@ -123,14 +123,16 @@ jobs:
           echo "Using xdist workers: ${XDIST_WORKERS}"
 
           # 1) Parallel-safe tests with conservative xdist settings.
-          /usr/bin/time -v pytest -n "${XDIST_WORKERS}" --dist=loadfile --game ${{ matrix.game }} --snapshot-warn-unused --tb=line -ra --durations=20 --color=yes -m "not serial" ${{ inputs.pytest_args }} tests/ 2>&1 | tee pytest_output_with_color.txt
+          /usr/bin/time -v pytest -n "${XDIST_WORKERS}" --dist=loadfile --game ${{ matrix.game }} --snapshot-warn-unused --tb=line -ra --durations=20 --color=yes -m "not serial and not gpu" ${{ inputs.pytest_args }} tests/ 2>&1 | tee pytest_output_with_color.txt
+
 
           # 2) Serial-only tests (if any), run without xdist.
           SERIAL_RC=0
-          pytest --collect-only --game ${{ matrix.game }} -m "serial" -q tests/ >/tmp/serial_collect.txt 2>&1 || SERIAL_RC=$?
+          pytest --collect-only --game ${{ matrix.game }} -m "serial and not gpu" -q tests/ >/tmp/serial_collect.txt 2>&1 || SERIAL_RC=$?
           if [[ "${SERIAL_RC}" -eq 0 ]]; then
             echo "Running serial tests"
-            /usr/bin/time -v pytest --game ${{ matrix.game }} --snapshot-warn-unused --tb=line -ra --durations=20 --color=yes -m "serial" ${{ inputs.pytest_args }} tests/ 2>&1 | tee -a pytest_output_with_color.txt
+            /usr/bin/time -v pytest --game ${{ matrix.game }} --snapshot-warn-unused --tb=line -ra --durations=20 --color=yes -m "serial and not gpu" ${{ inputs.pytest_args }} tests/ 2>&1 | tee -a pytest_output_with_color.txt
+
           elif [[ "${SERIAL_RC}" -eq 5 ]]; then
             echo "No serial tests selected for this matrix entry" | tee -a pytest_output_with_color.txt
           else

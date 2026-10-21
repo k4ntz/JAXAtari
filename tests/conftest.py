@@ -6,10 +6,15 @@ import inspect
 import gc
 from pathlib import Path
 
-# Force CPU before any JAX import (jaxtari pulls JAX in transitively).
+# Force CPU before any JAX import (jaxtari pulls JAX in transitively),
+# unless opt-in GPU tests are requested (JAXTARI_GPU_TESTS=1).
 # Overrides a user/shell JAX_PLATFORMS so pytest never tries to init a missing GPU.
-os.environ["JAX_PLATFORMS"] = "cpu"
-os.environ.setdefault("XLA_PYTHON_CLIENT_PREALLOCATE", "false")
+if os.environ.get("JAXTARI_GPU_TESTS") == "1":
+    os.environ.setdefault("XLA_PYTHON_CLIENT_PREALLOCATE", "false")
+else:
+    os.environ["JAX_PLATFORMS"] = "cpu"
+    os.environ.setdefault("XLA_PYTHON_CLIENT_PREALLOCATE", "false")
+
 
 from jaxtari.environment import JaxEnvironment
 from jaxtari.wrappers import (
@@ -65,6 +70,11 @@ def pytest_configure(config):
     config.addinivalue_line("markers", "slow: expensive checks for exhaustive validation")
     config.addinivalue_line("markers", "wrapper_full: runs only with full wrapper matrix")
     config.addinivalue_line("markers", "serial: must run without xdist parallel workers")
+    config.addinivalue_line(
+        "markers",
+        "gpu: requires CUDA; skipped unless JAXTARI_GPU_TESTS=1 (excluded from GitHub CI)",
+    )
+
 
 def discover_games_with_snapshots() -> list[str]:
     """
