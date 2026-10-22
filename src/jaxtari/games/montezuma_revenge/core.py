@@ -2,6 +2,7 @@ import jax.numpy as jnp
 import jax.random as jrandom
 from flax import struct
 import os
+from enum import IntEnum
 
 from jaxtari.environment import ObjectObservation
 
@@ -75,6 +76,12 @@ class MontezumaRevengeConstants(struct.PyTreeNode):
     KILL_ENEMY_REWARD: int | None = struct.field(pytree_node=False, default=None)
     KILL_SKULL_REWARD: int = struct.field(pytree_node=False, default=2000)
     KILL_SPIDER_REWARD: int = struct.field(pytree_node=False, default=3000)
+
+class NativeSupportPhase(IntEnum):
+    NORMAL = 0
+    PENDING_ANCHOR = 1
+    UNANCHORED_CLIMB = 2
+
 
 @struct.dataclass
 class MontezumaRevengeState:
@@ -179,8 +186,11 @@ class MontezumaRevengeState:
     render_player_pose: jnp.ndarray = 0
     render_player_dir: jnp.ndarray = -1
     render_ladder_death: jnp.ndarray = False
-    # RAM52 bit2 survives landing; a later floor collapse reuses this drift.
+    # RAM52 bit2: retained drift until native support/rope/ladder cleanup
+    # or room relocation. Some landings retain it for a later floor collapse.
     native_jump_momentum: jnp.ndarray = False
+    # FC8E may end D6 before the standing anchor is restored (B398).
+    native_support_phase: jnp.ndarray = struct.field(default_factory=lambda: jnp.int32(NativeSupportPhase.NORMAL))
     # RAM53 selects a fixed hanging pose or a globally clocked climb cycle.
     native_climb_moving: jnp.ndarray = False
     native_walk_pose: jnp.ndarray = False
