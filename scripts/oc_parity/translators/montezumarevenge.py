@@ -24,17 +24,38 @@ def _jax_y(oc_y: float) -> int:
     return int(oc_y) - _OC_Y_OFFSET
 
 
+def _skull_direction(skull, slot, history, fallback):
+    """Most recent motion at or before injection, including stationary ticks."""
+    dx = float(skull.get("dx", 0))
+    if dx:
+        return 1 if dx > 0 else -1
+    current_x = float(skull["x"])
+    for frame_skulls in reversed(history or []):
+        if slot >= len(frame_skulls):
+            break  # Do not infer across disappearance / room changes.
+        previous = frame_skulls[slot]
+        delta = current_x - float(previous["x"])
+        if delta:
+            return 1 if delta > 0 else -1
+        dx = float(previous.get("dx", 0))
+        if dx:
+            return 1 if dx > 0 else -1
+        current_x = float(previous["x"])
+    return fallback
+
+
 def oc_frame_to_montezumarevenge_state(
     env: JaxMontezumaRevenge,
     objects: Sequence[Any],
     *,
     seed: int = 0,
     frame_index: int = 0,
+    elapsed_frames: Optional[int] = None,
     prev_player_xy: Optional[Tuple[float, float]] = None,
+    skull_objects_lookback: Optional[Sequence[Sequence[Mapping[str, Any]]]] = None,
     print_assumptions: bool = False,
     **_ignored,
 ) -> MontezumaRevengeState:
-    del frame_index
     if print_assumptions:
         print_disclaimers("montezumarevenge")
 
@@ -44,8 +65,18 @@ def oc_frame_to_montezumarevenge_state(
 
     # Q1=A: force start room (INITIAL_ROOM_ID). Reset already loads it.
     room_id = int(env.consts.INITIAL_ROOM_ID)
+    elapsed = max(0, int(frame_index if elapsed_frames is None else elapsed_frames))
+    native_cycle = (elapsed + 31) % 128
     updates: dict = {
         "room_id": cast_like(room_id, state.room_id),
+        "frame_count": cast_like(elapsed, state.frame_count),
+        # Enemy cadence and hazard clocks use elapsed native ticks, including holds.
+        "native_frame_count": cast_like(elapsed, state.native_frame_count),
+        "laser_cycle": cast_like(native_cycle, state.laser_cycle),
+        # Start-room-only transfer assumes no intervening room-entry reset.
+        "platform_cycle": cast_like(
+            0 if native_cycle < env.consts.PLATFORM_ACTIVE_DURATION else env.consts.PLATFORM_ACTIVE_DURATION,
+            state.platform_cycle),
     }
 
     player = find_object(objs, "Player")
@@ -112,7 +143,7 @@ def oc_frame_to_montezumarevenge_state(
             if best_i >= 0 and best_d <= 12:
                 updates["last_ladder"] = cast_like(best_i, state.last_ladder)
                 # Snap X to ladder center like the JAX climber does.
-                snap_x = int(lx_j[best_i]) + 8 - int(env.consts.PLAYER_WIDTH) // 2
+                snap_x = int(lx_j[best_i]) + 8 - int(env.consts.LADDER_PLAYER_X_OFFSET)
                 updates["player_x"] = cast_like(snap_x, state.player_x)
             else:
                 updates["last_ladder"] = cast_like(-1, state.last_ladder)
@@ -130,9 +161,7 @@ def oc_frame_to_montezumarevenge_state(
             ex[i] = int(sk["x"])
             ey[i] = _jax_y(float(sk["y"]))
             ea[i] = 1
-            dx = float(sk.get("dx", 0))
-            if dx != 0:
-                ed[i] = 1 if dx > 0 else -1
+            ed[i] = _skull_direction(sk, i, skull_objects_lookback, int(ed[i]))
         updates["enemies_x"] = cast_like(ex, state.enemies_x)
         updates["enemies_y"] = cast_like(ey, state.enemies_y)
         updates["enemies_active"] = cast_like(ea, state.enemies_active)
@@ -158,7 +187,9 @@ def oc_frame_to_montezumarevenge_state(
         updates["lives"] = cast_like(int(life["value"]), state.lives)
     score = find_object(objs, "Score")
     if score is not None and int(score.get("value", -1)) >= 0:
-        updates["score"] = cast_like(int(score["value"]), state.score)
+        updates["score"] = cast_like(
+            np.full(np.asarray(state.score).shape, int(score["value"])), state.score
+        )
 
     return state.replace(**updates)
 
@@ -210,5 +241,5 @@ def extract_jax_compare_entities(
         if bool(ia[i]) and int(it[i]) == 0:
             entities["key"] = (float(ix[i]), float(iy[i]))
             break
-    scores = {"lives": float(state.lives), "score": float(state.score)}
+    scores = {"lives": float(state.lives), "score": float(np.asarray(state.score).item())}
     return {"entities": entities, "scores": scores}

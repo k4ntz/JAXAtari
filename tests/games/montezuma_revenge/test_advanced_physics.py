@@ -6,15 +6,15 @@ def test_conveyor_movement(montezuma_env):
     key = jax.random.PRNGKey(0)
     obs, state = env.reset(key)
     
-    # Room 4 has a conveyor at y=88 (surface), x=60, direction 1.
-    # Feet at 87 -> player_y = 87 - 20 + 1 = 68.
+    # Room 4 belt surface is y=89, x=60, direction -1.
+    # Feet at 88 -> standing player_y=69 (screen y=116).
     from jaxtari.games.montezuma_revenge.rooms import load_room
     state = state.replace(room_id=jnp.array(4, dtype=jnp.int32))
     state = load_room(state.room_id, state, env.consts)
     
     state = state.replace(
         player_x=jnp.array(65, dtype=jnp.int32),
-        player_y=jnp.array(68, dtype=jnp.int32)
+        player_y=jnp.array(69, dtype=jnp.int32)
     )
     
     initial_x = state.player_x
@@ -25,7 +25,7 @@ def test_conveyor_movement(montezuma_env):
         obs, state, reward, done, info = env.step(state, 0)
         
     assert state.player_x < initial_x
-    assert state.player_y == 68
+    assert state.player_y == 69
 
 def test_wall_collision(montezuma_env):
     env = montezuma_env
@@ -82,7 +82,7 @@ def test_jump_off_ladder_impossible(montezuma_env):
     assert state.is_jumping == 0
     assert state.is_falling == 0
 
-def test_transition_landing_overlap(montezuma_env):
+def test_no_side_exit_below_upper_corridor(montezuma_env):
     env = montezuma_env
     key = jax.random.PRNGKey(0)
     obs, state = env.reset(key)
@@ -92,22 +92,18 @@ def test_transition_landing_overlap(montezuma_env):
     state = state.replace(room_id=jnp.array(18, jnp.int32))
     state = load_room(jnp.array(18, jnp.int32), state, env.consts)
     
-    # Position player at the left edge, about to transition to Room 17 (ROOM_2_1)
-    # Floor in Room 17 at px=144 is py=56.
-    # Let's put the player at py=56 - 19 = 37. Feet at 56 (inside the platform).
-    # Transition should push them up to py=36 (feet at 55).
-    state = state.replace(player_x=jnp.array(0, jnp.int32), player_y=jnp.array(37, jnp.int32))
+    # ALE holds the side boundary below the upper corridor. A transition
+    # here cannot be used to test landing overlap in the neighboring room.
+    state = state.replace(player_x=jnp.array(4, jnp.int32),
+                          player_y=jnp.array(37, jnp.int32))
     
     # Action LEFT (4) to trigger transition
     # JaxtariAction.LEFT is 4
     obs, state, r, d, i = env.step(state, 4)
     
-    assert state.room_id == 17
-    assert state.player_x == 148
-    # If the fix works, it should have pushed the player up to 36.
-    # If it didn't, they'd stay at 37.
-    assert state.player_y == 36
-    assert state.player_y + 19 == 55 # Feet at 55, platform at 56.
+    assert state.room_id == 18
+    assert state.player_x == 4
+    assert state.transition_pending == 0
 
 def test_jump_descent_overlap(montezuma_env):
     env = montezuma_env

@@ -61,17 +61,17 @@ def test_skulls_synchronization(montezuma_env):
     # Room 5 has 2 active skulls: index 0 and 1
     # Both ed are -1 initially.
     
-    # Place enemy 0 near its min boundary (min_x is 10)
-    # Place enemy 1 far from its min boundary (min_x is 4)
+    # Native pair reverses when the primary would cross x4 (holds x5).
+    # Keep enemy 1 away from its own boundary to test shared direction.
     state = state.replace(
-        enemies_x=state.enemies_x.at[0].set(11).at[1].set(50),
+        enemies_x=state.enemies_x.at[0].set(5).at[1].set(50),
         enemies_direction=state.enemies_direction.at[0].set(-1).at[1].set(-1),
         enemies_active=state.enemies_active.at[0].set(1).at[1].set(1),
-        frame_count=jnp.array(0, dtype=jnp.int32) # ensure next step moves it (mod 2 == 0)
+        native_frame_count=jnp.int32(0),
+        room5_skull_spawn_pending=jnp.bool_(False),
     )
     
-    # Step 1: enemies move left. Enemy 0 reaches 10, which is min_x.
-    # It should flip direction to 1.
+    # Tick: attempted x4 reverses both; neither moves on this tick.
     obs, state, reward, done, info = env.step(state, 0)
     
     # Enemy 0 should have flipped

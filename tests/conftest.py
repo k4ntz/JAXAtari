@@ -354,7 +354,11 @@ def fresh_raw_env(game_name):
 def montezuma_env():
     """Shared Montezuma instance for tests/games/montezuma_revenge (state is passed through reset/step)."""
     from jaxtari.games.jax_montezumarevenge import JaxMontezumaRevenge
-    return JaxMontezumaRevenge()
+    env = JaxMontezumaRevenge()
+    # Its step is undecorated; one shared JIT avoids compiling fresh lax.cond
+    # branches on every eager mechanism-test step.
+    env.step = jax.jit(env.step)
+    return env
 
 @pytest.fixture
 def raw_env_representative(raw_env, request):

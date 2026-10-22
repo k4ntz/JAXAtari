@@ -172,6 +172,7 @@ def save_trajectory(
     ram: Sequence[Sequence[int]],
     objects: Sequence[Sequence[Mapping[str, Any]]],
     frames: Optional[Sequence[np.ndarray]] = None,
+    frame_indices: Optional[Sequence[int]] = None,
 ) -> None:
     """Write a trajectory NPZ with meta_json + dense arrays."""
     n = len(actions)
@@ -189,6 +190,10 @@ def save_trajectory(
         "ram": np.asarray(ram, dtype=np.uint8),
     }
     payload.update(_objects_to_arrays(objects))
+    if frame_indices is not None:
+        if len(frame_indices) != n:
+            raise ValueError("frame_indices length must match actions length")
+        payload["frame_indices"] = np.asarray(frame_indices, dtype=np.int32)
     if frames is not None:
         if len(frames) != n:
             raise ValueError("frames length must match actions length")
@@ -218,8 +223,54 @@ def load_trajectory(path: str) -> Dict[str, Any]:
         "ram": np.asarray(data["ram"], dtype=np.uint8),
         "objects": objects,
         "frames": np.asarray(data["frames"], dtype=np.uint8) if "frames" in data else None,
+        "frame_indices": np.asarray(data["frame_indices"], dtype=np.int32) if "frame_indices" in data else None,
     }
+    # Derived once from the recording; replay only reads these arrays.
+    traj["_episode_start_indices"] = episode_start_indices(traj)
     return traj
+
+
+def action_alignment(traj: Mapping[str, Any]) -> str:
+    """Unlabelled historical recorder files contain post-action snapshots."""
+    alignment = traj.get("meta", {}).get("action_alignment", "incoming/post-step")
+    if alignment not in ("incoming/post-step", "outgoing/pre-step"):
+        raise ValueError(f"Unsupported action_alignment: {alignment!r}")
+    return alignment
+
+
+def episode_start_indices(traj: Mapping[str, Any]) -> np.ndarray:
+    """Episode start for every snapshot, computed in one pass over terminal flags."""
+    cached = traj.get("_episode_start_indices")
+    if cached is not None:
+        return cached
+    offset = 0 if action_alignment(traj) == "incoming/post-step" else 1
+    starts = np.zeros(len(traj["objects"]), dtype=np.int32)
+    for key in ("terminated", "truncated"):
+        flags = traj.get(key)
+        if flags is None:
+            continue
+        # In an outgoing trajectory, row i's flags describe snapshot i+1.
+        resets = np.flatnonzero(np.asarray(flags, dtype=bool)) + offset + 1
+        resets = resets[resets < len(starts)]
+        starts[resets] = resets
+    return np.maximum.accumulate(starts)
+
+
+def episode_start_index(traj: Mapping[str, Any], t: int) -> int:
+    """First saved snapshot in this episode (terminal snapshots belong to it)."""
+    return int(episode_start_indices(traj)[t])
+
+
+def snapshot_frame_index(traj: Mapping[str, Any], t: int) -> int:
+    """Emulated steps since reset, including stripped warmup when known."""
+    indices = traj.get("frame_indices")
+    if indices is not None:
+        return int(indices[t])
+    start = episode_start_index(traj, t)
+    meta = traj.get("meta", {})
+    warmup = int(meta.get("warmup_noops", meta.get("skip_frames", 0))) if start == 0 else 0
+    offset = 1 if action_alignment(traj) == "incoming/post-step" else 0
+    return max(0, warmup + t - start + offset)
 
 
 def get_frame_objects(traj: Mapping[str, Any], t: int) -> List[Dict[str, Any]]:

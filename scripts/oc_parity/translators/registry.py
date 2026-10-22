@@ -104,7 +104,12 @@ TRANSLATOR_DISCLAIMERS: Dict[str, List[str]] = {
         "ASSUMPTION: OC_y = JAX_y + 47 applied on inject; only player/Skull/Key/HUD overlaid.",
         "ASSUMPTION: is_climbing from OC Ladder overlap using player feet + mid-x (not "
         "player top); sets last_ladder + snaps X to JAX ladder center when climbing.",
-        "ASSUMPTION: trajectories should stay in room one (key collect OK).",
+        "ASSUMPTION: native_frame_count and hazard phase from episode-relative recorded "
+        "frame index; pose clock approximated by the same elapsed count. Skull "
+        "facing from past motion, falling back to reset direction when unobserved.",
+        "ASSUMPTION: trajectories should stay in the start room.",
+        "LIMITATION: jump/fall phase and collected-item history are not reconstructed; "
+        "prefer grounded start snapshots when assessing subsequent dynamics.",
     ],
     "beamrider": [
         "ASSUMPTION: skip blue-line intro (blue_line_counter past INIT table) so "

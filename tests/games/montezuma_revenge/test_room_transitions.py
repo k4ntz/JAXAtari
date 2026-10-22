@@ -1,142 +1,90 @@
 import jax
 import jax.numpy as jnp
+import pytest
 from jaxtari.games.montezuma_revenge.rooms import load_room
 
-def test_room_transitions_horizontal(montezuma_env):
+
+def _assert_room_change(env, state, action, target, entry_x, entry_y):
+    old_position = (int(state.player_x), int(state.player_y))
+    _, state, reward, done, _ = env.step(state, action)
+
+    # ALE changes the room in mode 2 while retaining the old player anchor.
+    assert (int(state.room_id), int(state.native_mode)) == (target, 2)
+    assert (int(state.player_x), int(state.player_y)) == old_position
+    assert not done
+
+    # The next native frame initializes the entry position and resumes mode 4.
+    _, state, reward, done, _ = env.step(state, 0)
+    assert (int(state.room_id), int(state.native_mode)) == (target, 4)
+    assert (int(state.player_x), int(state.player_y)) == (entry_x, entry_y)
+    assert not done
+
+
+@pytest.mark.parametrize("source,target,action,start_x,entry_x", [
+    (4, 3, 4, 4, 151),
+    (3, 4, 3, 148, 0),
+    (4, 5, 3, 148, 0),
+    (12, 11, 4, 4, 151),
+])
+def test_room_transitions_horizontal(montezuma_env, source, target, action, start_x, entry_x):
     env = montezuma_env
-    key = jax.random.PRNGKey(0)
-    obs, state = env.reset(key)
-    
-    # 1. Room 4 -> 3 (Left)
-    state = load_room(jnp.array(4, dtype=jnp.int32), state, env.consts)
-    state = state.replace(player_x=jnp.array(0, dtype=jnp.int32), player_y=jnp.array(100, dtype=jnp.int32))
-    obs, state, reward, done, info = env.step(state, 4) # LEFT
-    assert state.room_id == 3
-    assert state.player_x >= 140 # Should be teleported to the right side of new room
-    
-    # 2. Room 3 -> 4 (Right)
-    state = load_room(jnp.array(3, dtype=jnp.int32), state, env.consts)
-    state = state.replace(player_x=jnp.array(155, dtype=jnp.int32), player_y=jnp.array(100, dtype=jnp.int32))
-    obs, state, reward, done, info = env.step(state, 3) # RIGHT
-    assert state.room_id == 4
-    assert state.player_x <= 10 # Should be teleported to the left side of new room
+    _, state = env.reset(jax.random.PRNGKey(0))
+    state = load_room(jnp.array(source, dtype=jnp.int32), state, env.consts)
+    # Native side exits are in the upper corridor, at internal y=26.
+    state = state.replace(player_x=jnp.array(start_x, dtype=jnp.int32),
+                          player_y=jnp.array(26, dtype=jnp.int32))
+    _assert_room_change(env, state, action, target, entry_x, 26)
 
-    # 3. Room 4 -> 5 (Right)
-    state = load_room(jnp.array(4, dtype=jnp.int32), state, env.consts)
-    state = state.replace(player_x=jnp.array(155, dtype=jnp.int32), player_y=jnp.array(100, dtype=jnp.int32))
-    obs, state, reward, done, info = env.step(state, 3) # RIGHT
-    assert state.room_id == 5
-    assert state.player_x <= 10
-    
-    # 4. Room 12 -> 11 (Left)
-    state = load_room(jnp.array(12, dtype=jnp.int32), state, env.consts)
-    state = state.replace(player_x=jnp.array(0, dtype=jnp.int32), player_y=jnp.array(100, dtype=jnp.int32))
-    obs, state, reward, done, info = env.step(state, 4) # LEFT
-    assert state.room_id == 11
-    assert state.player_x >= 140
 
-def test_room_transitions_vertical(montezuma_env):
+@pytest.mark.parametrize("source,target,action,start_y,entry_y", [
+    # ALE's ladder connects rooms 5 and 13, rather than rooms 4 and 12.
+    (5, 13, 5, 127, 7),
+    (13, 5, 2, 7, 127),
+    (10, 18, 5, 127, 7),
+    (18, 10, 2, 7, 127),
+    (11, 19, 5, 127, 7),
+    (19, 11, 2, 7, 127),
+])
+def test_room_transitions_vertical(montezuma_env, source, target, action, start_y, entry_y):
     env = montezuma_env
-    key = jax.random.PRNGKey(0)
-    obs, state = env.reset(key)
-    
-    # 1. Room 4 -> 12 (Down)
-    # Room 4 has a hole for ladder down at x=72:88, y=148
-    state = load_room(jnp.array(4, dtype=jnp.int32), state, env.consts)
-    # transition_down triggers when new_y >= 148
-    state = state.replace(player_x=jnp.array(77, dtype=jnp.int32), player_y=jnp.array(147, dtype=jnp.int32))
-    obs, state, reward, done, info = env.step(state, 5) # DOWN
-    assert state.room_id == 12
-    assert state.player_y <= 20 # Should be at the top of the new room
-    
-    # 2. Room 12 -> 4 (Up)
-    state = load_room(jnp.array(12, dtype=jnp.int32), state, env.consts)
-    state = state.replace(player_x=jnp.array(77, dtype=jnp.int32), player_y=jnp.array(0, dtype=jnp.int32))
-    obs, state, reward, done, info = env.step(state, 0) # NOOP (will fall to y=2)
-    assert state.room_id == 4
-    assert state.player_y >= 125 # Should be at the bottom of the new room
+    _, state = env.reset(jax.random.PRNGKey(0))
+    state = load_room(jnp.array(source, dtype=jnp.int32), state, env.consts)
+    state = state.replace(player_x=jnp.array(76, dtype=jnp.int32),
+                          player_y=jnp.array(start_y, dtype=jnp.int32),
+                          is_climbing=jnp.array(1, dtype=jnp.int32),
+                          last_ladder=jnp.array(0, dtype=jnp.int32))
+    _assert_room_change(env, state, action, target, 76, entry_y)
 
-    # 3. Room 10 -> 18 (Down)
-    state = load_room(jnp.array(10, dtype=jnp.int32), state, env.consts)
-    state = state.replace(player_x=jnp.array(77, dtype=jnp.int32), player_y=jnp.array(147, dtype=jnp.int32))
-    obs, state, reward, done, info = env.step(state, 5) # DOWN
-    assert state.room_id == 18
-    
-    # 4. Room 18 -> 10 (Up)
-    state = load_room(jnp.array(18, dtype=jnp.int32), state, env.consts)
-    state = state.replace(player_x=jnp.array(77, dtype=jnp.int32), player_y=jnp.array(0, dtype=jnp.int32))
-    obs, state, reward, done, info = env.step(state, 0) # NOOP (will fall to y=2)
-    assert state.room_id == 10
 
-    # 5. Room 11 (ROOM_1_3) -> 19 (ROOM_2_3) (Down)
-    state = load_room(jnp.array(11, dtype=jnp.int32), state, env.consts)
-    state = state.replace(player_x=jnp.array(77, dtype=jnp.int32), player_y=jnp.array(147, dtype=jnp.int32))
-    obs, state, reward, done, info = env.step(state, 5) # DOWN
-    assert state.room_id == 19
-    assert state.player_y <= 20
-    
-    # 6. Room 19 (ROOM_2_3) -> 11 (ROOM_1_3) (Up)
-    state = load_room(jnp.array(19, dtype=jnp.int32), state, env.consts)
-    state = state.replace(player_x=jnp.array(77, dtype=jnp.int32), player_y=jnp.array(3, dtype=jnp.int32),
-                          is_climbing=jnp.array(1, dtype=jnp.int32), last_ladder=jnp.array(0, dtype=jnp.int32))
-    obs, state, reward, done, info = env.step(state, 2) # UP
-    assert state.room_id == 11
-    assert state.player_y >= 125
-
-def test_room_3_8_transition(montezuma_env):
+@pytest.mark.parametrize("source,target,action,start_x,entry_x", [
+    (31, 32, 3, 148, 0),
+    (32, 31, 4, 4, 151),
+    (31, 30, 4, 4, 151),
+    (30, 31, 3, 148, 0),
+])
+def test_room_3_8_transition(montezuma_env, source, target, action, start_x, entry_x):
     env = montezuma_env
-    key = jax.random.PRNGKey(0)
-    obs, state = env.reset(key)
-    
-    # 1. Room 31 -> 32 (Right)
-    state = load_room(jnp.array(31, dtype=jnp.int32), state, env.consts)
-    # Move to the right edge
-    state = state.replace(player_x=jnp.array(155, dtype=jnp.int32), player_y=jnp.array(100, dtype=jnp.int32))
-    obs, state, reward, done, info = env.step(state, 3) # RIGHT
-    assert state.room_id == 32
-    assert state.player_x <= 10 # Should be teleported to the left side of new room
-    
-    # 2. Room 32 -> 31 (Left)
-    state = load_room(jnp.array(32, dtype=jnp.int32), state, env.consts)
-    # Move to the left edge
-    state = state.replace(player_x=jnp.array(0, dtype=jnp.int32), player_y=jnp.array(100, dtype=jnp.int32))
-    obs, state, reward, done, info = env.step(state, 4) # LEFT
-    assert state.room_id == 31
-    assert state.player_x >= 140 # Should be teleported to the right side of new room
+    _, state = env.reset(jax.random.PRNGKey(0))
+    state = load_room(jnp.array(source, dtype=jnp.int32), state, env.consts)
+    state = state.replace(player_x=jnp.array(start_x, dtype=jnp.int32),
+                          player_y=jnp.array(26, dtype=jnp.int32))
+    _assert_room_change(env, state, action, target, entry_x, 26)
 
-    # 3. Room 31 -> 30 (Left)
-    state = load_room(jnp.array(31, dtype=jnp.int32), state, env.consts)
-    state = state.replace(player_x=jnp.array(0, dtype=jnp.int32), player_y=jnp.array(100, dtype=jnp.int32))
-    obs, state, reward, done, info = env.step(state, 4) # LEFT
-    assert state.room_id == 30
-    assert state.player_x >= 140
 
-    # 4. Room 30 -> 31 (Right)
-    state = load_room(jnp.array(30, dtype=jnp.int32), state, env.consts)
-    state = state.replace(player_x=jnp.array(155, dtype=jnp.int32), player_y=jnp.array(100, dtype=jnp.int32))
-    obs, state, reward, done, info = env.step(state, 3) # RIGHT
-    assert state.room_id == 31
-    assert state.player_x <= 10
-
-def test_room_2_6_to_3_6_transition(montezuma_env):
+@pytest.mark.parametrize("source,target,action,start_y,entry_y", [
+    (22, 30, 5, 127, 7),
+    (30, 22, 2, 7, 127),
+])
+def test_room_2_6_to_3_6_transition(montezuma_env, source, target, action, start_y, entry_y):
     env = montezuma_env
-    key = jax.random.PRNGKey(0)
-    obs, state = env.reset(key)
-    
-    # 1. Room 22 (ROOM_2_6) -> 30 (ROOM_3_6) (Down)
-    state = load_room(jnp.array(22, dtype=jnp.int32), state, env.consts)
-    state = state.replace(player_x=jnp.array(77, dtype=jnp.int32), player_y=jnp.array(147, dtype=jnp.int32))
-    obs, state, reward, done, info = env.step(state, 5) # DOWN
-    assert state.room_id == 30
-    assert state.player_y <= 20
+    _, state = env.reset(jax.random.PRNGKey(0))
+    state = load_room(jnp.array(source, dtype=jnp.int32), state, env.consts)
+    state = state.replace(player_x=jnp.array(76, dtype=jnp.int32),
+                          player_y=jnp.array(start_y, dtype=jnp.int32),
+                          is_climbing=jnp.array(1, dtype=jnp.int32),
+                          last_ladder=jnp.array(0, dtype=jnp.int32))
+    _assert_room_change(env, state, action, target, 76, entry_y)
 
-    # 2. Room 30 (ROOM_3_6) -> 22 (ROOM_2_6) (Up)
-    state = load_room(jnp.array(30, dtype=jnp.int32), state, env.consts)
-    state = state.replace(player_x=jnp.array(77, dtype=jnp.int32), player_y=jnp.array(3, dtype=jnp.int32),
-                          is_climbing=jnp.array(1, dtype=jnp.int32), last_ladder=jnp.array(0, dtype=jnp.int32))
-    obs, state, reward, done, info = env.step(state, 2) # UP
-    assert state.room_id == 22
-    assert state.player_y >= 125
 
 def test_all_implemented_rooms_loadable(montezuma_env):
     env = montezuma_env

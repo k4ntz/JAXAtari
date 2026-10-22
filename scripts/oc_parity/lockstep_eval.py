@@ -34,6 +34,8 @@ _SCRIPTS_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if _SCRIPTS_DIR not in sys.path:
     sys.path.insert(0, _SCRIPTS_DIR)
 
+from oc_parity.trajectory_io import episode_start_index, snapshot_frame_index
+
 
 def _map_oc_action_to_jax(env, oc_action: int, meanings: Optional[Sequence[str]]) -> Any:
     """Map an OC/ALE action index onto the JAX env's ACTION_SET index."""
@@ -121,21 +123,23 @@ def _inject_state(env, jax_key: str, traj: Dict[str, Any], t0: int):
     objs = traj["objects"][t0]
     seed = int(traj.get("meta", {}).get("seed", 0))
     meanings = traj.get("meta", {}).get("action_meanings")
+    episode_start = episode_start_index(traj, t0)
     kwargs: Dict[str, Any] = {
         "seed": seed,
         "frame_index": t0,
+        "elapsed_frames": snapshot_frame_index(traj, t0),
         "action_meanings": meanings,
         "oc_action": int(traj["actions"][t0]) if traj.get("actions") is not None else None,
         "prev_oc_action": (
             int(traj["actions"][t0 - 1])
-            if t0 > 0 and traj.get("actions") is not None
+            if t0 > episode_start and traj.get("actions") is not None
             else None
         ),
     }
 
     prev_xy = None
     prev_player = None
-    if t0 > 0:
+    if t0 > episode_start:
         # Prefer Player; Freeway uses Chicken.
         prev_dicts = objects_as_dicts(traj["objects"][t0 - 1])
         prev_player = find_object(prev_dicts, "Player")
@@ -147,7 +151,7 @@ def _inject_state(env, jax_key: str, traj: Dict[str, Any], t0: int):
     # Multi-frame player XY lookback (BankHeist coasts on alternate frames).
     lookback_n = 16
     xy_lookback: List[Tuple[float, float]] = []
-    t_lo = max(0, t0 - lookback_n + 1)
+    t_lo = max(episode_start, t0 - lookback_n + 1)
     for t in range(t_lo, t0 + 1):
         d = objects_as_dicts(traj["objects"][t])
         p = find_object(d, "Player")
@@ -156,11 +160,20 @@ def _inject_state(env, jax_key: str, traj: Dict[str, Any], t0: int):
         if p is not None and int(p.get("w", 1)) > 0:
             xy_lookback.append((float(p["x"]), float(p["y"])))
     kwargs["player_xy_lookback"] = xy_lookback
+    skull_lookback = []
+    if episode_start == 0 and t_lo == 0:
+        skull_lookback.extend(traj.get("meta", {}).get("initial_skull_history", []))
+    for t in range(t_lo, t0 + 1):
+        skull_lookback.append([
+            o for o in objects_as_dicts(traj["objects"][t])
+            if o.get("category") == "Skull" and int(o.get("w", 0)) > 0
+        ])
+    kwargs["skull_objects_lookback"] = skull_lookback[-lookback_n:]
 
     kwargs["prev_player_y"] = None if prev_xy is None else prev_xy[1]
     kwargs["prev_player_xy"] = prev_xy
     kwargs["prev_enemy_y"] = None
-    if t0 > 0:
+    if t0 > episode_start:
         prev_enemy = find_object(objects_as_dicts(traj["objects"][t0 - 1]), "Enemy")
         if prev_enemy is not None:
             kwargs["prev_enemy_y"] = float(prev_enemy["y"])

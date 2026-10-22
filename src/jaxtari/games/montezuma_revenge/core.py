@@ -2,6 +2,7 @@ import jax.numpy as jnp
 import jax.random as jrandom
 from flax import struct
 import os
+from enum import IntEnum
 
 from jaxtari.environment import ObjectObservation
 
@@ -28,18 +29,22 @@ class MontezumaRevengeConstants(struct.PyTreeNode):
     HEIGHT: int = struct.field(pytree_node=False, default=210)
     PLAYER_WIDTH: int = struct.field(pytree_node=False, default=7)
     PLAYER_HEIGHT: int = struct.field(pytree_node=False, default=20)
-    INITIAL_PLAYER_X: int = struct.field(pytree_node=False, default=77)
+    INITIAL_PLAYER_X: int = struct.field(pytree_node=False, default=76)
     INITIAL_PLAYER_Y: int = struct.field(pytree_node=False, default=26)
     INITIAL_ROOM_ID: int = struct.field(pytree_node=False, default=4)
     PLAYER_SPEED: int = struct.field(pytree_node=False, default=1)
+    # Ladder centering uses the standing sprite anchor, independently of collision width.
+    LADDER_PLAYER_X_OFFSET: int = struct.field(pytree_node=False, default=4)
+    # Rope sprites use the same eight-pixel pose anchor, not collision width.
+    ROPE_PLAYER_X_OFFSET: int = struct.field(pytree_node=False, default=4)
     
     # Room Transition Coordinates
-    ROOM_ENTRY_X_LEFT: int = struct.field(pytree_node=False, default=4)
-    ROOM_ENTRY_X_RIGHT: int = struct.field(pytree_node=False, default=148)
-    ROOM_ENTRY_Y_TOP: int = struct.field(pytree_node=False, default=6)
-    ROOM_ENTRY_Y_BOTTOM: int = struct.field(pytree_node=False, default=129)
-    ROOM_EXIT_Y_TOP: int = struct.field(pytree_node=False, default=2)
-    ROOM_EXIT_Y_BOTTOM: int = struct.field(pytree_node=False, default=130)
+    ROOM_ENTRY_X_LEFT: int = struct.field(pytree_node=False, default=0)
+    ROOM_ENTRY_X_RIGHT: int = struct.field(pytree_node=False, default=151)
+    ROOM_ENTRY_Y_TOP: int = struct.field(pytree_node=False, default=7)
+    ROOM_ENTRY_Y_BOTTOM: int = struct.field(pytree_node=False, default=127)
+    ROOM_EXIT_Y_TOP: int = struct.field(pytree_node=False, default=6)
+    ROOM_EXIT_Y_BOTTOM: int = struct.field(pytree_node=False, default=128)
     
     JUMP_Y_OFFSETS: jnp.ndarray = struct.field(pytree_node=False, default_factory=lambda: jnp.array([3, 3, 3, 2, 2, 2, 1, 1, 0, 0, 0, 0, -1, -1, -2, -2, -2, -3, -3, -3], dtype=jnp.int32))
     GRAVITY: int = struct.field(pytree_node=False, default=2)
@@ -59,11 +64,24 @@ class MontezumaRevengeConstants(struct.PyTreeNode):
     OUT_OF_LADDER_DELAY: int = struct.field(pytree_node=False, default=5)
     MAX_FALL_DISTANCE: int = struct.field(pytree_node=False, default=20) # ladder_height (39) - 6
     BOUNCE_OFFSETS: jnp.ndarray = struct.field(pytree_node=False, default_factory=lambda: jnp.array([0, 3, 6, 9, 12, 15, 18, 21, 24, 27, 27, 27, 27, 24, 21, 18, 15, 12, 9, 6, 3, 0], dtype=jnp.int32))
-    DEATH_TIMER_FRAMES: int = struct.field(pytree_node=False, default=70)
-    PLATFORM_ACTIVE_DURATION: int = struct.field(pytree_node=False, default=90) # For spawning and disappearing platform
+    # ALE room2 (our room5): 30 quarter-rate ticks, with the apex at entry.
+    ROOM5_BOUNCE_OFFSETS: jnp.ndarray = struct.field(pytree_node=False, default_factory=lambda: jnp.array(
+        [25, 25, 25, 24, 23, 22, 21, 19, 17, 15, 13, 10, 7, 4, 0, 0,
+         4, 7, 10, 13, 15, 17, 19, 21, 22, 23, 24, 25, 25, 25], dtype=jnp.int32))
+    DEATH_TIMER_FRAMES: int = struct.field(pytree_node=False, default=50)
+    PLATFORM_ACTIVE_DURATION: int = struct.field(pytree_node=False, default=92) # For spawning and disappearing platform
     PLATFORM_CYCLE_LENGTH: int = struct.field(pytree_node=False, default=128)
-    AMULET_DURATION: int = struct.field(pytree_node=False, default=660)
-    KILL_ENEMY_REWARD: int = struct.field(pytree_node=False, default=100)
+    AMULET_DURATION: int = struct.field(pytree_node=False, default=640)
+    # None selects native rewards; mods may still override all kills uniformly.
+    KILL_ENEMY_REWARD: int | None = struct.field(pytree_node=False, default=None)
+    KILL_SKULL_REWARD: int = struct.field(pytree_node=False, default=2000)
+    KILL_SPIDER_REWARD: int = struct.field(pytree_node=False, default=3000)
+
+class NativeSupportPhase(IntEnum):
+    NORMAL = 0
+    PENDING_ANCHOR = 1
+    UNANCHORED_CLIMB = 2
+
 
 @struct.dataclass
 class MontezumaRevengeState:
@@ -153,6 +171,65 @@ class MontezumaRevengeState:
     bonus_room_timer: jnp.ndarray
     first_gem_pickup: jnp.ndarray
     key: jrandom.PRNGKey
+    # ROM has three content layouts; subsequent temples repeat the third.
+    level: jnp.ndarray = 0
+    # The TIA contact latch refers to the preceding rendered player pose.
+    collision_player_x: jnp.ndarray = -1
+    collision_player_y: jnp.ndarray = -1
+    collision_player_pose: jnp.ndarray = 0
+    collision_player_dir: jnp.ndarray = -1
+    # Graphics pointers update after the visible kernel has drawn its frame.
+    # Keep their phase separate from both movement and contact geometry.
+    render_pointer_pose: jnp.ndarray = -1
+    render_player_x: jnp.ndarray = -1
+    render_player_y: jnp.ndarray = -1
+    render_player_pose: jnp.ndarray = 0
+    render_player_dir: jnp.ndarray = -1
+    render_ladder_death: jnp.ndarray = False
+    # RAM52 bit2: retained drift until native support/rope/ladder cleanup
+    # or room relocation. Some landings retain it for a later floor collapse.
+    native_jump_momentum: jnp.ndarray = False
+    # FC8E may end D6 before the standing anchor is restored (B398).
+    native_support_phase: jnp.ndarray = struct.field(default_factory=lambda: jnp.int32(NativeSupportPhase.NORMAL))
+    # RAM53 selects a fixed hanging pose or a globally clocked climb cycle.
+    native_climb_moving: jnp.ndarray = False
+    native_walk_pose: jnp.ndarray = False
+    game_over_pending: jnp.ndarray = False
+    # First-key pickup bookkeeping; elapsed native ticks include frozen poses.
+    pickup_timer: jnp.ndarray = struct.field(default_factory=lambda: jnp.int32(0))
+    pickup_item_idx: jnp.ndarray = struct.field(default_factory=lambda: jnp.int32(-1))
+    rolling_skull_direction: jnp.ndarray = struct.field(default_factory=lambda: jnp.int32(-1))
+    rolling_skull_phase: jnp.ndarray = struct.field(default_factory=lambda: jnp.int32(8))
+    native_rolling_x: jnp.ndarray = struct.field(default_factory=lambda: jnp.int32(58))
+    native_rolling_direction: jnp.ndarray = struct.field(default_factory=lambda: jnp.int32(-1))
+    native_room_history: jnp.ndarray = struct.field(default_factory=lambda: jnp.ones(24, dtype=jnp.int32))
+    native_frame_count: jnp.ndarray = struct.field(default_factory=lambda: jnp.int32(0))
+    # ROM random bytes and dispatch state; free-running even during holds.
+    bonus_pickup_latched: jnp.ndarray = False
+    jump_type: jnp.ndarray = struct.field(default_factory=lambda: jnp.int32(0))
+    native_rng_a: jnp.ndarray = struct.field(default_factory=lambda: jnp.int32(109))
+    native_rng_b: jnp.ndarray = struct.field(default_factory=lambda: jnp.int32(212))
+    native_mode: jnp.ndarray = struct.field(default_factory=lambda: jnp.int32(4))
+    native_rng_carry: jnp.ndarray = struct.field(default_factory=lambda: jnp.int32(0))
+    respawn_enemy_idx: jnp.ndarray = struct.field(default_factory=lambda: jnp.int32(-1))
+
+    # Room5 bounce age resets on entry; its movement clock remains global.
+    room5_skull_phase: jnp.ndarray = struct.field(default_factory=lambda: jnp.int32(0))
+    room5_skull_spawn_pending: jnp.ndarray = struct.field(default_factory=lambda: jnp.bool_(False))
+
+    transition_pending: jnp.ndarray = struct.field(default_factory=lambda: jnp.int32(0))
+    transition_x: jnp.ndarray = struct.field(default_factory=lambda: jnp.int32(0))
+    transition_y: jnp.ndarray = struct.field(default_factory=lambda: jnp.int32(0))
+
+
+def enemy_bounce_offsets(state: MontezumaRevengeState, consts: MontezumaRevengeConstants):
+    """Shared native/render/observation height; preserve unmeasured rooms."""
+    legacy = consts.BOUNCE_OFFSETS[jnp.mod(state.frame_count // 4, 22)]
+    room5 = consts.ROOM5_BOUNCE_OFFSETS[state.room5_skull_phase]
+    measured_room = jnp.logical_and(jnp.logical_or(state.level > 0, jnp.isin(state.room_id, jnp.array([5, 10]))), not consts.CUSTOM_ROOMS)
+    offset = jnp.where(measured_room, room5, legacy)
+    return jnp.where(state.enemies_bouncing == 1, offset, 0)
+
 
 @struct.dataclass
 class MontezumaRevengeObservation:
@@ -228,3 +305,8 @@ def check_platform(col_map, y, x, width):
                     col_map[y, x_p1] == 1
                 )
             )
+
+
+def rope_widths(state: MontezumaRevengeState):
+    """The right ropes in rooms12/23 occupy two rendered columns."""
+    return jnp.where(jnp.logical_and(jnp.isin(state.room_id, jnp.array([12,23])), jnp.arange(state.ropes_x.shape[0]) == 1), 2, 1)
